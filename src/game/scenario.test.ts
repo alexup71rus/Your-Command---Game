@@ -83,7 +83,7 @@ describe('starting domains', () => {
     }
     expect(isCastleSiteValid(withCell({ landform: 'peak' }), region.id, site)).toBe(false)
     expect(isCastleSiteValid(withCell({ vegetation: true }), region.id, site)).toBe(false)
-    expect(isCastleSiteValid(withCell({ object: { type: 'castle', ownerId: 'someone' } }), region.id, site)).toBe(false)
+    expect(isCastleSiteValid(withCell({ object: { type: 'castle', ownerId: 'someone', hitPoints: 100, maxHitPoints: 100 } }), region.id, site)).toBe(false)
   })
 
   it('evaluates area, terrain density and zero-resource regions without NaN', () => {
@@ -145,7 +145,7 @@ describe('starting domains', () => {
       elevation: 0.2,
       landform: 'plain' as const,
       vegetation: false,
-      object: { type: 'castle' as const, ownerId: 'blocked' },
+      object: { type: 'castle' as const, ownerId: 'blocked', hitPoints: 100, maxHitPoints: 100 },
     })))
     expect(createMapScenario(occupiedMap, 2, 9127)).toMatchObject({ ok: false, reason: 'no-castle-sites' })
   })

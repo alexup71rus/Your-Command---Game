@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { supportedLocales, type Locale, type LocaleDictionary } from '../config/localization'
 import { CloseIcon, SoundIcon } from './InterfaceIcons'
+import { ConfirmDialog } from './ui/ConfirmDialog'
 
 interface SettingsModalProps {
   locale: Locale
@@ -11,6 +13,7 @@ interface SettingsModalProps {
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
   onReturnToMenu?: () => void
+  onOpenSavedGames?: () => void
 }
 
 const localeNames: Record<Locale, string> = {
@@ -28,7 +31,9 @@ export function SettingsModal({
   onSoundToggle,
   onVolumeChange,
   onReturnToMenu,
+  onOpenSavedGames,
 }: SettingsModalProps) {
+  const [confirmingExit, setConfirmingExit] = useState(false)
   return (
     <div className="settings-backdrop" onPointerDown={onClose}>
       <section
@@ -94,14 +99,22 @@ export function SettingsModal({
             </div>
           </section>
 
+          {onReturnToMenu && onOpenSavedGames && (
+            <section className="settings-card settings-save-card">
+              <div className="settings-card-copy"><h3>{text.settings.saveGame}</h3><p>{text.settings.saveGameDescription}</p></div>
+              <button type="button" className="settings-save-button" onClick={onOpenSavedGames}>{text.settings.saveGame}</button>
+            </section>
+          )}
+
           {onReturnToMenu && (
             <section className="settings-card settings-main-menu-card">
               <div className="settings-card-copy"><h3>{text.settings.mainMenu}</h3><p>{text.settings.mainMenuDescription}</p></div>
-              <button type="button" className="settings-main-menu-button danger" onClick={onReturnToMenu}>{text.settings.mainMenu}</button>
+              <button type="button" className="settings-main-menu-button danger" onClick={() => setConfirmingExit(true)}>{text.settings.mainMenu}</button>
             </section>
           )}
         </div>
       </section>
+      {confirmingExit && onReturnToMenu && <ConfirmDialog title={text.confirmation.leaveTitle} description={text.confirmation.leaveDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.confirmation.leaveAction} onCancel={() => setConfirmingExit(false)} onConfirm={onReturnToMenu} />}
     </div>
   )
 }

@@ -22,6 +22,7 @@ export interface LocaleDictionary {
     start: string
     starting: string
     mapError: string
+    loadGame: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
   founding: {
@@ -51,6 +52,51 @@ export interface LocaleDictionary {
   resources: string[]
   troops: string[]
   tabs: Array<{ id: TabId; label: string }>
+  game: {
+    resourceNames: Record<ResourceId, string>
+    buildingNames: Record<BuildingKind, string>
+    buildingDescriptions: Record<BuildingKind, string>
+    troopNames: Record<TroopKind, string>
+    troopDescriptions: Record<TroopKind, string>
+    selectedCell: string
+    selectCell: string
+    emptyCell: string
+    castle: string
+    squad: string
+    ownObject: string
+    enemyObject: string
+    terrainPlain: string
+    terrainHill: string
+    terrainForest: string
+    hitPoints: string
+    squadSize: string
+    orders: string
+    perTurn: string
+    build: string
+    recruit: string
+    quantity: string
+    placementMode: string
+    recruitmentMode: string
+    splitMode: string
+    buildHint: string
+    recruitHint: string
+    moveHint: string
+    splitHint: string
+    cancel: string
+    split: string
+    endTurn: string
+    opponentTurn: string
+    endTurnHint: string
+    production: string
+    foodDemand: string
+    populationCapacity: string
+    victoryTitle: string
+    victoryDescription: string
+    continue: string
+    previousItems: string
+    nextItems: string
+    failures: Record<CommandFailure, string>
+  }
   interface: {
     controlPanel: string
     controlSections: string
@@ -73,6 +119,15 @@ export interface LocaleDictionary {
     mergeSquads: string
     removeObject: string
   }
+  confirmation: {
+    cancel: string
+    deleteMapTitle: string
+    deleteMapDescription: string
+    deleteMapAction: string
+    leaveTitle: string
+    leaveDescription: string
+    leaveAction: string
+  }
   settings: {
     title: string
     close: string
@@ -80,6 +135,23 @@ export interface LocaleDictionary {
     languageDescription: string
     mainMenu: string
     mainMenuDescription: string
+    saveGame: string
+    saveGameDescription: string
+  }
+  savedGames: {
+    title: string
+    close: string
+    empty: string
+    saveCurrent: string
+    load: string
+    remove: string
+    turn: string
+    updated: string
+    saved: string
+    saveFailed: string
+    loadFailed: string
+    deleteTitle: string
+    deleteDescription: string
   }
   generator: {
     title: string
@@ -146,3 +218,5 @@ export function isLocale(value: string | null): value is Locale {
 export async function loadLocale(locale: Locale) {
   return (await localeLoaders[locale]()).default
 }
+import type { BuildingKind, ResourceId, TroopKind } from '../game/map'
+import type { CommandFailure } from '../game/match'

@@ -1,0 +1,47 @@
+import { useState } from 'react'
+import type { Locale, LocaleDictionary } from '../config/localization'
+import type { SavedGameSummary } from '../game/savedGames'
+import { CloseIcon } from './InterfaceIcons'
+import { ConfirmDialog } from './ui/ConfirmDialog'
+
+interface SavedGamesModalProps {
+  locale: Locale
+  text: LocaleDictionary
+  saves: SavedGameSummary[]
+  canSave: boolean
+  busy: boolean
+  feedback: string | null
+  onClose: () => void
+  onSave: () => void
+  onLoad: (id: string) => void
+  onDelete: (id: string) => void
+}
+
+export function SavedGamesModal({ locale, text, saves, canSave, busy, feedback, onClose, onSave, onLoad, onDelete }: SavedGamesModalProps) {
+  const [pendingDelete, setPendingDelete] = useState<SavedGameSummary | null>(null)
+  const formatter = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' })
+  return (
+    <div className="settings-backdrop" onPointerDown={onClose}>
+      <section className="settings-modal saved-games-modal" role="dialog" aria-modal="true" aria-labelledby="saved-games-title" onPointerDown={(event) => event.stopPropagation()}>
+        <header className="settings-header">
+          <div><span className="settings-kicker">SAVE</span><h2 id="saved-games-title">{text.savedGames.title}</h2></div>
+          <button type="button" className="settings-close" onClick={onClose} aria-label={text.savedGames.close}><CloseIcon /></button>
+        </header>
+        <div className="saved-games-content">
+          {canSave && <button type="button" className="save-current-game" disabled={busy} onClick={onSave}><span aria-hidden="true">＋</span>{text.savedGames.saveCurrent}</button>}
+          {feedback && <p className="saved-game-feedback" role="status">{feedback}</p>}
+          {saves.length === 0 ? <p className="saved-games-empty">{text.savedGames.empty}</p> : (
+            <div className="saved-game-list">
+              {saves.map((save) => <article className="saved-game-row" key={save.id}>
+                <div className="saved-game-copy"><strong>{save.mapName}</strong><span>{text.savedGames.turn} {save.turn} · {text.savedGames.updated} {formatter.format(save.updatedAt)}</span></div>
+                <button type="button" className="saved-game-load" disabled={busy} onClick={() => onLoad(save.id)}>{text.savedGames.load}</button>
+                <button type="button" className="saved-game-delete danger" disabled={busy} onClick={() => setPendingDelete(save)} aria-label={`${text.savedGames.remove}: ${save.name}`}>×</button>
+              </article>)}
+            </div>
+          )}
+        </div>
+      </section>
+      {pendingDelete && <ConfirmDialog title={text.savedGames.deleteTitle} description={text.savedGames.deleteDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.remove} onCancel={() => setPendingDelete(null)} onConfirm={() => { onDelete(pendingDelete.id); setPendingDelete(null) }} />}
+    </div>
+  )
+}

@@ -2,16 +2,39 @@ import { gameConfig } from '../config/game'
 
 export type Landform = 'plain' | 'hill' | 'peak'
 
+export type ResourceId = 'wood' | 'stone' | 'iron' | 'grain' | 'meat' | 'gold'
+export type BuildingKind = 'farm' | 'lumberMill' | 'quarry' | 'house' | 'barracks' | 'church' | 'wall' | 'tower' | 'barbican'
+export type TroopKind = 'militia' | 'spearmen' | 'archers'
+export type TroopComposition = Record<TroopKind, number>
+
 export interface CastleObject {
   type: 'castle'
   ownerId: string
+  hitPoints: number
+  maxHitPoints: number
 }
+
+export interface BuildingObject {
+  type: 'building'
+  kind: BuildingKind
+  ownerId: string
+  hitPoints: number
+  maxHitPoints: number
+}
+
+export interface SquadObject {
+  type: 'squad'
+  ownerId: string
+  units: TroopComposition
+}
+
+export type MapObject = CastleObject | BuildingObject | SquadObject
 
 export interface MapCell {
   elevation?: number
   landform?: Landform
   vegetation?: boolean
-  object?: CastleObject
+  object?: MapObject
 }
 export type GameMap = MapCell[][]
 

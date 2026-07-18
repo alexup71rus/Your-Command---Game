@@ -29,6 +29,11 @@ export const gameConfig = {
   },
   turn: {
     maxOrders: 4,
+    squadCapacity: 10,
+    castleHitPoints: 100,
+    basePopulationCapacity: 20,
+    startingPopulation: 12,
+    opponentDelayMs: 1_000,
   },
   audio: {
     defaultVolume: 70,
@@ -52,5 +57,10 @@ export const gameConfig = {
   },
   savedMaps: {
     storageKey: 'castle-turns:saved-maps',
+  },
+  savedGames: {
+    databaseName: 'your-command',
+    storeName: 'saved-games',
+    version: 1,
   },
 } as const

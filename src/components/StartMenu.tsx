@@ -8,6 +8,7 @@ import { presetSelection, savedSelection, type MapSelection, type SavedMapDefini
 import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
+import { ConfirmDialog } from './ui/ConfirmDialog'
 
 const previewCache = new Map<string, GameMap>()
 const defaultPreviewGrid = createManualHeightGrid()
@@ -79,7 +80,7 @@ function MapPreview({ cacheKey, settings, manualGrid, large = false, scenario }:
 function MapChoice({ name, description, selected, preview, onSelect, onDelete, deleteLabel }: { name: string; description: string; selected: boolean; preview: React.ReactNode; onSelect: () => void; onDelete?: () => void; deleteLabel?: string }) {
   return (
     <article className={`map-choice${selected ? ' selected' : ''}`}>
-      <button type="button" className="map-choice-main" onClick={onSelect} aria-pressed={selected}>{preview}<span><strong>{name}</strong><small>{description}</small></span></button>
+      <button type="button" className="map-choice-main" onClick={onSelect} aria-pressed={selected}>{preview}<span className="map-choice-copy"><strong>{name}</strong><small>{description}</small></span></button>
       {onDelete && <button type="button" className="saved-map-delete danger" onClick={onDelete} aria-label={`${deleteLabel}: ${name}`} title={`${deleteLabel}: ${name}`}>×</button>}
     </article>
   )
@@ -87,6 +88,7 @@ function MapChoice({ name, description, selected, preview, onSelect, onDelete, d
 
 interface StartMenuProps {
   text: LocaleDictionary['startMenu']
+  confirmationText: LocaleDictionary['confirmation']
   selectedMap: MapSelection
   savedMaps: SavedMapDefinition[]
   participantCount: number
@@ -95,11 +97,14 @@ interface StartMenuProps {
   onParticipantChange: (count: number) => void
   onOpenGenerator: () => void
   onStart: (scenario: MapScenario) => void
+  hasSavedGames: boolean
+  onOpenSavedGames: () => void
   utilityControls: ReactNode
 }
 
-export function StartMenu({ text, selectedMap, savedMaps, participantCount, onMapChange, onDeleteSavedMap, onParticipantChange, onOpenGenerator, onStart, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, onMapChange, onDeleteSavedMap, onParticipantChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<SavedMapDefinition | null>(null)
   const selectedDefinition = useMemo(() => {
     if (selectedMap.startsWith('saved:')) {
       const saved = savedMaps.find((map) => savedSelection(map.id) === selectedMap)
@@ -133,11 +138,13 @@ export function StartMenu({ text, selectedMap, savedMaps, participantCount, onMa
       <img className="start-hero-art" src="/assets/start-menu-hero.webp" alt="" aria-hidden="true" fetchPriority="high" />
       <div className="start-atmosphere" aria-hidden="true" />
       <section className="start-menu" aria-labelledby="start-title">
-        <header className="start-header"><span>{text.eyebrow}</span><h1 id="start-title">{text.title}</h1><p>{text.description}</p></header>
+        <header className="start-header"><span>{text.eyebrow}</span><h1 id="start-title">{text.title}</h1><p>{text.description}</p>{hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}<i aria-hidden="true">→</i></button>}</header>
 
         <div className="start-setup-workspace">
           <section className="selected-map-showcase" aria-labelledby="selected-map-title">
-            <div className="showcase-map-art"><MapPreview cacheKey={selectedMap} settings={selectedDefinition.settings} manualGrid={selectedDefinition.manualGrid} large scenario={preparedResult?.ok ? preparedResult.scenario : null} /></div>
+            <div className="showcase-map-art">
+              <MapPreview cacheKey={selectedMap} settings={selectedDefinition.settings} manualGrid={selectedDefinition.manualGrid} large scenario={preparedResult?.ok ? preparedResult.scenario : null} />
+            </div>
             <div className="showcase-map-copy"><h2 id="selected-map-title">{selectedDefinition.name}</h2><p>{selectedDefinition.description}</p></div>
             {isPreparing && <div className="showcase-region-loader" role="status"><span aria-hidden="true" />{text.starting}</div>}
             {preparedResult && !preparedResult.ok && <p className="showcase-region-error" role="alert">{text.mapError}</p>}
@@ -157,7 +164,7 @@ export function StartMenu({ text, selectedMap, savedMaps, participantCount, onMa
                 {savedMaps.map((map) => {
                   const selection = savedSelection(map.id)
                   const description = `${map.settings.mapSize} × ${map.settings.mapSize} · ${text.seedShort} ${map.settings.seed}`
-                  return <MapChoice key={selection} name={map.name} description={description} selected={selectedMap === selection} preview={<MapPreview cacheKey={selection} settings={map.settings} manualGrid={map.manualGrid} />} onSelect={() => onMapChange(selection)} onDelete={() => onDeleteSavedMap(map.id)} deleteLabel={text.deleteSavedMap} />
+                  return <MapChoice key={selection} name={map.name} description={description} selected={selectedMap === selection} preview={<MapPreview cacheKey={selection} settings={map.settings} manualGrid={map.manualGrid} />} onSelect={() => onMapChange(selection)} onDelete={() => setPendingDelete(map)} deleteLabel={text.deleteSavedMap} />
                 })}
                 <button type="button" className="create-map-choice" aria-label={`${text.customMap}. ${text.customMapDescription} ${text.openGenerator}`} onClick={onOpenGenerator}><i aria-hidden="true">+</i><span><strong>{text.customMap}</strong><small>{text.openGenerator}</small></span></button>
               </div></div>
@@ -175,6 +182,7 @@ export function StartMenu({ text, selectedMap, savedMaps, participantCount, onMa
           <div className="start-utility-slot">{utilityControls}</div>
         </footer>
       </section>
+      {pendingDelete && <ConfirmDialog title={`${confirmationText.deleteMapTitle} «${pendingDelete.name}»`} description={confirmationText.deleteMapDescription} cancelLabel={confirmationText.cancel} confirmLabel={confirmationText.deleteMapAction} onCancel={() => setPendingDelete(null)} onConfirm={() => { onDeleteSavedMap(pendingDelete.id); setPendingDelete(null) }} />}
     </main>
   )
 }

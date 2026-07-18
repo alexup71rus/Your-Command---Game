@@ -419,7 +419,15 @@ export function foundMatch(scenario: MapScenario, humanRegionId: string, humanCa
     const row = changedRows.get(position.row) ?? [...cells[position.row]]
     changedRows.set(position.row, row)
     cells[position.row] = row
-    row[position.column] = { ...row[position.column], object: { type: 'castle', ownerId: participant.id } }
+    row[position.column] = {
+      ...row[position.column],
+      object: {
+        type: 'castle',
+        ownerId: participant.id,
+        hitPoints: gameConfig.turn.castleHitPoints,
+        maxHitPoints: gameConfig.turn.castleHitPoints,
+      },
+    }
   })
   return { ...scenario, cells, participants }
 }
