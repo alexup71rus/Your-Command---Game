@@ -27,10 +27,20 @@ export function effectiveMinimumZoom(viewport: Size, world: Size) {
   )
 }
 
-export function clampCamera(camera: Camera, viewport: Size, world: Size): Camera {
+export function cameraForOverview(viewport: Size, world: Size, padding = 48): Camera {
+  const availableWidth = Math.max(1, viewport.width - padding * 2)
+  const availableHeight = Math.max(1, viewport.height - padding * 2)
+  return {
+    x: world.width / 2,
+    y: world.height / 2,
+    zoom: Math.min(MAX_ZOOM, availableWidth / world.width, availableHeight / world.height),
+  }
+}
+
+export function clampCamera(camera: Camera, viewport: Size, world: Size, minimumZoom = effectiveMinimumZoom(viewport, world)): Camera {
   const zoom = clamp(
     camera.zoom,
-    effectiveMinimumZoom(viewport, world),
+    minimumZoom,
     MAX_ZOOM,
   )
   const halfWorldWidth = viewport.width / (2 * zoom)
@@ -77,9 +87,9 @@ export function zoomAtPoint(
   nextZoom: number,
   viewport: Size,
   world: Size,
+  minimumZoom = effectiveMinimumZoom(viewport, world),
 ): Camera {
   const anchor = screenToWorld(screenPoint, camera, viewport)
-  const minimumZoom = effectiveMinimumZoom(viewport, world)
   const zoom = clamp(nextZoom, minimumZoom, MAX_ZOOM)
 
   return clampCamera(
@@ -90,5 +100,6 @@ export function zoomAtPoint(
     },
     viewport,
     world,
+    minimumZoom,
   )
 }

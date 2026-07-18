@@ -2,6 +2,25 @@ import type { LocaleDictionary } from '../config/localization'
 
 const ru: LocaleDictionary = {
   localeName: 'Русский',
+  startMenu: {
+    eyebrow: 'Пошаговая стратегия', title: 'Четыре приказа',
+    description: 'Выберите поле будущей войны и число владений. Замок появится только там, где вы решите основать своё поселение.',
+    chooseMap: 'Карта сценария', participants: 'Участники', participantDescription: 'Одно владение принадлежит вам, остальные — NPC',
+    humanAndNpc: '1 игрок + NPC', customMap: 'Свой мир', customMapDescription: 'Настройте рельеф, леса и стартовые владения вручную.',
+    openGenerator: 'Открыть генератор', start: 'Перейти к выбору владения', starting: 'Рассчитываем владения…', mapError: 'Не удалось сбалансировать владения. Выберите другую карту или число участников.',
+    presets: {
+      greenMarches: { name: 'Зелёные марки', description: 'Открытые равнины, мягкие высоты и простор для экономики.' },
+      highlandPasses: { name: 'Горные проходы', description: 'Высоты и узкие пути создают естественные линии обороны.' },
+      woodedBorder: { name: 'Лесной рубеж', description: 'Густые леса разделяют владения и скрывают направления атаки.' },
+    },
+  },
+  founding: {
+    chooseTitle: 'Выберите владение', chooseDescription: 'Области различаются формой и местностью, но близки по стартовой ценности.',
+    placeTitle: 'Основать замок', placeDescription: 'Выберите свободную клетку в глубине своего владения. Основание бесплатно.',
+    region: 'Владение', land: 'Земля', forest: 'Лес', hills: 'Высоты', selected: 'Выбрано', changeRegion: 'Сменить владение',
+    chooseSite: 'Выберите клетку на карте', validSite: 'Подходящее место для замка', invalidSite: 'Здесь нельзя основать замок', confirm: 'Подтвердить основание',
+    shiftHint: 'Границы владений показаны на этапе основания',
+  },
   hud: {
     state: 'Состояние владения',
     resources: 'Ресурсы',
@@ -21,7 +40,7 @@ const ru: LocaleDictionary = {
     controlPanel: 'Панель управления',
     controlSections: 'Разделы управления',
     mapAria: 'Карта игрового мира. Перетаскивайте мышью и используйте колесо для масштаба.',
-    mapHint: 'Перетащите карту · колесо — масштаб · ПКМ — меню',
+    mapHint: 'Перетащите карту · колесо — масштаб · Shift — владения · ПКМ / Ctrl + клик — меню',
     settingsHint: 'Настройки',
   },
   sound: {
@@ -44,13 +63,10 @@ const ru: LocaleDictionary = {
     close: 'Закрыть настройки',
     language: 'Язык',
     languageDescription: 'Язык интерфейса загружается отдельно',
-    mapGenerator: 'Генератор карты',
-    mapGeneratorDescription: 'Рельеф, непроходимые высоты и растительность',
-    openGenerator: 'Открыть генератор',
   },
   generator: {
     title: 'Генератор мира', close: 'Закрыть генератор', devLabel: 'DEV · НАСТРОЙКИ',
-    relief: 'Рельеф', source: 'Источник', automatic: 'Полностью автоматически', hybrid: 'Авто + ручные узлы', manual: 'Преимущественно вручную',
+    relief: 'Рельеф', mapSize: 'Размер карты', source: 'Источник', automatic: 'Полностью автоматически', hybrid: 'Авто + ручные узлы', manual: 'Преимущественно вручную',
     hills: 'Холмы и высоты', peaks: 'Непроходимые пики', formScale: 'Масштаб форм', reliefDistribution: 'К краям ← рельеф → к центру',
     vegetation: 'Растительность', coverage: 'Покрытие', vegetationDistribution: 'К краям ← зелень → к центру', heightPreference: 'Предпочтение высоты',
     lowlands: 'Низины', balanced: 'Средние высоты', highlands: 'Возвышенности', reliefInfluence: 'Влияние рельефа',
@@ -58,7 +74,8 @@ const ru: LocaleDictionary = {
     plain: 'Равнина', elevation: 'Высота', forest: 'Лес', peak: 'Пик', seed: 'Семя генерации',
     traversableHeights: 'Проходимые высоты', impassablePeaks: 'Непроходимые пики', forestCoverage: 'Лесное покрытие', cells: 'клеток',
     note: 'Рисуйте крупные узлы на превью. Они плавно распространяются на реальные клетки; лес избегает непроходимых пиков и крутых склонов.',
-    vegetationOnly: 'Пересобрать только зелень', newVariant: 'Новый вариант', apply: 'Применить карту',
+    participants: 'Стартовые владения', regionsReady: 'Области рассчитаны', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя',
+    newVariant: 'Новый вариант', apply: 'Применить карту',
   },
 }
 

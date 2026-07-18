@@ -8,6 +8,7 @@ export type ManualHeightGrid = ManualHeight[][]
 
 export interface GeneratorSettings {
   seed: number
+  mapSize: number
   reliefMode: ReliefMode
   hillCoverage: number
   peakCoverage: number
@@ -21,6 +22,7 @@ export interface GeneratorSettings {
 
 export const defaultGeneratorSettings: GeneratorSettings = {
   seed: gameConfig.generator.defaultSeed,
+  mapSize: gameConfig.generator.defaultMapSize,
   reliefMode: 'hybrid',
   hillCoverage: 36,
   peakCoverage: 6,
@@ -124,11 +126,10 @@ function slopeAt(elevations: number[][], column: number, row: number) {
 export function generateMap(
   settings: GeneratorSettings,
   manualGrid: ManualHeightGrid,
-  existingMap?: GameMap,
-  vegetationOnly = false,
 ): GameMap {
-  const rows = existingMap?.length ?? gameConfig.map.rows
-  const columns = existingMap?.[0]?.length ?? gameConfig.map.columns
+  const requestedSize = Math.round(Math.max(gameConfig.generator.minMapSize, Math.min(gameConfig.generator.maxMapSize, settings.mapSize)))
+  const rows = requestedSize
+  const columns = requestedSize
   const reliefScores: number[][] = []
 
   for (let row = 0; row < rows; row += 1) {
@@ -160,14 +161,6 @@ export function generateMap(
     return 0.12 + clamp01(score / Math.max(0.0001, hillThreshold)) * 0.43
   }))
 
-  if (vegetationOnly && existingMap) {
-    for (let row = 0; row < rows; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        elevations[row][column] = existingMap[row][column].elevation ?? elevations[row][column]
-      }
-    }
-  }
-
   const vegetationCandidates: Array<{ column: number; row: number; score: number }> = []
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < columns; column += 1) {
@@ -194,10 +187,8 @@ export function generateMap(
   )
 
   return elevations.map((elevationRow, row) => elevationRow.map((elevation, column): MapCell => {
-    const original = existingMap?.[row]?.[column]
     const landform: Landform = elevation >= 0.9 ? 'peak' : elevation >= 0.58 ? 'hill' : 'plain'
     return {
-      ...original,
       elevation,
       landform,
       vegetation: forestCells.has(row * columns + column),

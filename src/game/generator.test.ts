@@ -4,7 +4,6 @@ import {
   defaultGeneratorSettings,
   generateMap,
 } from './generator'
-import { createEmptyMap } from './map'
 
 describe('map generator', () => {
   it('is deterministic for the same seed and settings', () => {
@@ -26,21 +25,10 @@ describe('map generator', () => {
     expect(peaks.every((cell) => cell.vegetation === false)).toBe(true)
   })
 
-  it('can regenerate vegetation without changing relief', () => {
-    const grid = createManualHeightGrid()
-    const original = generateMap(defaultGeneratorSettings, grid, createEmptyMap(32, 32))
-    const regenerated = generateMap(
-      { ...defaultGeneratorSettings, seed: defaultGeneratorSettings.seed + 10, vegetationDensity: 65 },
-      grid,
-      original,
-      true,
-    )
-
-    expect(regenerated.flat().map((cell) => cell.elevation)).toEqual(
-      original.flat().map((cell) => cell.elevation),
-    )
-    expect(regenerated.flat().filter((cell) => cell.vegetation)).not.toHaveLength(
-      original.flat().filter((cell) => cell.vegetation).length,
-    )
+  it.each([50, 150])('creates a square map with %i cells per side', (mapSize) => {
+    const map = generateMap({ ...defaultGeneratorSettings, mapSize }, createManualHeightGrid())
+    expect(map).toHaveLength(mapSize)
+    expect(map.every((row) => row.length === mapSize)).toBe(true)
   })
+
 })

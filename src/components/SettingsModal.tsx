@@ -8,7 +8,6 @@ interface SettingsModalProps {
   volume: number
   onClose: () => void
   onLocaleChange: (locale: Locale) => void
-  onOpenGenerator: () => void
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
 }
@@ -25,7 +24,6 @@ export function SettingsModal({
   volume,
   onClose,
   onLocaleChange,
-  onOpenGenerator,
   onSoundToggle,
   onVolumeChange,
 }: SettingsModalProps) {
@@ -92,16 +90,6 @@ export function SettingsModal({
                 />
               </label>
             </div>
-          </section>
-
-          <section className="settings-card generator-settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.settings.mapGenerator}</h3>
-              <p>{text.settings.mapGeneratorDescription}</p>
-            </div>
-            <button type="button" className="open-generator-button" onClick={onOpenGenerator}>
-              {text.settings.openGenerator}<span aria-hidden="true">›</span>
-            </button>
           </section>
         </div>
       </section>

@@ -4,6 +4,39 @@ export type TabId = 'buildings' | 'barracks' | 'castle'
 
 export interface LocaleDictionary {
   localeName: string
+  startMenu: {
+    eyebrow: string
+    title: string
+    description: string
+    chooseMap: string
+    participants: string
+    participantDescription: string
+    humanAndNpc: string
+    customMap: string
+    customMapDescription: string
+    openGenerator: string
+    start: string
+    starting: string
+    mapError: string
+    presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
+  }
+  founding: {
+    chooseTitle: string
+    chooseDescription: string
+    placeTitle: string
+    placeDescription: string
+    region: string
+    land: string
+    forest: string
+    hills: string
+    selected: string
+    changeRegion: string
+    chooseSite: string
+    validSite: string
+    invalidSite: string
+    confirm: string
+    shiftHint: string
+  }
   hud: {
     state: string
     resources: string
@@ -42,15 +75,13 @@ export interface LocaleDictionary {
     close: string
     language: string
     languageDescription: string
-    mapGenerator: string
-    mapGeneratorDescription: string
-    openGenerator: string
   }
   generator: {
     title: string
     close: string
     devLabel: string
     relief: string
+    mapSize: string
     source: string
     automatic: string
     hybrid: string
@@ -83,7 +114,11 @@ export interface LocaleDictionary {
     forestCoverage: string
     cells: string
     note: string
-    vegetationOnly: string
+    participants: string
+    regionsReady: string
+    regionsCalculating: string
+    regionsError: string
+    regionsUnbalanced: string
     newVariant: string
     apply: string
   }

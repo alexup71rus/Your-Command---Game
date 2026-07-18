@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { gameConfig } from '../config/game'
 import type { Locale, LocaleDictionary } from '../config/localization'
 import {
   createManualHeightGrid,
@@ -8,15 +9,18 @@ import {
   type ManualHeight,
   type ManualHeightGrid,
 } from '../game/generator'
-import type { GameMap } from '../game/map'
+import { clearMapObjects } from '../game/map'
+import type { MapScenario, ScenarioResult } from '../game/scenario'
+import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
 import { CloseIcon } from './InterfaceIcons'
 
 interface MapGeneratorModalProps {
-  currentMap: GameMap
-  onApply: (map: GameMap) => void
+  onApply: (scenario: MapScenario) => void
   onClose: () => void
   text: LocaleDictionary['generator']
   locale: Locale
+  participantCount: number
+  onParticipantChange: (count: number) => void
 }
 
 const colorForCell = (elevation: number, vegetation: boolean) => {
@@ -49,17 +53,43 @@ function RangeControl({
   )
 }
 
-export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }: MapGeneratorModalProps) {
+export function MapGeneratorModal({ onApply, onClose, text, locale, participantCount, onParticipantChange }: MapGeneratorModalProps) {
   const [settings, setSettings] = useState<GeneratorSettings>(defaultGeneratorSettings)
   const [manualGrid, setManualGrid] = useState<ManualHeightGrid>(createManualHeightGrid)
   const [brush, setBrush] = useState<ManualHeight>(1)
-  const [vegetationOnly, setVegetationOnly] = useState(false)
+  const deferredSettings = useDeferredValue(settings)
+  const deferredManualGrid = useDeferredValue(manualGrid)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
+  const [resolvedScenarioKey, setResolvedScenarioKey] = useState('')
+  const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
   const previewMap = useMemo(
-    () => generateMap(settings, manualGrid, vegetationOnly ? currentMap : undefined, vegetationOnly),
-    [currentMap, manualGrid, settings, vegetationOnly],
+    () => generateMap(deferredSettings, deferredManualGrid),
+    [deferredManualGrid, deferredSettings],
   )
+  const scenarioMap = useMemo(() => clearMapObjects(previewMap), [previewMap])
+  const scenarioKey = useMemo(
+    () => JSON.stringify([deferredSettings, deferredManualGrid, participantCount]),
+    [deferredManualGrid, deferredSettings, participantCount],
+  )
+  const scenarioReady = resolvedScenarioKey === scenarioKey ? scenarioResult : null
+  const previewPending = deferredSettings !== settings || deferredManualGrid !== manualGrid
+  const generationPending = previewPending || !scenarioReady
+
+  useEffect(() => {
+    const controller = new AbortController()
+    calculateScenarioInWorker(scenarioMap, participantCount, deferredSettings.seed, controller.signal)
+      .then((result) => {
+        setScenarioResult(result)
+        setResolvedScenarioKey(scenarioKey)
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setScenarioResult({ ok: false, reason: 'not-enough-land' })
+        setResolvedScenarioKey(scenarioKey)
+      })
+    return () => controller.abort()
+  }, [deferredSettings.seed, participantCount, scenarioKey, scenarioMap])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -89,24 +119,58 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
         context.fillStyle = colorForCell(cell.elevation ?? 0, Boolean(cell.vegetation))
         context.fillRect(x * cellWidth, y * cellHeight, Math.ceil(cellWidth), Math.ceil(cellHeight))
       }))
+      if (scenarioReady?.ok) {
+        const { territories, regions } = scenarioReady.scenario
+        context.lineWidth = 1.2
+        for (let row = 0; row < rows; row += 1) {
+          for (let column = 0; column < columns; column += 1) {
+            const regionId = territories[row][column]
+            if (!regionId) continue
+            const region = regions.find((candidate) => candidate.id === regionId)
+            if (!region) continue
+            const x = column * cellWidth
+            const y = row * cellHeight
+            context.fillStyle = `${region.color}18`
+            context.fillRect(x, y, Math.ceil(cellWidth), Math.ceil(cellHeight))
+            context.strokeStyle = `${region.color}b8`
+            if (territories[row - 1]?.[column] !== regionId) { context.beginPath(); context.moveTo(x, y); context.lineTo(x + cellWidth, y); context.stroke() }
+            if (territories[row + 1]?.[column] !== regionId) { context.beginPath(); context.moveTo(x, y + cellHeight); context.lineTo(x + cellWidth, y + cellHeight); context.stroke() }
+            if (territories[row]?.[column - 1] !== regionId) { context.beginPath(); context.moveTo(x, y); context.lineTo(x, y + cellHeight); context.stroke() }
+            if (territories[row]?.[column + 1] !== regionId) { context.beginPath(); context.moveTo(x + cellWidth, y); context.lineTo(x + cellWidth, y + cellHeight); context.stroke() }
+          }
+        }
+        regions.forEach((region) => {
+          const x = (region.center.column + 0.5) * cellWidth
+          const y = (region.center.row + 0.5) * cellHeight
+          context.fillStyle = region.color
+          context.beginPath()
+          context.arc(x, y, 7, 0, Math.PI * 2)
+          context.fill()
+          context.fillStyle = '#101510'
+          context.font = '700 8px system-ui'
+          context.textAlign = 'center'
+          context.textBaseline = 'middle'
+          context.fillText(String(region.index + 1), x, y + 0.5)
+        })
+      }
       context.strokeStyle = 'rgba(225, 198, 119, .2)'
       context.lineWidth = 1
-      for (let x = 1; x < manualGrid[0].length; x += 1) {
+      for (let x = 1; x < deferredManualGrid[0].length; x += 1) {
         context.beginPath()
-        context.moveTo(Math.round(x * width / manualGrid[0].length) + 0.5, 0)
-        context.lineTo(Math.round(x * width / manualGrid[0].length) + 0.5, height)
+        context.moveTo(Math.round(x * width / deferredManualGrid[0].length) + 0.5, 0)
+        context.lineTo(Math.round(x * width / deferredManualGrid[0].length) + 0.5, height)
         context.stroke()
       }
-      for (let y = 1; y < manualGrid.length; y += 1) {
+      for (let y = 1; y < deferredManualGrid.length; y += 1) {
         context.beginPath()
-        context.moveTo(0, Math.round(y * height / manualGrid.length) + 0.5)
-        context.lineTo(width, Math.round(y * height / manualGrid.length) + 0.5)
+        context.moveTo(0, Math.round(y * height / deferredManualGrid.length) + 0.5)
+        context.lineTo(width, Math.round(y * height / deferredManualGrid.length) + 0.5)
         context.stroke()
       }
-      manualGrid.forEach((row, y) => row.forEach((heightValue, x) => {
+      deferredManualGrid.forEach((row, y) => row.forEach((heightValue, x) => {
         if (!heightValue) return
         const centerX = (x + 0.5) * width / row.length
-        const centerY = (y + 0.5) * height / manualGrid.length
+        const centerY = (y + 0.5) * height / deferredManualGrid.length
         context.fillStyle = heightValue === 2 ? '#f0d98c' : '#c2ab6c'
         context.beginPath()
         context.arc(centerX, centerY, heightValue === 2 ? 5 : 3.5, 0, Math.PI * 2)
@@ -118,7 +182,7 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
     resizeObserver.observe(preview)
     drawPreview()
     return () => resizeObserver.disconnect()
-  }, [manualGrid, previewMap])
+  }, [deferredManualGrid, previewMap, scenarioReady])
 
   const updateSetting = <Key extends keyof GeneratorSettings>(key: Key, value: GeneratorSettings[Key]) => {
     setSettings((current) => ({ ...current, [key]: value }))
@@ -135,12 +199,6 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
   }
 
   const regenerate = () => {
-    setVegetationOnly(false)
-    setSettings((current) => ({ ...current, seed: Math.floor(Math.random() * 999_999) }))
-  }
-
-  const regenerateVegetation = () => {
-    setVegetationOnly(true)
     setSettings((current) => ({ ...current, seed: Math.floor(Math.random() * 999_999) }))
   }
 
@@ -169,6 +227,8 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
           <aside className="generator-controls">
             <section>
               <h3>{text.relief}</h3>
+              <RangeControl label={text.participants} value={participantCount} min={gameConfig.match.minParticipants} max={gameConfig.match.maxParticipants} suffix="" onChange={onParticipantChange} />
+              <RangeControl label={text.mapSize} value={settings.mapSize} min={gameConfig.generator.minMapSize} max={gameConfig.generator.maxMapSize} suffix={` × ${settings.mapSize}`} onChange={(value) => updateSetting('mapSize', value)} />
               <label className="generator-field">{text.source}
                 <select value={settings.reliefMode} onChange={(event) => updateSetting('reliefMode', event.target.value as GeneratorSettings['reliefMode'])}>
                   <option value="automatic">{text.automatic}</option>
@@ -215,16 +275,18 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
               <span><em>{text.traversableHeights}</em><strong>{formatCoverage(stats.hills)}</strong><small>{stats.hills.toLocaleString(locale)} {text.cells}</small></span>
               <span><em>{text.impassablePeaks}</em><strong>{formatCoverage(stats.peaks)}</strong><small>{stats.peaks.toLocaleString(locale)} {text.cells}</small></span>
               <span><em>{text.forestCoverage}</em><strong>{formatCoverage(stats.forests)}</strong><small>{stats.forests.toLocaleString(locale)} {text.cells}</small></span>
-              <span className="seed-stat"><em>{text.seed}</em><strong>{settings.seed}</strong></span>
+              <span className="seed-stat"><em>{text.seed}</em><strong>{deferredSettings.seed}</strong></span>
+            </div>
+            <div className={`region-validation ${scenarioReady?.ok ? 'valid' : scenarioReady ? 'invalid' : 'pending'}`}>
+              <span>{scenarioReady?.ok ? '◆' : scenarioReady ? '!' : '…'}</span>{scenarioReady?.ok ? `${text.regionsReady}: ${scenarioReady.scenario.regions.length}` : scenarioReady ? scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError : text.regionsCalculating}
             </div>
             <p className="generator-note">{text.note}</p>
           </div>
         </div>
 
         <footer className="generator-footer">
-          <button type="button" className="secondary" onClick={regenerateVegetation}>{text.vegetationOnly}</button>
           <button type="button" className="secondary" onClick={regenerate}>{text.newVariant}</button>
-          <button type="button" className="primary" onClick={() => onApply(previewMap)}>{text.apply}</button>
+          <button type="button" className="primary" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onApply(scenarioReady.scenario) }}>{text.apply}</button>
         </footer>
       </section>
     </div>

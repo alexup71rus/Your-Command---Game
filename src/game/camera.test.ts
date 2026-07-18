@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
 import {
+  cameraForOverview,
   clampCamera,
   screenToWorld,
   zoomAtPoint,
@@ -16,6 +17,11 @@ const world: Size = {
 }
 
 describe('camera', () => {
+  it('fits the entire world into an overview even below the interactive minimum zoom', () => {
+    const overview = cameraForOverview({ width: 1440, height: 900 }, { width: 5000, height: 5000 }, 50)
+    expect(overview).toEqual({ x: 2500, y: 2500, zoom: 0.16 })
+    expect(5000 * overview.zoom).toBeLessThanOrEqual(900 - 100)
+  })
   it('keeps the visible area inside the world', () => {
     const result = clampCamera({ x: -500, y: 10_000, zoom: 1 }, viewport, world)
 
@@ -32,5 +38,13 @@ describe('camera', () => {
 
     expect(after.x).toBeCloseTo(before.x)
     expect(after.y).toBeCloseTo(before.y)
+  })
+
+  it('does not turn a zoom-out gesture from overview into a zoom-in', () => {
+    const smallViewport = { width: 900, height: 700 }
+    const largeWorld = { width: 5000, height: 5000 }
+    const overview = cameraForOverview(smallViewport, largeWorld)
+    const zoomed = zoomAtPoint(overview, { x: 450, y: 350 }, overview.zoom * 0.8, smallViewport, largeWorld, overview.zoom)
+    expect(zoomed.zoom).toBe(overview.zoom)
   })
 })
