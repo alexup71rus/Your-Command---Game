@@ -10,6 +10,7 @@ interface SettingsModalProps {
   onLocaleChange: (locale: Locale) => void
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
+  onReturnToMenu?: () => void
 }
 
 const localeNames: Record<Locale, string> = {
@@ -26,6 +27,7 @@ export function SettingsModal({
   onLocaleChange,
   onSoundToggle,
   onVolumeChange,
+  onReturnToMenu,
 }: SettingsModalProps) {
   return (
     <div className="settings-backdrop" onPointerDown={onClose}>
@@ -91,6 +93,13 @@ export function SettingsModal({
               </label>
             </div>
           </section>
+
+          {onReturnToMenu && (
+            <section className="settings-card settings-main-menu-card">
+              <div className="settings-card-copy"><h3>{text.settings.mainMenu}</h3><p>{text.settings.mainMenuDescription}</p></div>
+              <button type="button" className="settings-main-menu-button danger" onClick={onReturnToMenu}>{text.settings.mainMenu}</button>
+            </section>
+          )}
         </div>
       </section>
     </div>

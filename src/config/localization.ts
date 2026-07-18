@@ -9,12 +9,16 @@ export interface LocaleDictionary {
     title: string
     description: string
     chooseMap: string
+    builtInMaps: string
+    myMaps: string
     participants: string
     participantDescription: string
     humanAndNpc: string
     customMap: string
     customMapDescription: string
     openGenerator: string
+    seedShort: string
+    deleteSavedMap: string
     start: string
     starting: string
     mapError: string
@@ -35,7 +39,6 @@ export interface LocaleDictionary {
     validSite: string
     invalidSite: string
     confirm: string
-    shiftHint: string
   }
   hud: {
     state: string
@@ -75,6 +78,8 @@ export interface LocaleDictionary {
     close: string
     language: string
     languageDescription: string
+    mainMenu: string
+    mainMenuDescription: string
   }
   generator: {
     title: string
@@ -119,6 +124,9 @@ export interface LocaleDictionary {
     regionsError: string
     regionsUnbalanced: string
     newVariant: string
+    mapName: string
+    defaultMapName: string
+    saveMap: string
     apply: string
   }
 }

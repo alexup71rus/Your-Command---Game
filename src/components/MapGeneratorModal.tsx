@@ -11,6 +11,7 @@ import {
 } from '../game/generator'
 import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
+import type { SavedMapDraft } from '../game/savedMaps'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
 import { CloseIcon } from './InterfaceIcons'
 import { SelectField } from './ui/SelectField'
@@ -21,7 +22,9 @@ interface MapGeneratorModalProps {
   text: LocaleDictionary['generator']
   locale: Locale
   participantCount: number
+  savedMapCount: number
   onParticipantChange: (count: number) => void
+  onSave: (draft: SavedMapDraft) => void
 }
 
 const colorForCell = (elevation: number, vegetation: boolean) => {
@@ -54,9 +57,10 @@ function RangeControl({
   )
 }
 
-export function MapGeneratorModal({ onApply, onClose, text, locale, participantCount, onParticipantChange }: MapGeneratorModalProps) {
+export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
   const [settings, setSettings] = useState<GeneratorSettings>(defaultGeneratorSettings)
   const [manualGrid, setManualGrid] = useState<ManualHeightGrid>(createManualHeightGrid)
+  const [mapName, setMapName] = useState(`${text.defaultMapName} ${savedMapCount + 1}`)
   const [brush, setBrush] = useState<ManualHeight>(1)
   const deferredSettings = useDeferredValue(settings)
   const deferredManualGrid = useDeferredValue(manualGrid)
@@ -258,6 +262,7 @@ export function MapGeneratorModal({ onApply, onClose, text, locale, participantC
             </div>
             <div className="map-preview" ref={previewRef}>
               <canvas ref={canvasRef} onPointerDown={paint} onPointerMove={paint} aria-label={text.previewAria} />
+              {!scenarioReady && <div className="map-preview-loader" aria-live="polite"><span aria-hidden="true" />{text.regionsCalculating}</div>}
               <div className="preview-legend"><span className="forest">{text.forest}</span><span className="plain">{text.plain}</span><span className="hill">{text.elevation}</span><span className="peak">{text.peak}</span></div>
             </div>
             <div className="generator-stats">
@@ -266,12 +271,14 @@ export function MapGeneratorModal({ onApply, onClose, text, locale, participantC
               <span><em>{text.forestCoverage}</em><strong>{formatCoverage(stats.forests)}</strong><small>{stats.forests.toLocaleString(locale)} {text.cells}</small></span>
               <span className="seed-stat"><em>{text.seed}</em><strong>{deferredSettings.seed}</strong></span>
             </div>
-            {!scenarioReady?.ok && <div className={`region-validation ${scenarioReady ? 'invalid' : 'pending'}`}><span>{scenarioReady ? '!' : '…'}</span>{scenarioReady ? scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError : text.regionsCalculating}</div>}
+            {scenarioReady && !scenarioReady.ok && <div className="region-validation invalid"><span>!</span>{scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError}</div>}
             <p className="generator-note">{text.note}</p>
           </div>
         </div>
 
         <footer className="generator-footer">
+          <label className="generator-map-name"><span>{text.mapName}</span><input value={mapName} maxLength={48} onChange={(event) => setMapName(event.target.value)} /></label>
+          <button type="button" className="secondary save-map-button" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onSave({ name: mapName.trim() || `${text.defaultMapName} ${savedMapCount + 1}`, settings, manualGrid }) }}><span>{text.saveMap}</span></button>
           <button type="button" className="secondary" onClick={regenerate}>{text.newVariant}</button>
           <button type="button" className="primary" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onApply(scenarioReady.scenario) }}>{text.apply}</button>
         </footer>

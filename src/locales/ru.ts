@@ -5,9 +5,9 @@ const ru: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Пошаговая стратегия', title: 'Ваш приказ',
     description: 'Выберите поле будущей войны и число владений. Замок появится только там, где вы решите основать своё поселение.',
-    chooseMap: 'Карта сценария', participants: 'Участники', participantDescription: 'Одно владение принадлежит вам, остальные — NPC',
+    chooseMap: 'Карты сражений', builtInMaps: 'Встроенные сценарии', myMaps: 'Мои карты', participants: 'Участники', participantDescription: '1 игрок, остальные — NPC',
     humanAndNpc: '1 игрок + NPC', customMap: 'Свой мир', customMapDescription: 'Настройте рельеф, леса и стартовые владения вручную.',
-    openGenerator: 'Открыть генератор', start: 'Перейти к выбору владения', starting: 'Рассчитываем владения…', mapError: 'Не удалось сбалансировать владения. Выберите другую карту или число участников.',
+    openGenerator: 'Открыть генератор', seedShort: 'семя', deleteSavedMap: 'Удалить карту', start: 'Перейти к выбору владения', starting: 'Рассчитываем владения…', mapError: 'Не удалось сбалансировать владения. Выберите другую карту или число участников.',
     presets: {
       greenMarches: { name: 'Зелёные марки', description: 'Открытые равнины, мягкие высоты и простор для экономики.' },
       highlandPasses: { name: 'Горные проходы', description: 'Высоты и узкие пути создают естественные линии обороны.' },
@@ -19,7 +19,6 @@ const ru: LocaleDictionary = {
     placeTitle: 'Основать замок', placeDescription: 'Выберите свободную клетку в глубине своего владения. Основание бесплатно.',
     region: 'Владение', land: 'Земля', forest: 'Лес', hills: 'Высоты', selected: 'Выбрано', changeRegion: 'Сменить владение',
     chooseSite: 'Выберите клетку на карте', validSite: 'Подходящее место для замка', invalidSite: 'Здесь нельзя основать замок', confirm: 'Подтвердить основание',
-    shiftHint: 'Границы владений показаны на этапе основания',
   },
   hud: {
     state: 'Состояние владения',
@@ -63,6 +62,8 @@ const ru: LocaleDictionary = {
     close: 'Закрыть настройки',
     language: 'Язык',
     languageDescription: 'Язык интерфейса загружается отдельно',
+    mainMenu: 'В главное меню',
+    mainMenuDescription: 'Текущая партия пока не сохраняется',
   },
   generator: {
     title: 'Генератор мира', close: 'Закрыть генератор', devLabel: 'DEV · НАСТРОЙКИ',
@@ -75,7 +76,7 @@ const ru: LocaleDictionary = {
     traversableHeights: 'Проходимые высоты', impassablePeaks: 'Непроходимые пики', forestCoverage: 'Лесное покрытие', cells: 'клеток',
     note: 'Рисуйте крупные узлы на превью. Они плавно распространяются на реальные клетки; лес избегает непроходимых пиков и крутых склонов.',
     participants: 'Стартовые владения', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя',
-    newVariant: 'Новый вариант', apply: 'Применить карту',
+    newVariant: 'Новый вариант', mapName: 'Название карты', defaultMapName: 'Моя карта', saveMap: 'Сохранить в мои карты', apply: 'Перейти к выбору владения',
   },
 }
 

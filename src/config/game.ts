@@ -40,6 +40,8 @@ export const gameConfig = {
   camera: {
     minZoom: 0.3,
     maxZoom: 1.5,
+    foundingZoom: 0.9,
+    gameStartZoom: 1.05,
     wheelSensitivity: 0.0015,
     dragThreshold: 5,
   },
@@ -47,5 +49,8 @@ export const gameConfig = {
     storageKey: 'castle-turns:navigation-hint-seen',
     masteredDelayMs: 10_000,
     partialDelayMs: 60_000,
+  },
+  savedMaps: {
+    storageKey: 'castle-turns:saved-maps',
   },
 } as const

@@ -9,10 +9,8 @@ import { UtilityControls } from './components/UtilityControls'
 import { gameConfig } from './config/game'
 import type { TabId } from './config/localization'
 import { overlayAfterEscape, type GamePhase, type Overlay } from './game/flow'
-import { createManualHeightGrid, generateMap } from './game/generator'
-import { mapPresets, type PresetId } from './game/presets'
+import { createSavedMap, defaultMapSelection, loadSavedMaps, persistSavedMaps, savedSelection, type MapSelection, type SavedMapDraft } from './game/savedMaps'
 import { foundMatch, isCastleSiteValid, type CellPosition, type MapScenario } from './game/scenario'
-import { calculateScenarioInWorker } from './game/scenarioWorkerClient'
 import { useLocalization } from './hooks/useLocalization'
 import { useNavigationHint } from './hooks/useNavigationHint'
 import { useSoundEffects, type SoundEffect } from './hooks/useSoundEffects'
@@ -24,11 +22,10 @@ interface ContextMenuState extends MapContextRequest {
 
 export function App() {
   const [phase, setPhase] = useState<GamePhase>('menu')
-  const [selectedPreset, setSelectedPreset] = useState<PresetId>('greenMarches')
+  const [selectedMap, setSelectedMap] = useState<MapSelection>(defaultMapSelection)
+  const [savedMaps, setSavedMaps] = useState(loadSavedMaps)
   const [participantCount, setParticipantCount] = useState<number>(gameConfig.match.defaultParticipants)
   const [scenario, setScenario] = useState<MapScenario | null>(null)
-  const [startError, setStartError] = useState(false)
-  const [presetStarting, setPresetStarting] = useState(false)
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null)
   const [castleDraft, setCastleDraft] = useState<CellPosition | null>(null)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
@@ -39,7 +36,6 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null)
   const burstId = useRef(0)
   const focusId = useRef(0)
-  const presetStartController = useRef<AbortController | null>(null)
   const lastBurstVariant = useRef<ClickBurstVariant | null>(null)
   const { locale, setLocale, text } = useLocalization()
   const { visible: navigationHintVisible, markLearned } = useNavigationHint()
@@ -56,7 +52,7 @@ export function App() {
 
   const focusRegion = useCallback((regionId: string) => {
     const region = scenario?.regions.find((candidate) => candidate.id === regionId)
-    if (region) setCameraCommand({ kind: 'cell', ...region.center, key: ++focusId.current })
+    if (region) setCameraCommand({ kind: 'cell', ...region.center, zoom: gameConfig.camera.foundingZoom, key: ++focusId.current })
   }, [scenario])
 
   const beginFounding = useCallback((nextScenario: MapScenario) => {
@@ -64,7 +60,6 @@ export function App() {
     setSelectedRegionId(null)
     setCastleDraft(null)
     setContextMenu(null)
-    setStartError(false)
     setOverlay(null)
     setCameraCommand({ kind: 'overview', key: ++focusId.current })
     setPhase('founding')
@@ -77,36 +72,37 @@ export function App() {
     beginFounding(generatedScenario)
   }, [beginFounding])
 
-  const cancelPresetStart = useCallback(() => {
-    presetStartController.current?.abort()
-    presetStartController.current = null
-    setPresetStarting(false)
+  const saveGeneratedMap = useCallback((draft: SavedMapDraft) => {
+    const savedMap = createSavedMap(draft.name, draft.settings, draft.manualGrid)
+    setSavedMaps((current) => {
+      const next = [...current, savedMap]
+      persistSavedMaps(next)
+      return next
+    })
+    setSelectedMap(savedSelection(savedMap.id))
+    setOverlay(null)
   }, [])
 
-  const startPreset = useCallback(async () => {
-    cancelPresetStart()
-    const preset = mapPresets.find((candidate) => candidate.id === selectedPreset) ?? mapPresets[0]
-    const map = generateMap(preset.settings, createManualHeightGrid())
-    const controller = new AbortController()
-    presetStartController.current = controller
-    setPresetStarting(true)
-    setStartError(false)
-    try {
-      const result = await calculateScenarioInWorker(map, participantCount, preset.settings.seed, controller.signal)
-      if (controller.signal.aborted) return
-      if (result.ok) beginFounding({ ...result.scenario, id: preset.id, name: preset.id })
-      else setStartError(true)
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setStartError(true)
-    } finally {
-      if (presetStartController.current === controller) {
-        presetStartController.current = null
-        setPresetStarting(false)
-      }
-    }
-  }, [beginFounding, cancelPresetStart, participantCount, selectedPreset])
+  const deleteSavedMap = useCallback((id: string) => {
+    setSavedMaps((current) => {
+      const next = current.filter((map) => map.id !== id)
+      persistSavedMaps(next)
+      return next
+    })
+    setSelectedMap((current) => current === savedSelection(id) ? defaultMapSelection : current)
+  }, [])
 
-  useEffect(() => () => presetStartController.current?.abort(), [])
+  const returnToMainMenu = useCallback(() => {
+    setScenario(null)
+    setSelectedRegionId(null)
+    setCastleDraft(null)
+    setCameraCommand(null)
+    setTerritoriesHeld(false)
+    setContextMenu(null)
+    setActiveTab('buildings')
+    setOverlay(null)
+    setPhase('menu')
+  }, [])
 
   const selectRegion = useCallback((regionId: string | null) => {
     setSelectedRegionId(regionId)
@@ -130,7 +126,7 @@ export function App() {
   const confirmFounding = useCallback(() => {
     if (!scenario || !selectedRegionId || !castleDraft || !isCastleSiteValid(scenario, selectedRegionId, castleDraft)) return
     setScenario(foundMatch(scenario, selectedRegionId, castleDraft))
-    setCameraCommand({ kind: 'cell', ...castleDraft, key: ++focusId.current })
+    setCameraCommand({ kind: 'cell', ...castleDraft, zoom: gameConfig.camera.gameStartZoom, key: ++focusId.current })
     setPhase('playing')
     setTerritoriesHeld(false)
     playSound('action')
@@ -182,11 +178,10 @@ export function App() {
   if (phase === 'menu') {
     return (
       <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
-        <StartMenu text={text.startMenu} selectedPreset={selectedPreset} participantCount={participantCount} hasError={startError} isStarting={presetStarting} onPresetChange={(preset) => { cancelPresetStart(); setSelectedPreset(preset); setStartError(false) }} onParticipantChange={(count) => { cancelPresetStart(); setParticipantCount(count); setStartError(false) }} onOpenGenerator={() => { cancelPresetStart(); openGenerator() }} onStart={startPreset} />
+        <StartMenu text={text.startMenu} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} utilityControls={utilityControls} onMapChange={setSelectedMap} onDeleteSavedMap={deleteSavedMap} onParticipantChange={setParticipantCount} onOpenGenerator={openGenerator} onStart={beginFounding} />
         <ClickEffects bursts={bursts} />
-        {utilityControls}
         {overlay === 'generator' && (
-          <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} onParticipantChange={setParticipantCount} onClose={closeGenerator} onApply={applyGeneratedScenario} />
+          <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} savedMapCount={savedMaps.length} onParticipantChange={setParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />
         )}
         {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} />}
       </div>
@@ -212,13 +207,13 @@ export function App() {
         {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
       </>}
 
-      {phase === 'founding' && <FoundingPanel scenario={scenario} selectedRegionId={selectedRegionId} castleDraft={castleDraft} draftValid={draftValid} text={text.founding} onSelectRegion={selectRegion} onConfirm={confirmFounding} />}
+      {phase === 'founding' && <FoundingPanel scenario={scenario} selectedRegionId={selectedRegionId} castleDraft={castleDraft} draftValid={draftValid} locale={locale} text={text.founding} onSelectRegion={selectRegion} onConfirm={confirmFounding} />}
 
       {utilityControls}
 
       {contextMenu && <div className="context-backdrop" onPointerDown={() => setContextMenu(null)} role="presentation"><section className="context-menu" style={{ left: contextMenu.left, top: contextMenu.top }} role="menu" aria-label={text.contextMenu.title} onPointerDown={(event) => event.stopPropagation()}><div className="context-menu-heading"><span>{text.contextMenu.title}</span><small>{text.contextMenu.cell} {contextMenu.column + 1}:{contextMenu.row + 1}</small></div><button type="button" role="menuitem">{text.contextMenu.splitSquad}</button><button type="button" role="menuitem">{text.contextMenu.mergeSquads}</button><button type="button" role="menuitem" className="danger">{text.contextMenu.removeObject}</button></section></div>}
 
-      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} />}
+      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onReturnToMenu={returnToMainMenu} />}
     </main>
   )
 }

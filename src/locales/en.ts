@@ -5,9 +5,9 @@ const en: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield and the number of domains. Your castle will stand where you decide to found the settlement.',
-    chooseMap: 'Scenario map', participants: 'Participants', participantDescription: 'One domain is yours; the others belong to NPCs',
+    chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Participants', participantDescription: '1 player, the rest are NPCs',
     humanAndNpc: '1 player + NPCs', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
-    openGenerator: 'Open generator', start: 'Choose a domain', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.',
+    openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Choose a domain', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.',
     presets: {
       greenMarches: { name: 'Green Marches', description: 'Open plains, gentle heights and room for an economy.' },
       highlandPasses: { name: 'Highland Passes', description: 'Heights and narrow routes create natural defensive lines.' },
@@ -19,7 +19,6 @@ const en: LocaleDictionary = {
     placeTitle: 'Found your castle', placeDescription: 'Choose an open cell within your domain. Founding is free.',
     region: 'Domain', land: 'Land', forest: 'Forest', hills: 'Heights', selected: 'Selected', changeRegion: 'Change domain',
     chooseSite: 'Choose a cell on the map', validSite: 'Suitable castle site', invalidSite: 'A castle cannot be founded here', confirm: 'Confirm founding',
-    shiftHint: 'Domain borders remain visible during founding',
   },
   hud: {
     state: 'Domain status', resources: 'Resources', people: 'People', army: 'Recruited troops', turn: 'Current turn', ordersAvailable: 'Orders available',
@@ -40,7 +39,7 @@ const en: LocaleDictionary = {
     title: 'Cell actions', cell: 'Cell', splitSquad: 'Split squad', mergeSquads: 'Merge squads', removeObject: 'Remove object',
   },
   settings: {
-    title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately',
+    title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately', mainMenu: 'Main menu', mainMenuDescription: 'The current match is not saved yet',
   },
   generator: {
     title: 'World generator', close: 'Close generator', devLabel: 'DEV · SETTINGS',
@@ -53,7 +52,7 @@ const en: LocaleDictionary = {
     traversableHeights: 'Traversable heights', impassablePeaks: 'Impassable peaks', forestCoverage: 'Forest coverage', cells: 'cells',
     note: 'Paint large nodes on the preview. They spread smoothly across real cells; forests avoid impassable peaks and steep slopes.',
     participants: 'Starting domains', regionsCalculating: 'Calculating domain borders…', regionsError: 'These settings do not leave enough suitable land', regionsUnbalanced: 'The domains could not be divided fairly — change the terrain or seed',
-    newVariant: 'New variant', apply: 'Apply map',
+    newVariant: 'New variant', mapName: 'Map name', defaultMapName: 'My map', saveMap: 'Save to my maps', apply: 'Choose a domain',
   },
 }
 

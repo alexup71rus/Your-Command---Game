@@ -31,7 +31,7 @@ interface GridCanvasProps {
 }
 
 export type CameraCommand =
-  | ({ kind: 'cell'; key: number } & CellPosition)
+  | ({ kind: 'cell'; key: number; zoom?: number } & CellPosition)
   | { kind: 'overview'; key: number }
 
 export interface MapContextRequest {
@@ -59,9 +59,11 @@ export function GridCanvas(props: GridCanvasProps) {
   const focusRef = useRef<(command: CameraCommand) => void>(() => undefined)
   const cameraCommand = props.cameraCommand
   const initialCameraCommandRef = useRef(cameraCommand)
+  const mapRows = props.map.length
+  const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories])
   useEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
@@ -72,14 +74,13 @@ export function GridCanvas(props: GridCanvasProps) {
     const context = canvas.getContext('2d')
     if (!context) return
 
-    const map = props.map
-    const rows = map.length
-    const columns = map[0]?.length ?? 0
+    const rows = mapRows
+    const columns = mapColumns
     const world: Size = { width: columns * CELL_SIZE, height: rows * CELL_SIZE }
     const initialCameraCommand = initialCameraCommandRef.current
     let viewport: Size = { width: 1, height: 1 }
     let camera: Camera = initialCameraCommand?.kind === 'cell'
-      ? { x: (initialCameraCommand.column + 0.5) * CELL_SIZE, y: (initialCameraCommand.row + 0.5) * CELL_SIZE, zoom: 1 }
+      ? { x: (initialCameraCommand.column + 0.5) * CELL_SIZE, y: (initialCameraCommand.row + 0.5) * CELL_SIZE, zoom: initialCameraCommand.zoom ?? 1 }
       : { x: world.width / 2, y: world.height / 2, zoom: initialCameraCommand?.kind === 'overview' ? gameConfig.camera.minZoom : 1 }
     let hoveredCell: HoveredCell | null = null
     let overviewActive = initialCameraCommand?.kind === 'overview'
@@ -100,7 +101,7 @@ export function GridCanvas(props: GridCanvasProps) {
       overviewActive = command.kind === 'overview'
       camera = command.kind === 'overview'
         ? cameraForOverview(viewport, world)
-        : clampCamera({ x: (command.column + 0.5) * CELL_SIZE, y: (command.row + 0.5) * CELL_SIZE, zoom: Math.max(camera.zoom, 0.75) }, viewport, world)
+        : clampCamera({ x: (command.column + 0.5) * CELL_SIZE, y: (command.row + 0.5) * CELL_SIZE, zoom: command.zoom ?? gameConfig.camera.foundingZoom }, viewport, world)
       sessionMinimumZoom = command.kind === 'overview' ? camera.zoom : undefined
       requestDraw()
     }
@@ -130,6 +131,7 @@ export function GridCanvas(props: GridCanvasProps) {
     const draw = () => {
       animationFrame = null
       const current = propsRef.current
+      const map = current.map
       const dpr = Math.min(window.devicePixelRatio || 1, 3)
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
       context.clearRect(0, 0, viewport.width, viewport.height)
@@ -322,7 +324,7 @@ export function GridCanvas(props: GridCanvasProps) {
       canvas.removeEventListener('pointerleave', onPointerLeave); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('contextmenu', onContextMenu)
       if (animationFrame !== null) cancelAnimationFrame(animationFrame)
     }
-  }, [props.map])
+  }, [mapColumns, mapRows])
 
   return <canvas ref={canvasRef} className="grid-canvas" aria-label={props.ariaLabel} />
 }
