@@ -13,6 +13,7 @@ import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
 import { CloseIcon } from './InterfaceIcons'
+import { SelectField } from './ui/SelectField'
 
 interface MapGeneratorModalProps {
   onApply: (scenario: MapScenario) => void
@@ -229,13 +230,7 @@ export function MapGeneratorModal({ onApply, onClose, text, locale, participantC
               <h3>{text.relief}</h3>
               <RangeControl label={text.participants} value={participantCount} min={gameConfig.match.minParticipants} max={gameConfig.match.maxParticipants} suffix="" onChange={onParticipantChange} />
               <RangeControl label={text.mapSize} value={settings.mapSize} min={gameConfig.generator.minMapSize} max={gameConfig.generator.maxMapSize} suffix={` × ${settings.mapSize}`} onChange={(value) => updateSetting('mapSize', value)} />
-              <label className="generator-field">{text.source}
-                <select value={settings.reliefMode} onChange={(event) => updateSetting('reliefMode', event.target.value as GeneratorSettings['reliefMode'])}>
-                  <option value="automatic">{text.automatic}</option>
-                  <option value="hybrid">{text.hybrid}</option>
-                  <option value="manual">{text.manual}</option>
-                </select>
-              </label>
+              <SelectField label={text.source} value={settings.reliefMode} options={[{ value: 'automatic', label: text.automatic }, { value: 'hybrid', label: text.hybrid }, { value: 'manual', label: text.manual }]} onChange={(value) => updateSetting('reliefMode', value)} />
               <RangeControl label={text.hills} value={settings.hillCoverage} min={5} max={75} onChange={(value) => updateSetting('hillCoverage', Math.max(value, settings.peakCoverage))} />
               <RangeControl label={text.peaks} value={settings.peakCoverage} max={25} onChange={(value) => updateSetting('peakCoverage', Math.min(value, settings.hillCoverage))} />
               <RangeControl label={text.formScale} value={settings.reliefScale} min={18} max={90} suffix="" onChange={(value) => updateSetting('reliefScale', value)} />
@@ -245,13 +240,7 @@ export function MapGeneratorModal({ onApply, onClose, text, locale, participantC
               <h3>{text.vegetation}</h3>
               <RangeControl label={text.coverage} value={settings.vegetationDensity} max={80} onChange={(value) => updateSetting('vegetationDensity', value)} />
               <RangeControl label={text.vegetationDistribution} value={settings.vegetationDistribution} min={-100} max={100} suffix="" onChange={(value) => updateSetting('vegetationDistribution', value)} />
-              <label className="generator-field">{text.heightPreference}
-                <select value={settings.vegetationHeight} onChange={(event) => updateSetting('vegetationHeight', event.target.value as GeneratorSettings['vegetationHeight'])}>
-                  <option value="lowlands">{text.lowlands}</option>
-                  <option value="balanced">{text.balanced}</option>
-                  <option value="highlands">{text.highlands}</option>
-                </select>
-              </label>
+              <SelectField label={text.heightPreference} value={settings.vegetationHeight} options={[{ value: 'lowlands', label: text.lowlands }, { value: 'balanced', label: text.balanced }, { value: 'highlands', label: text.highlands }]} onChange={(value) => updateSetting('vegetationHeight', value)} />
               <RangeControl label={text.reliefInfluence} value={settings.heightInfluence} onChange={(value) => updateSetting('heightInfluence', value)} />
             </section>
           </aside>
@@ -277,9 +266,7 @@ export function MapGeneratorModal({ onApply, onClose, text, locale, participantC
               <span><em>{text.forestCoverage}</em><strong>{formatCoverage(stats.forests)}</strong><small>{stats.forests.toLocaleString(locale)} {text.cells}</small></span>
               <span className="seed-stat"><em>{text.seed}</em><strong>{deferredSettings.seed}</strong></span>
             </div>
-            <div className={`region-validation ${scenarioReady?.ok ? 'valid' : scenarioReady ? 'invalid' : 'pending'}`}>
-              <span>{scenarioReady?.ok ? '◆' : scenarioReady ? '!' : '…'}</span>{scenarioReady?.ok ? `${text.regionsReady}: ${scenarioReady.scenario.regions.length}` : scenarioReady ? scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError : text.regionsCalculating}
-            </div>
+            {!scenarioReady?.ok && <div className={`region-validation ${scenarioReady ? 'invalid' : 'pending'}`}><span>{scenarioReady ? '!' : '…'}</span>{scenarioReady ? scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError : text.regionsCalculating}</div>}
             <p className="generator-note">{text.note}</p>
           </div>
         </div>

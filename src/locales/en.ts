@@ -3,7 +3,7 @@ import type { LocaleDictionary } from '../config/localization'
 const en: LocaleDictionary = {
   localeName: 'English',
   startMenu: {
-    eyebrow: 'Turn-based strategy', title: 'Four Orders',
+    eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield and the number of domains. Your castle will stand where you decide to found the settlement.',
     chooseMap: 'Scenario map', participants: 'Participants', participantDescription: 'One domain is yours; the others belong to NPCs',
     humanAndNpc: '1 player + NPCs', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
@@ -52,7 +52,7 @@ const en: LocaleDictionary = {
     plain: 'Plain', elevation: 'Height', forest: 'Forest', peak: 'Peak', seed: 'Generation seed',
     traversableHeights: 'Traversable heights', impassablePeaks: 'Impassable peaks', forestCoverage: 'Forest coverage', cells: 'cells',
     note: 'Paint large nodes on the preview. They spread smoothly across real cells; forests avoid impassable peaks and steep slopes.',
-    participants: 'Starting domains', regionsReady: 'Regions are ready', regionsCalculating: 'Calculating domain borders…', regionsError: 'These settings do not leave enough suitable land', regionsUnbalanced: 'The domains could not be divided fairly — change the terrain or seed',
+    participants: 'Starting domains', regionsCalculating: 'Calculating domain borders…', regionsError: 'These settings do not leave enough suitable land', regionsUnbalanced: 'The domains could not be divided fairly — change the terrain or seed',
     newVariant: 'New variant', apply: 'Apply map',
   },
 }

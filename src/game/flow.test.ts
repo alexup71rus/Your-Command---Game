@@ -10,6 +10,10 @@ describe('game flow', () => {
     expect(overlayAfterEscape('playing', 'settings')).toBeNull()
   })
 
+  it('opens settings from the main menu', () => {
+    expect(overlayAfterEscape('menu', null)).toBe('settings')
+  })
+
   it('opens settings from a running game', () => {
     expect(overlayAfterEscape('playing', null)).toBe('settings')
   })

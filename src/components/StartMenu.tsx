@@ -58,6 +58,13 @@ interface StartMenuProps {
 export function StartMenu({ text, selectedPreset, participantCount, onPresetChange, onParticipantChange, onOpenGenerator, onStart, hasError, isStarting }: StartMenuProps) {
   return (
     <main className="start-screen">
+      <img
+        className="start-hero-art"
+        src="/assets/start-menu-hero.webp"
+        alt=""
+        aria-hidden="true"
+        fetchPriority="high"
+      />
       <div className="start-atmosphere" aria-hidden="true" />
       <section className="start-menu" aria-labelledby="start-title">
         <header className="start-header">

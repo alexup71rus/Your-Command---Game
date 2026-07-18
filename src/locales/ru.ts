@@ -3,7 +3,7 @@ import type { LocaleDictionary } from '../config/localization'
 const ru: LocaleDictionary = {
   localeName: 'Русский',
   startMenu: {
-    eyebrow: 'Пошаговая стратегия', title: 'Четыре приказа',
+    eyebrow: 'Пошаговая стратегия', title: 'Ваш приказ',
     description: 'Выберите поле будущей войны и число владений. Замок появится только там, где вы решите основать своё поселение.',
     chooseMap: 'Карта сценария', participants: 'Участники', participantDescription: 'Одно владение принадлежит вам, остальные — NPC',
     humanAndNpc: '1 игрок + NPC', customMap: 'Свой мир', customMapDescription: 'Настройте рельеф, леса и стартовые владения вручную.',
@@ -74,7 +74,7 @@ const ru: LocaleDictionary = {
     plain: 'Равнина', elevation: 'Высота', forest: 'Лес', peak: 'Пик', seed: 'Семя генерации',
     traversableHeights: 'Проходимые высоты', impassablePeaks: 'Непроходимые пики', forestCoverage: 'Лесное покрытие', cells: 'клеток',
     note: 'Рисуйте крупные узлы на превью. Они плавно распространяются на реальные клетки; лес избегает непроходимых пиков и крутых склонов.',
-    participants: 'Стартовые владения', regionsReady: 'Области рассчитаны', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя',
+    participants: 'Стартовые владения', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя',
     newVariant: 'Новый вариант', apply: 'Применить карту',
   },
 }

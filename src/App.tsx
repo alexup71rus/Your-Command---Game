@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { ClickEffects, type ClickBurst, type ClickBurstKind, type ClickBurstVariant } from './components/ClickEffects'
 import { FoundingPanel } from './components/FoundingPanel'
 import { GridCanvas, type CameraCommand, type MapClickRequest, type MapContextRequest } from './components/GridCanvas'
-import { SoundIcon } from './components/InterfaceIcons'
 import { MapGeneratorModal } from './components/MapGeneratorModal'
 import { SettingsModal } from './components/SettingsModal'
 import { StartMenu } from './components/StartMenu'
+import { UtilityControls } from './components/UtilityControls'
 import { gameConfig } from './config/game'
 import type { TabId } from './config/localization'
 import { overlayAfterEscape, type GamePhase, type Overlay } from './game/flow'
@@ -149,7 +149,7 @@ export function App() {
   const handleInterfacePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('.grid-canvas') || target.closest('.sound-toggle')) return
+    if (target.closest('.grid-canvas')) return
     let kind: ClickBurstKind = 'interface'
     let effect: SoundEffect = 'action'
     if (target.closest('.tab')) effect = 'tab'
@@ -178,14 +178,18 @@ export function App() {
   }, [contextMenu, overlay, phase])
 
   if (!text) return <main className="game-shell loading-shell" aria-busy="true" />
+  const utilityControls = <UtilityControls settingsLabel={text.settings.title} settingsHint={text.interface.settingsHint} soundEnabled={soundEnabled} soundEnableLabel={text.sound.enable} soundDisableLabel={text.sound.disable} onOpenSettings={() => { setTerritoriesHeld(false); setOverlay('settings') }} onToggleSound={toggleSound} />
   if (phase === 'menu') {
     return (
-      <>
+      <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
         <StartMenu text={text.startMenu} selectedPreset={selectedPreset} participantCount={participantCount} hasError={startError} isStarting={presetStarting} onPresetChange={(preset) => { cancelPresetStart(); setSelectedPreset(preset); setStartError(false) }} onParticipantChange={(count) => { cancelPresetStart(); setParticipantCount(count); setStartError(false) }} onOpenGenerator={() => { cancelPresetStart(); openGenerator() }} onStart={startPreset} />
+        <ClickEffects bursts={bursts} />
+        {utilityControls}
         {overlay === 'generator' && (
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} onParticipantChange={setParticipantCount} onClose={closeGenerator} onApply={applyGeneratedScenario} />
         )}
-      </>
+        {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} />}
+      </div>
     )
   }
 
@@ -210,7 +214,7 @@ export function App() {
 
       {phase === 'founding' && <FoundingPanel scenario={scenario} selectedRegionId={selectedRegionId} castleDraft={castleDraft} draftValid={draftValid} text={text.founding} onSelectRegion={selectRegion} onConfirm={confirmFounding} />}
 
-      <div className="map-tools"><button type="button" className="menu-toggle" onClick={() => { setTerritoriesHeld(false); setOverlay('settings') }} aria-label={text.settings.title}><kbd>Esc</kbd><span>{text.interface.settingsHint}</span></button><button type="button" className="sound-toggle" aria-label={soundEnabled ? text.sound.disable : text.sound.enable} title={soundEnabled ? text.sound.disable : text.sound.enable} aria-pressed={soundEnabled} onClick={toggleSound}><SoundIcon muted={!soundEnabled} /></button></div>
+      {utilityControls}
 
       {contextMenu && <div className="context-backdrop" onPointerDown={() => setContextMenu(null)} role="presentation"><section className="context-menu" style={{ left: contextMenu.left, top: contextMenu.top }} role="menu" aria-label={text.contextMenu.title} onPointerDown={(event) => event.stopPropagation()}><div className="context-menu-heading"><span>{text.contextMenu.title}</span><small>{text.contextMenu.cell} {contextMenu.column + 1}:{contextMenu.row + 1}</small></div><button type="button" role="menuitem">{text.contextMenu.splitSquad}</button><button type="button" role="menuitem">{text.contextMenu.mergeSquads}</button><button type="button" role="menuitem" className="danger">{text.contextMenu.removeObject}</button></section></div>}
 

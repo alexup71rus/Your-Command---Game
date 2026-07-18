@@ -115,7 +115,6 @@ export interface LocaleDictionary {
     cells: string
     note: string
     participants: string
-    regionsReady: string
     regionsCalculating: string
     regionsError: string
     regionsUnbalanced: string
