@@ -67,7 +67,8 @@ button {
 .hud,
 .turn-panel,
 .command-dock,
-.map-tools {
+.map-tools,
+.map-hint {
   position: absolute;
   z-index: 2;
 }
@@ -386,14 +387,15 @@ button {
 }
 
 .settings-close {
+  display: grid;
   width: 38px;
   height: 38px;
   border: 1px solid rgba(220, 190, 105, 0.14);
   border-radius: 9px;
   color: #929b8e;
   background: rgba(255, 255, 255, 0.02);
-  font-size: 24px;
   cursor: pointer;
+  place-items: center;
 }
 
 .settings-content {
@@ -471,8 +473,25 @@ button {
   font-size: 10px;
 }
 
-.settings-sound-toggle .sound-icon {
+.settings-sound-toggle .interface-icon {
   color: #d7bd72;
+}
+
+.interface-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.close-svg {
+  width: 16px;
+  height: 16px;
 }
 
 .volume-control label {
@@ -557,14 +576,15 @@ button {
 }
 
 .generator-close {
+  display: grid;
   width: 38px;
   height: 38px;
   border: 1px solid rgba(220, 190, 105, 0.14);
   border-radius: 9px;
   color: #929b8e;
   background: rgba(255, 255, 255, 0.02);
-  font-size: 24px;
   cursor: pointer;
+  place-items: center;
 }
 
 .generator-close:hover {
@@ -709,11 +729,14 @@ button {
 }
 
 .map-preview canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   display: block;
-  width: 100%;
-  height: 100%;
   cursor: crosshair;
   touch-action: none;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px rgba(220, 190, 105, 0.12), 0 12px 35px rgba(0, 0, 0, 0.22);
 }
 
 .preview-legend {
@@ -747,28 +770,48 @@ button {
 
 .generator-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(90px, 0.72fr);
   gap: 6px;
   margin-top: 8px;
 }
 
 .generator-stats span {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  justify-content: space-between;
-  padding: 7px 9px;
+  gap: 2px 8px;
+  min-width: 0;
+  padding: 8px 9px;
   border: 1px solid rgba(185, 198, 176, 0.09);
   border-radius: 6px;
   color: #798277;
+}
+
+.generator-stats em {
+  overflow: hidden;
+  color: #858e82;
   font-size: 8px;
-  letter-spacing: 0.06em;
+  font-style: normal;
+  letter-spacing: 0.045em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .generator-stats strong {
   color: #cdb875;
-  font-size: 10px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.generator-stats small {
+  grid-column: 1 / -1;
+  color: #626b61;
+  font-size: 8px;
+}
+
+.generator-stats .seed-stat {
+  align-content: center;
 }
 
 .generator-note {
@@ -923,12 +966,15 @@ button {
 }
 
 .map-hint {
+  right: 20px;
+  bottom: 250px;
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 9px 13px;
   border-radius: 9px;
   font-size: 11px;
+  animation: hint-in 180ms ease-out;
 }
 
 .sound-toggle {
@@ -985,47 +1031,8 @@ button {
   outline-offset: 2px;
 }
 
-.sound-icon {
-  position: relative;
-  width: 7px;
-  height: 10px;
-  border-radius: 2px 0 0 2px;
-  background: currentColor;
-}
-
-.sound-icon::before {
-  position: absolute;
-  top: -3px;
-  left: 5px;
-  width: 9px;
-  height: 16px;
-  border: 1.5px solid currentColor;
-  border-block-color: transparent;
-  border-left-color: transparent;
-  border-radius: 50%;
-  content: "";
-}
-
-.sound-icon::after {
-  position: absolute;
-  top: 1px;
-  right: 5px;
-  width: 6px;
-  height: 8px;
-  content: "";
-  background: currentColor;
-  clip-path: polygon(100% 0, 100% 100%, 0 70%, 0 30%);
-}
-
-.sound-icon.muted::before {
-  top: 4px;
-  left: 7px;
-  width: 10px;
-  height: 1.5px;
-  border: 0;
-  border-radius: 1px;
-  background: #c98776;
-  transform: rotate(-45deg);
+@keyframes hint-in {
+  from { opacity: 0; transform: translateY(4px); }
 }
 
 .click-effects {
@@ -1064,15 +1071,161 @@ button {
 }
 
 .click-sigil {
-  top: -15px;
-  left: -15px;
-  width: 30px;
-  height: 30px;
+  top: -17px;
+  left: -17px;
+  width: 34px;
+  height: 34px;
   border: 1px solid currentColor;
   box-shadow: 0 0 14px color-mix(in srgb, currentColor 35%, transparent);
   opacity: 0;
-  transform: rotate(45deg) scale(0.2);
+  transform: rotate(var(--sigil-start)) scale(0.2);
   animation: sigil-flash 520ms cubic-bezier(0.16, 0.72, 0.24, 1) forwards;
+}
+
+.click-burst.variant-1 .click-sigil {
+  top: -18px;
+  left: -18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  animation-duration: 590ms;
+}
+
+.click-burst.variant-1 .click-sigil::before {
+  inset: 7px;
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.click-burst.variant-1 .click-sigil::after {
+  inset: 15px -3px;
+}
+
+.click-burst.variant-1 .click-core {
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: none;
+}
+
+.click-burst.variant-1 .click-spark {
+  animation-duration: 690ms;
+}
+
+.click-burst.variant-0 .click-core {
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+}
+
+.click-burst.variant-2 .click-sigil {
+  top: -18px;
+  left: -18px;
+  width: 36px;
+  height: 36px;
+  border-color: color-mix(in srgb, currentColor 78%, transparent);
+  animation-duration: 610ms;
+}
+
+.click-burst.variant-2 .click-sigil::before {
+  inset: 8px -4px;
+  border-block: 1px solid currentColor;
+  border-inline: 0;
+}
+
+.click-burst.variant-2 .click-sigil::after {
+  inset: -4px 8px;
+  border-block: 0;
+  border-inline: 1px solid currentColor;
+}
+
+.click-burst.variant-2 .click-core {
+  top: -5px;
+  left: -5px;
+  width: 10px;
+  height: 10px;
+  clip-path: polygon(50% 0, 62% 36%, 100% 50%, 62% 64%, 50% 100%, 38% 64%, 0 50%, 38% 36%);
+}
+
+.click-burst.variant-2 .click-spark.spark-1 {
+  height: 10px;
+}
+
+.click-burst.variant-3 .click-sigil {
+  top: -18px;
+  left: -18px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  box-shadow: none;
+  animation-duration: 620ms;
+}
+
+.click-burst.variant-3 .click-sigil::before,
+.click-burst.variant-3 .click-sigil::after {
+  border: 0;
+  background: currentColor;
+  box-shadow: 0 0 9px color-mix(in srgb, currentColor 48%, transparent);
+}
+
+.click-burst.variant-3 .click-sigil::before {
+  inset: 1px 16px;
+}
+
+.click-burst.variant-3 .click-sigil::after {
+  inset: 16px 1px;
+}
+
+.click-burst.variant-3 .click-core {
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  outline: 1px solid currentColor;
+  outline-offset: 3px;
+}
+
+.click-burst.variant-3 .click-spark {
+  animation-duration: 680ms;
+}
+
+.click-burst.variant-4 .click-sigil {
+  top: -18px;
+  left: -18px;
+  width: 36px;
+  height: 36px;
+  border-style: dashed;
+  border-radius: 50%;
+  animation-duration: 660ms;
+}
+
+.click-burst.variant-4 .click-sigil::before {
+  inset: 6px;
+  border-radius: 50%;
+}
+
+.click-burst.variant-4 .click-sigil::after {
+  inset: 16px -4px;
+  border-inline: 0;
+}
+
+.click-burst.variant-4 .click-core {
+  top: -5px;
+  left: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: transparent;
+  outline: 2px dotted #fff2bc;
+  box-shadow: 0 0 13px 4px currentColor;
+}
+
+.click-burst.variant-4 .click-spark:nth-of-type(even) {
+  width: 2px;
+  height: 9px;
 }
 
 .click-sigil::before,
@@ -1123,9 +1276,9 @@ button {
 }
 
 @keyframes sigil-flash {
-  0% { opacity: 0; transform: rotate(25deg) scale(0.2); }
+  0% { opacity: 0; transform: rotate(var(--sigil-start)) scale(0.2); }
   24% { opacity: 0.85; }
-  100% { opacity: 0; transform: rotate(70deg) scale(1.35); }
+  100% { opacity: 0; transform: rotate(var(--sigil-end)) scale(var(--sigil-scale)); }
 }
 
 @keyframes core-flash {
@@ -1158,10 +1311,6 @@ button {
 }
 
 @media (max-width: 920px) {
-  .map-hint {
-    display: none;
-  }
-
   .hud {
     grid-template-columns: 1fr 1fr;
   }
@@ -1171,6 +1320,12 @@ button {
   }
 
   .generator-body { grid-template-columns: 320px minmax(0, 1fr); }
+}
+
+@media (max-width: 1120px) {
+  .map-tools {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1194,10 +1349,6 @@ button {
   }
 
   .map-hint {
-    display: none;
-  }
-
-  .menu-toggle span {
     display: none;
   }
 

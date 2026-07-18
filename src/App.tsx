@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { ClickEffects, type ClickBurst, type ClickBurstKind } from './components/ClickEffects'
+import { ClickEffects, type ClickBurst, type ClickBurstKind, type ClickBurstVariant } from './components/ClickEffects'
 import { GridCanvas, type MapClickRequest, type MapContextRequest } from './components/GridCanvas'
+import { SoundIcon } from './components/InterfaceIcons'
 import { MapGeneratorModal } from './components/MapGeneratorModal'
 import { SettingsModal } from './components/SettingsModal'
 import { gameConfig } from './config/game'
@@ -25,6 +26,7 @@ export function App() {
   const [bursts, setBursts] = useState<ClickBurst[]>([])
   const [overlay, setOverlay] = useState<Overlay>(null)
   const burstId = useRef(0)
+  const lastBurstVariant = useRef<ClickBurstVariant | null>(null)
   const { locale, setLocale, text } = useLocalization()
   const { visible: navigationHintVisible, markLearned } = useNavigationHint()
   const {
@@ -37,7 +39,21 @@ export function App() {
 
   const createBurst = useCallback((x: number, y: number, kind: ClickBurstKind) => {
     const id = ++burstId.current
-    setBursts((current) => [...current.slice(-7), { id, x, y, kind }])
+    const availableVariants = ([0, 1, 2, 3, 4] as ClickBurstVariant[]).filter(
+      (variant) => variant !== lastBurstVariant.current,
+    )
+    const variant = availableVariants[Math.floor(Math.random() * availableVariants.length)]
+    lastBurstVariant.current = variant
+    setBursts((current) => [...current.slice(-7), {
+      id,
+      x,
+      y,
+      kind,
+      variant,
+      rotation: Math.random() * 90 - 45,
+      scale: 1.25 + Math.random() * 0.22,
+      spread: 0.9 + Math.random() * 0.22,
+    }])
     window.setTimeout(() => {
       setBursts((current) => current.filter((burst) => burst.id !== id))
     }, 720)
@@ -141,13 +157,14 @@ export function App() {
         </nav>
       </section>
 
+      {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
+
       <div className="map-tools">
-        {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
         <button type="button" className="menu-toggle" onClick={() => setOverlay('settings')} aria-label={text.settings.title}>
           <kbd>Esc</kbd><span>{text.interface.settingsHint}</span>
         </button>
         <button type="button" className="sound-toggle" aria-label={soundEnabled ? text.sound.disable : text.sound.enable} title={soundEnabled ? text.sound.disable : text.sound.enable} aria-pressed={soundEnabled} onClick={toggleSound}>
-          <span className={soundEnabled ? 'sound-icon' : 'sound-icon muted'} aria-hidden="true" />
+          <SoundIcon muted={!soundEnabled} />
         </button>
       </div>
 

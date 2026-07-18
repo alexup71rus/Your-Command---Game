@@ -1,4 +1,5 @@
 import { supportedLocales, type Locale, type LocaleDictionary } from '../config/localization'
+import { CloseIcon, SoundIcon } from './InterfaceIcons'
 
 interface SettingsModalProps {
   locale: Locale
@@ -39,7 +40,7 @@ export function SettingsModal({
       >
         <header className="settings-header">
           <div><span className="settings-kicker">ESC</span><h2 id="settings-title">{text.settings.title}</h2></div>
-          <button type="button" className="settings-close" onClick={onClose} aria-label={text.settings.close}>×</button>
+          <button type="button" className="settings-close" onClick={onClose} aria-label={text.settings.close}><CloseIcon /></button>
         </header>
 
         <div className="settings-content">
@@ -76,7 +77,7 @@ export function SettingsModal({
                 aria-label={soundEnabled ? text.sound.disable : text.sound.enable}
                 aria-pressed={soundEnabled}
               >
-                <span className={soundEnabled ? 'sound-icon' : 'sound-icon muted'} aria-hidden="true" />
+                <SoundIcon muted={!soundEnabled} />
                 {soundEnabled ? text.sound.enabled : text.sound.disabled}
               </button>
               <label>

@@ -78,6 +78,10 @@ export interface LocaleDictionary {
     forest: string
     peak: string
     seed: string
+    traversableHeights: string
+    impassablePeaks: string
+    forestCoverage: string
+    cells: string
     note: string
     vegetationOnly: string
     newVariant: string

@@ -20,7 +20,7 @@ export const gameConfig = {
     gainMultiplier: 2.8,
   },
   camera: {
-    minZoom: 0.25,
+    minZoom: 0.3,
     maxZoom: 1.5,
     wheelSensitivity: 0.0015,
     dragThreshold: 5,

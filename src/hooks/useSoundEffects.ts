@@ -62,13 +62,12 @@ export function useSoundEffects() {
 
   const play = useCallback((effect: SoundEffect, force = false) => {
     if (volumeRef.current === 0 && !force) return
-    const variation = 0.97 + Math.random() * 0.06
     switch (effect) {
-      case 'map': playTone(190 * variation, 0.09, 0.045); playTone(285 * variation, 0.07, 0.028, 0.012); break
-      case 'tab': playTone(430 * variation, 0.1, 0.044); playTone(645 * variation, 0.12, 0.03, 0.025); break
-      case 'context': playTone(260 * variation, 0.13, 0.05); playTone(520 * variation, 0.17, 0.034, 0.035); break
-      case 'action': playTone(350 * variation, 0.09, 0.045); break
-      case 'dismiss': playTone(170 * variation, 0.08, 0.035); break
+      case 'map': playTone(190, 0.09, 0.045); playTone(285, 0.07, 0.028, 0.012); break
+      case 'tab': playTone(430, 0.1, 0.044); playTone(645, 0.12, 0.03, 0.025); break
+      case 'context': playTone(260, 0.13, 0.05); playTone(520, 0.17, 0.034, 0.035); break
+      case 'action': playTone(350, 0.09, 0.045); break
+      case 'dismiss': playTone(170, 0.08, 0.035); break
       case 'enable': playTone(330, 0.1, 0.05); playTone(495, 0.14, 0.04, 0.045); break
     }
   }, [playTone])

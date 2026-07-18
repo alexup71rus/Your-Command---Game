@@ -9,6 +9,7 @@ import {
   type ManualHeightGrid,
 } from '../game/generator'
 import type { GameMap } from '../game/map'
+import { CloseIcon } from './InterfaceIcons'
 
 interface MapGeneratorModalProps {
   currentMap: GameMap
@@ -54,6 +55,7 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
   const [brush, setBrush] = useState<ManualHeight>(1)
   const [vegetationOnly, setVegetationOnly] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
   const previewMap = useMemo(
     () => generateMap(settings, manualGrid, vegetationOnly ? currentMap : undefined, vegetationOnly),
     [currentMap, manualGrid, settings, vegetationOnly],
@@ -61,46 +63,61 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    const preview = previewRef.current
+    if (!canvas || !preview) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const width = canvas.clientWidth
-    const height = canvas.clientHeight
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    canvas.width = Math.round(width * dpr)
-    canvas.height = Math.round(height * dpr)
-    context.setTransform(dpr, 0, 0, dpr, 0, 0)
     const rows = previewMap.length
     const columns = previewMap[0]?.length ?? 0
-    const cellWidth = width / columns
-    const cellHeight = height / rows
-    previewMap.forEach((row, y) => row.forEach((cell, x) => {
-      context.fillStyle = colorForCell(cell.elevation ?? 0, Boolean(cell.vegetation))
-      context.fillRect(x * cellWidth, y * cellHeight, Math.ceil(cellWidth), Math.ceil(cellHeight))
-    }))
-    context.strokeStyle = 'rgba(225, 198, 119, .2)'
-    context.lineWidth = 1
-    for (let x = 1; x < manualGrid[0].length; x += 1) {
-      context.beginPath()
-      context.moveTo(Math.round(x * width / manualGrid[0].length) + 0.5, 0)
-      context.lineTo(Math.round(x * width / manualGrid[0].length) + 0.5, height)
-      context.stroke()
+    if (!rows || !columns) return
+
+    const drawPreview = () => {
+      const bounds = preview.getBoundingClientRect()
+      const mapRatio = columns / rows
+      const boxRatio = bounds.width / bounds.height
+      const width = Math.max(1, boxRatio > mapRatio ? bounds.height * mapRatio : bounds.width)
+      const height = Math.max(1, boxRatio > mapRatio ? bounds.height : bounds.width / mapRatio)
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      canvas.width = Math.round(width * dpr)
+      canvas.height = Math.round(height * dpr)
+      context.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const cellWidth = width / columns
+      const cellHeight = height / rows
+      previewMap.forEach((row, y) => row.forEach((cell, x) => {
+        context.fillStyle = colorForCell(cell.elevation ?? 0, Boolean(cell.vegetation))
+        context.fillRect(x * cellWidth, y * cellHeight, Math.ceil(cellWidth), Math.ceil(cellHeight))
+      }))
+      context.strokeStyle = 'rgba(225, 198, 119, .2)'
+      context.lineWidth = 1
+      for (let x = 1; x < manualGrid[0].length; x += 1) {
+        context.beginPath()
+        context.moveTo(Math.round(x * width / manualGrid[0].length) + 0.5, 0)
+        context.lineTo(Math.round(x * width / manualGrid[0].length) + 0.5, height)
+        context.stroke()
+      }
+      for (let y = 1; y < manualGrid.length; y += 1) {
+        context.beginPath()
+        context.moveTo(0, Math.round(y * height / manualGrid.length) + 0.5)
+        context.lineTo(width, Math.round(y * height / manualGrid.length) + 0.5)
+        context.stroke()
+      }
+      manualGrid.forEach((row, y) => row.forEach((heightValue, x) => {
+        if (!heightValue) return
+        const centerX = (x + 0.5) * width / row.length
+        const centerY = (y + 0.5) * height / manualGrid.length
+        context.fillStyle = heightValue === 2 ? '#f0d98c' : '#c2ab6c'
+        context.beginPath()
+        context.arc(centerX, centerY, heightValue === 2 ? 5 : 3.5, 0, Math.PI * 2)
+        context.fill()
+      }))
     }
-    for (let y = 1; y < manualGrid.length; y += 1) {
-      context.beginPath()
-      context.moveTo(0, Math.round(y * height / manualGrid.length) + 0.5)
-      context.lineTo(width, Math.round(y * height / manualGrid.length) + 0.5)
-      context.stroke()
-    }
-    manualGrid.forEach((row, y) => row.forEach((heightValue, x) => {
-      if (!heightValue) return
-      const centerX = (x + 0.5) * width / row.length
-      const centerY = (y + 0.5) * height / manualGrid.length
-      context.fillStyle = heightValue === 2 ? '#f0d98c' : '#c2ab6c'
-      context.beginPath()
-      context.arc(centerX, centerY, heightValue === 2 ? 5 : 3.5, 0, Math.PI * 2)
-      context.fill()
-    }))
+
+    const resizeObserver = new ResizeObserver(drawPreview)
+    resizeObserver.observe(preview)
+    drawPreview()
+    return () => resizeObserver.disconnect()
   }, [manualGrid, previewMap])
 
   const updateSetting = <Key extends keyof GeneratorSettings>(key: Key, value: GeneratorSettings[Key]) => {
@@ -133,15 +150,19 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
       hills: cells.filter((cell) => cell.landform === 'hill').length,
       peaks: cells.filter((cell) => cell.landform === 'peak').length,
       forests: cells.filter((cell) => cell.vegetation).length,
+      total: cells.length,
     }
   }, [previewMap])
+
+  const formatCoverage = (cells: number) =>
+    `${(cells / stats.total * 100).toLocaleString(locale, { maximumFractionDigits: 1 })}%`
 
   return (
     <div className="generator-backdrop" onPointerDown={onClose}>
       <section className="generator-modal" role="dialog" aria-modal="true" aria-labelledby="generator-title" onPointerDown={(event) => event.stopPropagation()}>
         <header className="generator-header">
           <div><span className="dev-label">{text.devLabel}</span><h2 id="generator-title">{text.title}</h2></div>
-          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close}>×</button>
+          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close}><CloseIcon /></button>
         </header>
 
         <div className="generator-body">
@@ -186,15 +207,15 @@ export function MapGeneratorModal({ currentMap, onApply, onClose, text, locale }
               </div>
               <button className="clear-height-map" type="button" onClick={() => setManualGrid(createManualHeightGrid())}>{text.clearNodes}</button>
             </div>
-            <div className="map-preview">
+            <div className="map-preview" ref={previewRef}>
               <canvas ref={canvasRef} onPointerDown={paint} onPointerMove={paint} aria-label={text.previewAria} />
-              <div className="preview-legend"><span className="plain">{text.plain}</span><span className="hill">{text.elevation}</span><span className="forest">{text.forest}</span><span className="peak">{text.peak}</span></div>
+              <div className="preview-legend"><span className="forest">{text.forest}</span><span className="plain">{text.plain}</span><span className="hill">{text.elevation}</span><span className="peak">{text.peak}</span></div>
             </div>
             <div className="generator-stats">
-              <span>{text.elevation} <strong>{stats.hills.toLocaleString(locale)}</strong></span>
-              <span>{text.peak} <strong>{stats.peaks.toLocaleString(locale)}</strong></span>
-              <span>{text.forest} <strong>{stats.forests.toLocaleString(locale)}</strong></span>
-              <span>{text.seed} <strong>{settings.seed}</strong></span>
+              <span><em>{text.traversableHeights}</em><strong>{formatCoverage(stats.hills)}</strong><small>{stats.hills.toLocaleString(locale)} {text.cells}</small></span>
+              <span><em>{text.impassablePeaks}</em><strong>{formatCoverage(stats.peaks)}</strong><small>{stats.peaks.toLocaleString(locale)} {text.cells}</small></span>
+              <span><em>{text.forestCoverage}</em><strong>{formatCoverage(stats.forests)}</strong><small>{stats.forests.toLocaleString(locale)} {text.cells}</small></span>
+              <span className="seed-stat"><em>{text.seed}</em><strong>{settings.seed}</strong></span>
             </div>
             <p className="generator-note">{text.note}</p>
           </div>
