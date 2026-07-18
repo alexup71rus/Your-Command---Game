@@ -17,6 +17,8 @@ interface GridCanvasProps {
   map: GameMap
   onContextRequest: (request: MapContextRequest) => void
   onMapClick: (request: MapClickRequest) => void
+  onNavigate: (skill: 'move' | 'zoom') => void
+  ariaLabel: string
 }
 
 export interface MapContextRequest {
@@ -43,7 +45,7 @@ const MAJOR_GRID_COLOR = 'rgba(194, 174, 120, 0.22)'
 const BORDER_COLOR = 'rgba(211, 185, 112, 0.58)'
 const HOVER_COLOR = 'rgba(218, 189, 105, 0.16)'
 
-export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProps) {
+export function GridCanvas({ map, onContextRequest, onMapClick, onNavigate, ariaLabel }: GridCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -102,6 +104,29 @@ export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProp
       const firstRow = Math.max(0, Math.floor(topLeft.y / CELL_SIZE))
       const lastRow = Math.min(rows, Math.ceil(bottomRight.y / CELL_SIZE))
 
+      const cellSize = CELL_SIZE * camera.zoom
+      for (let row = firstRow; row < lastRow; row += 1) {
+        for (let column = firstColumn; column < lastColumn; column += 1) {
+          const cell = map[row][column]
+          if (cell.elevation === undefined) continue
+          if (cell.landform === 'peak') {
+            context.fillStyle = cell.vegetation ? '#778174' : '#77766a'
+          } else if (cell.vegetation) {
+            context.fillStyle = cell.landform === 'hill' ? '#344d36' : '#263f2c'
+          } else if (cell.landform === 'hill') {
+            context.fillStyle = '#4c5140'
+          } else {
+            context.fillStyle = cell.elevation > 0.4 ? '#344634' : '#2b3d30'
+          }
+          context.fillRect(
+            mapOrigin.x + column * cellSize,
+            mapOrigin.y + row * cellSize,
+            Math.ceil(cellSize),
+            Math.ceil(cellSize),
+          )
+        }
+      }
+
       context.lineWidth = 1
       for (let column = firstColumn; column <= lastColumn; column += 1) {
         const x = Math.round(mapOrigin.x + column * CELL_SIZE * camera.zoom) + 0.5
@@ -122,7 +147,6 @@ export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProp
       }
 
       if (hoveredCell) {
-        const cellSize = CELL_SIZE * camera.zoom
         const x = mapOrigin.x + hoveredCell.column * cellSize
         const y = mapOrigin.y + hoveredCell.row * cellSize
         context.fillStyle = HOVER_COLOR
@@ -194,8 +218,9 @@ export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProp
     const onPointerMove = (event: PointerEvent) => {
       const point = pointFromEvent(event)
       if (event.pointerId === activePointerId && lastPointer) {
-        if (pointerStart && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) > 5) {
+        if (pointerStart && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) > gameConfig.camera.dragThreshold) {
           dragged = true
+          onNavigate('move')
         }
         camera = clampCamera(
           {
@@ -238,10 +263,11 @@ export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProp
       camera = zoomAtPoint(
         camera,
         point,
-        camera.zoom * Math.exp(-event.deltaY * 0.0015),
+        camera.zoom * Math.exp(-event.deltaY * gameConfig.camera.wheelSensitivity),
         viewport,
         world,
       )
+      onNavigate('zoom')
       updateHoveredCell(point)
       requestDraw()
     }
@@ -285,13 +311,13 @@ export function GridCanvas({ map, onContextRequest, onMapClick }: GridCanvasProp
       canvas.removeEventListener('contextmenu', onContextMenu)
       if (animationFrame !== null) cancelAnimationFrame(animationFrame)
     }
-  }, [map, onContextRequest, onMapClick])
+  }, [map, onContextRequest, onMapClick, onNavigate])
 
   return (
     <canvas
       ref={canvasRef}
       className="grid-canvas"
-      aria-label="Карта игрового мира. Перетаскивайте мышью и используйте колесо для масштаба."
+      aria-label={ariaLabel}
     />
   )
 }

@@ -1,3 +1,5 @@
+import { gameConfig } from '../config/game'
+
 export interface Point {
   x: number
   y: number
@@ -12,8 +14,8 @@ export interface Camera extends Point {
   zoom: number
 }
 
-export const MIN_ZOOM = 0.25
-export const MAX_ZOOM = 2.5
+export const MIN_ZOOM = gameConfig.camera.minZoom
+export const MAX_ZOOM = gameConfig.camera.maxZoom
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))

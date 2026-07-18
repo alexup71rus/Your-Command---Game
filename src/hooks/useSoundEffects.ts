@@ -3,20 +3,40 @@ import { gameConfig } from '../config/game'
 
 export type SoundEffect = 'map' | 'tab' | 'context' | 'action' | 'dismiss' | 'enable'
 
-function readSoundPreference() {
+const clampVolume = (volume: number) => Math.max(0, Math.min(100, Math.round(volume)))
+
+function readStoredNumber(key: string, fallback: number) {
   try {
-    const saved = window.localStorage.getItem(gameConfig.audio.storageKey)
-    return saved === null ? gameConfig.audio.defaultEnabled : saved === 'true'
+    const raw = window.localStorage.getItem(key)
+    if (raw === null) return fallback
+    const saved = Number(raw)
+    return Number.isFinite(saved) ? clampVolume(saved) : fallback
   } catch {
-    return gameConfig.audio.defaultEnabled
+    return fallback
   }
 }
 
+function readInitialVolume() {
+  try {
+    if (window.localStorage.getItem(gameConfig.audio.volumeStorageKey) === null) {
+      const legacyEnabled = window.localStorage.getItem(gameConfig.audio.legacyEnabledStorageKey)
+      if (legacyEnabled === 'false') return 0
+    }
+  } catch {
+    // Fall through to the configured value.
+  }
+  return readStoredNumber(gameConfig.audio.volumeStorageKey, gameConfig.audio.defaultVolume)
+}
+
 export function useSoundEffects() {
-  const [enabled, setEnabled] = useState(readSoundPreference)
+  const [volume, setVolumeState] = useState(readInitialVolume)
+  const volumeRef = useRef(volume)
+  const lastAudibleVolume = useRef(
+    readStoredNumber(gameConfig.audio.lastVolumeStorageKey, gameConfig.audio.defaultVolume),
+  )
   const audioContextRef = useRef<AudioContext | null>(null)
 
-  const playTone = useCallback((frequency: number, duration: number, volume: number, delay = 0) => {
+  const playTone = useCallback((frequency: number, duration: number, level: number, delay = 0) => {
     const AudioContextClass = window.AudioContext
     if (!AudioContextClass) return
 
@@ -30,8 +50,9 @@ export function useSoundEffects() {
     oscillator.type = 'triangle'
     oscillator.frequency.setValueAtTime(frequency, start)
     oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.82, start + duration)
+    const audibleLevel = Math.min(0.22, level * gameConfig.audio.gainMultiplier * volumeRef.current / 100)
     gain.gain.setValueAtTime(0.0001, start)
-    gain.gain.exponentialRampToValueAtTime(volume, start + 0.008)
+    gain.gain.exponentialRampToValueAtTime(audibleLevel, start + 0.008)
     gain.gain.exponentialRampToValueAtTime(0.0001, start + duration)
     oscillator.connect(gain)
     gain.connect(audioContext.destination)
@@ -40,47 +61,42 @@ export function useSoundEffects() {
   }, [])
 
   const play = useCallback((effect: SoundEffect, force = false) => {
-    if (!enabled && !force) return
-
+    if (volumeRef.current === 0 && !force) return
     const variation = 0.97 + Math.random() * 0.06
     switch (effect) {
-      case 'map':
-        playTone(190 * variation, 0.075, 0.035)
-        playTone(285 * variation, 0.055, 0.018, 0.012)
-        break
-      case 'tab':
-        playTone(430 * variation, 0.09, 0.032)
-        playTone(645 * variation, 0.11, 0.02, 0.025)
-        break
-      case 'context':
-        playTone(260 * variation, 0.12, 0.036)
-        playTone(520 * variation, 0.16, 0.024, 0.035)
-        break
-      case 'action':
-        playTone(350 * variation, 0.08, 0.03)
-        break
-      case 'dismiss':
-        playTone(170 * variation, 0.07, 0.022)
-        break
-      case 'enable':
-        playTone(330, 0.1, 0.03)
-        playTone(495, 0.13, 0.025, 0.045)
-        break
+      case 'map': playTone(190 * variation, 0.09, 0.045); playTone(285 * variation, 0.07, 0.028, 0.012); break
+      case 'tab': playTone(430 * variation, 0.1, 0.044); playTone(645 * variation, 0.12, 0.03, 0.025); break
+      case 'context': playTone(260 * variation, 0.13, 0.05); playTone(520 * variation, 0.17, 0.034, 0.035); break
+      case 'action': playTone(350 * variation, 0.09, 0.045); break
+      case 'dismiss': playTone(170 * variation, 0.08, 0.035); break
+      case 'enable': playTone(330, 0.1, 0.05); playTone(495, 0.14, 0.04, 0.045); break
     }
-  }, [enabled, playTone])
+  }, [playTone])
+
+  const setVolume = useCallback((nextVolume: number) => {
+    const normalized = clampVolume(nextVolume)
+    volumeRef.current = normalized
+    setVolumeState(normalized)
+    try {
+      window.localStorage.setItem(gameConfig.audio.volumeStorageKey, String(normalized))
+      if (normalized > 0) {
+        lastAudibleVolume.current = normalized
+        window.localStorage.setItem(gameConfig.audio.lastVolumeStorageKey, String(normalized))
+      }
+    } catch {
+      // Keep the volume for this session if storage is unavailable.
+    }
+  }, [])
 
   const toggle = useCallback(() => {
-    setEnabled((current) => {
-      const next = !current
-      try {
-        window.localStorage.setItem(gameConfig.audio.storageKey, String(next))
-      } catch {
-        // The preference remains active for this session if storage is unavailable.
-      }
-      if (next) play('enable', true)
-      return next
-    })
-  }, [play])
+    if (volume > 0) {
+      setVolume(0)
+    } else {
+      const restored = Math.max(1, lastAudibleVolume.current)
+      setVolume(restored)
+      window.setTimeout(() => play('enable', true), 0)
+    }
+  }, [play, setVolume, volume])
 
-  return { enabled, play, toggle }
+  return { enabled: volume > 0, volume, play, setVolume, toggle }
 }

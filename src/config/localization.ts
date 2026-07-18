@@ -1,34 +1,102 @@
-const ru = {
-  hud: {
-    resources: 'Ресурсы',
-    population: 'Население',
-    people: 'Люди',
-    army: 'Нанятые войска',
-    turn: 'Текущий ход',
-    orders: 'Приказы на ход',
-    ordersAvailable: 'Доступно приказов',
-    outOf: 'из',
-  },
-  resources: ['Дерево', 'Камень', 'Железо', 'Зерно', 'Мясо', 'Золото'],
-  troops: ['Ополчение', 'Копейщики', 'Лучники', 'Мечники', 'Конница'],
-  tabs: ['Здания', 'Казарма', 'Замок'],
-  mapHint: 'Перемещение · колесо — масштаб · ПКМ — меню',
-  sound: {
-    enable: 'Включить звук',
-    disable: 'Выключить звук',
-  },
-  contextMenu: {
-    title: 'Действия с клеткой',
-    cell: 'Клетка',
-    splitSquad: 'Разделить отряд',
-    mergeSquads: 'Объединить отряды',
-    removeObject: 'Удалить объект',
-  },
-} as const
+export const supportedLocales = ['ru', 'en'] as const
+export type Locale = (typeof supportedLocales)[number]
+export type TabId = 'buildings' | 'barracks' | 'castle'
 
-export const translations = { ru } as const
-export type Locale = keyof typeof translations
+export interface LocaleDictionary {
+  localeName: string
+  hud: {
+    state: string
+    resources: string
+    people: string
+    army: string
+    turn: string
+    ordersAvailable: string
+  }
+  resources: string[]
+  troops: string[]
+  tabs: Array<{ id: TabId; label: string }>
+  interface: {
+    controlPanel: string
+    controlSections: string
+    mapAria: string
+    mapHint: string
+    settingsHint: string
+  }
+  sound: {
+    title: string
+    description: string
+    enable: string
+    disable: string
+    enabled: string
+    disabled: string
+  }
+  contextMenu: {
+    title: string
+    cell: string
+    splitSquad: string
+    mergeSquads: string
+    removeObject: string
+  }
+  settings: {
+    title: string
+    close: string
+    language: string
+    languageDescription: string
+    mapGenerator: string
+    mapGeneratorDescription: string
+    openGenerator: string
+  }
+  generator: {
+    title: string
+    close: string
+    devLabel: string
+    relief: string
+    source: string
+    automatic: string
+    hybrid: string
+    manual: string
+    hills: string
+    peaks: string
+    formScale: string
+    reliefDistribution: string
+    vegetation: string
+    coverage: string
+    vegetationDistribution: string
+    heightPreference: string
+    lowlands: string
+    balanced: string
+    highlands: string
+    reliefInfluence: string
+    brushAria: string
+    erase: string
+    hill: string
+    mountain: string
+    clearNodes: string
+    previewAria: string
+    plain: string
+    elevation: string
+    forest: string
+    peak: string
+    seed: string
+    note: string
+    vegetationOnly: string
+    newVariant: string
+    apply: string
+  }
+}
+
+const localeLoaders: Record<Locale, () => Promise<{ default: LocaleDictionary }>> = {
+  ru: () => import('../locales/ru'),
+  en: () => import('../locales/en'),
+}
+
+export const localeStorageKey = 'castle-turns:locale'
 export const defaultLocale: Locale = 'ru'
 
-// Единственная точка доступа к тексту интерфейса. Переключение языка добавим позже.
-export const text = translations[defaultLocale]
+export function isLocale(value: string | null): value is Locale {
+  return value !== null && supportedLocales.includes(value as Locale)
+}
+
+export async function loadLocale(locale: Locale) {
+  return (await localeLoaders[locale]()).default
+}
