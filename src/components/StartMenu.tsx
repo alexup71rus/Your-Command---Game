@@ -68,7 +68,7 @@ function MapPreview({ cacheKey, settings, manualGrid, large = false, scenario }:
         const y = (region.center.row + 0.5) * cellHeight
         context.fillStyle = region.color
         context.beginPath(); context.arc(x, y, 9, 0, Math.PI * 2); context.fill()
-        context.fillStyle = '#121712'; context.font = '700 9px system-ui'; context.textAlign = 'center'; context.textBaseline = 'middle'
+        context.fillStyle = '#121712'; context.font = '700 10px system-ui'; context.textAlign = 'center'; context.textBaseline = 'middle'
         context.fillText(String(region.index + 1), x, y + 0.5)
       })
     }
@@ -99,11 +99,14 @@ interface StartMenuProps {
   onStart: (scenario: MapScenario) => void
   hasSavedGames: boolean
   onOpenSavedGames: () => void
+  storageFeedback?: string | null
   utilityControls: ReactNode
 }
 
-export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, onMapChange, onDeleteSavedMap, onParticipantChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, onMapChange, onDeleteSavedMap, onParticipantChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, storageFeedback, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
+  const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [pendingDelete, setPendingDelete] = useState<SavedMapDefinition | null>(null)
   const selectedDefinition = useMemo(() => {
     if (selectedMap.startsWith('saved:')) {
@@ -116,22 +119,24 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
   }, [savedMaps, selectedMap, text])
   const preparationKey = `${selectedMap}:${participantCount}:${selectedDefinition.settings.seed}:${selectedDefinition.settings.mapSize}`
   const preparedResult = prepared?.key === preparationKey ? prepared.result : null
-  const isPreparing = !preparedResult
+  const workerFailed = workerErrorKey === preparationKey
+  const isPreparing = !preparedResult && !workerFailed
 
   useEffect(() => {
     const controller = new AbortController()
     const map = clearMapObjects(previewMapFor(selectedMap, selectedDefinition.settings, selectedDefinition.manualGrid))
     calculateScenarioInWorker(map, participantCount, selectedDefinition.settings.seed, controller.signal)
       .then((result) => {
+        setWorkerErrorKey(null)
         if (result.ok) setPrepared({ key: preparationKey, result: { ok: true, scenario: { ...result.scenario, id: selectedDefinition.id, name: selectedDefinition.name } } })
         else setPrepared({ key: preparationKey, result })
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setPrepared({ key: preparationKey, result: { ok: false, reason: 'not-enough-land' } })
+        setWorkerErrorKey(preparationKey)
       })
     return () => controller.abort()
-  }, [participantCount, preparationKey, selectedDefinition, selectedMap])
+  }, [participantCount, preparationKey, retryKey, selectedDefinition, selectedMap])
 
   return (
     <main className="start-screen">
@@ -147,11 +152,12 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
             </div>
             <div className="showcase-map-copy"><h2 id="selected-map-title">{selectedDefinition.name}</h2><p>{selectedDefinition.description}</p></div>
             {isPreparing && <div className="showcase-region-loader" role="status"><span aria-hidden="true" />{text.starting}</div>}
-            {preparedResult && !preparedResult.ok && <p className="showcase-region-error" role="alert">{text.mapError}</p>}
+            {workerFailed && <p className="showcase-region-error" role="alert">{text.workerError} <button type="button" onClick={() => setRetryKey((current) => current + 1)}>{text.retry}</button></p>}
+            {preparedResult && !preparedResult.ok && <p className="showcase-region-error" role="alert">{preparedResult.reason === 'unviable-starts' ? text.mapUnviable : text.mapError}</p>}
           </section>
 
           <section className="map-library" aria-label={text.chooseMap}>
-            <div className="map-library-heading"><h2>{text.chooseMap}</h2></div>
+            <div className="map-library-heading"><h2>{text.chooseMap}</h2>{storageFeedback && <p className="map-storage-feedback" role="alert">{storageFeedback}</p>}</div>
             <div className="map-library-scroll">
               <div className="map-library-group"><h3>{text.builtInMaps}</h3><div className="map-choice-list">
                 {mapPresets.map((preset) => {

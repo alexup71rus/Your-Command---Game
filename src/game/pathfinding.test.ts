@@ -59,4 +59,18 @@ describe('movement pathfinding', () => {
     expect(path).toHaveLength(7)
     expect(path?.slice(1).every((position) => !map[position.row][position.column].vegetation)).toBe(true)
   })
+
+  it('routes through an owned barbican without occupying the gate cell', () => {
+    const map = createMap(3)
+    map[1][1] = { ...map[1][1], object: { type: 'building', kind: 'barbican', ownerId: 'player', hitPoints: 20, maxHitPoints: 20 } }
+    map[0][0] = { ...map[0][0], landform: 'peak' }
+    map[2][0] = { ...map[2][0], landform: 'peak' }
+
+    expect(findMovementPath(map, { column: 0, row: 1 }, { column: 2, row: 1 })).toBeNull()
+    expect(findMovementPath(map, { column: 0, row: 1 }, { column: 2, row: 1 }, { ownerId: 'player' })).toEqual([
+      { column: 0, row: 1 },
+      { column: 2, row: 1 },
+    ])
+    expect(findMovementPath(map, { column: 0, row: 1 }, { column: 2, row: 1 }, { ownerId: 'npc' })).toBeNull()
+  })
 })

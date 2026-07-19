@@ -1,5 +1,5 @@
 import { gameConfig } from '../config/game'
-import { defaultGeneratorSettings, type GeneratorSettings, type ManualHeightGrid } from './generator'
+import type { GeneratorSettings, ManualHeightGrid } from './generator'
 import type { PresetId } from './presets'
 
 export interface SavedMapDefinition {
@@ -28,13 +28,23 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function parseSettings(value: unknown): GeneratorSettings | null {
-  if (!value || typeof value !== 'object') return null
-  const candidate = { ...defaultGeneratorSettings, ...value } as GeneratorSettings
-  if (!isFiniteNumber(candidate.seed) || !isFiniteNumber(candidate.mapSize)) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as GeneratorSettings
+  if (!Number.isSafeInteger(candidate.seed)
+    || !Number.isSafeInteger(candidate.mapSize)
+    || candidate.mapSize < gameConfig.generator.minMapSize
+    || candidate.mapSize > gameConfig.generator.maxMapSize) return null
   if (!reliefModes.includes(candidate.reliefMode)) return null
   if (!heightPreferences.includes(candidate.vegetationHeight)) return null
-  const numericKeys: Array<keyof GeneratorSettings> = ['hillCoverage', 'peakCoverage', 'reliefScale', 'heightDistribution', 'vegetationDensity', 'vegetationDistribution', 'heightInfluence']
-  if (numericKeys.some((key) => !isFiniteNumber(candidate[key]))) return null
+  const inIntegerRange = (number: unknown, minimum: number, maximum: number) => Number.isSafeInteger(number) && Number(number) >= minimum && Number(number) <= maximum
+  if (!inIntegerRange(candidate.hillCoverage, 5, 75)
+    || !inIntegerRange(candidate.peakCoverage, 0, 25)
+    || candidate.peakCoverage > candidate.hillCoverage
+    || !inIntegerRange(candidate.reliefScale, 18, 90)
+    || !inIntegerRange(candidate.heightDistribution, -100, 100)
+    || !inIntegerRange(candidate.vegetationDensity, 0, 80)
+    || !inIntegerRange(candidate.vegetationDistribution, -100, 100)
+    || !inIntegerRange(candidate.heightInfluence, 0, 100)) return null
   return candidate
 }
 
@@ -54,7 +64,10 @@ export function parseSavedMaps(raw: string | null): SavedMapDefinition[] {
       const candidate = value as Partial<SavedMapDefinition>
       const settings = parseSettings(candidate.settings)
       const manualGrid = parseManualGrid(candidate.manualGrid)
-      if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !candidate.name.trim() || !isFiniteNumber(candidate.createdAt) || !settings || !manualGrid) return []
+      if (typeof candidate.id !== 'string' || !candidate.id.trim() || candidate.id.length > 128
+        || typeof candidate.name !== 'string' || !candidate.name.trim()
+        || !isFiniteNumber(candidate.createdAt) || candidate.createdAt < 0
+        || !settings || !manualGrid) return []
       return [{ id: candidate.id, name: candidate.name.trim().slice(0, 48), settings, manualGrid, createdAt: candidate.createdAt }]
     })
   } catch {
@@ -63,18 +76,31 @@ export function parseSavedMaps(raw: string | null): SavedMapDefinition[] {
 }
 
 export function loadSavedMaps(): SavedMapDefinition[] {
+  return loadSavedMapsResult().maps
+}
+
+export type SavedMapsLoadResult =
+  | { ok: true; maps: SavedMapDefinition[] }
+  | { ok: false; maps: []; error: Error }
+
+export function loadSavedMapsResult(): SavedMapsLoadResult {
   try {
-    return parseSavedMaps(window.localStorage.getItem(gameConfig.savedMaps.storageKey))
-  } catch {
-    return []
+    return { ok: true, maps: parseSavedMaps(window.localStorage.getItem(gameConfig.savedMaps.storageKey)) }
+  } catch (cause) {
+    return { ok: false, maps: [], error: cause instanceof Error ? cause : new Error('Could not read saved maps') }
   }
 }
 
-export function persistSavedMaps(maps: SavedMapDefinition[]) {
+export type SavedMapsPersistResult =
+  | { ok: true }
+  | { ok: false; error: Error }
+
+export function persistSavedMaps(maps: SavedMapDefinition[]): SavedMapsPersistResult {
   try {
     window.localStorage.setItem(gameConfig.savedMaps.storageKey, JSON.stringify(maps))
-  } catch {
-    // Keep the maps for this session when storage is unavailable.
+    return { ok: true }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause : new Error('Could not save maps') }
   }
 }
 

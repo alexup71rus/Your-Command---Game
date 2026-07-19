@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   defaultLocale,
   isLocale,
@@ -19,16 +19,26 @@ function readInitialLocale(): Locale {
 }
 
 export function useLocalization() {
-  const [locale, setLocaleState] = useState<Locale>(readInitialLocale)
-  const [text, setText] = useState<LocaleDictionary | null>(null)
+  const [requestedLocale, setRequestedLocale] = useState<Locale>(readInitialLocale)
+  const [loaded, setLoaded] = useState<LoadedLocale | null>(null)
+  const loadedRef = useRef<LoadedLocale | null>(null)
+  const [status, setStatus] = useState<LocalizationStatus>('loading')
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     let active = true
-    void loadLocale(locale).then((dictionary) => {
-      if (active) setText(dictionary)
-    })
+    void loadLocaleWithFallback(requestedLocale, loadedRef.current).then((result) => {
+      if (!active) return
+      loadedRef.current = result
+      setLoaded(result)
+      setStatus(result.usedFallback ? 'error' : 'ready')
+    }).catch(() => { if (active) setStatus('error') })
     return () => { active = false }
-  }, [locale])
+  }, [requestedLocale, retryKey])
+
+  useEffect(() => {
+    document.documentElement.lang = loaded?.locale ?? requestedLocale
+  }, [loaded?.locale, requestedLocale])
 
   const setLocale = useCallback((nextLocale: Locale) => {
     try {
@@ -36,8 +46,39 @@ export function useLocalization() {
     } catch {
       // Keep the language for this session if storage is unavailable.
     }
-    setLocaleState(nextLocale)
+    setStatus('loading')
+    setRequestedLocale(nextLocale)
+    setRetryKey((current) => current + 1)
   }, [])
 
-  return { locale, setLocale, text }
+  const retry = useCallback(() => {
+    setStatus('loading')
+    setRetryKey((current) => current + 1)
+  }, [])
+
+  return { locale: loaded?.locale ?? requestedLocale, setLocale, text: loaded?.dictionary ?? null, status, retry, resolvedLocale: loaded?.locale ?? null }
+}
+
+export type LocalizationStatus = 'loading' | 'ready' | 'error'
+
+export interface LoadedLocale {
+  dictionary: LocaleDictionary
+  locale: Locale
+  usedFallback: boolean
+}
+
+export async function loadLocaleWithFallback(
+  locale: Locale,
+  previous: LoadedLocale | null,
+  loader: typeof loadLocale = loadLocale,
+): Promise<LoadedLocale> {
+  try {
+    return { dictionary: await loader(locale), locale, usedFallback: false }
+  } catch {
+    if (previous) return { ...previous, usedFallback: true }
+    if (locale !== defaultLocale) {
+      return { dictionary: await loader(defaultLocale), locale: defaultLocale, usedFallback: true }
+    }
+    throw new Error(`Unable to load locale: ${locale}`)
+  }
 }

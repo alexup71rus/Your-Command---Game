@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { gameConfig } from '../config/game'
 import { createManualHeightGrid, generateMap } from './generator'
 import {
   createMapScenario,
@@ -41,6 +42,34 @@ describe('starting domains', () => {
       expect(region.validCastleCells.length).toBeGreaterThan(0)
       expect(reachableCells(result.scenario.territories, region.id, region.center)).toBe(region.score.cells)
       expect(isCastleSiteValid(result.scenario, region.id, region.validCastleCells[0])).toBe(true)
+      const reservedCells = Object.entries(region.reservedBuildSites).flatMap(([kind, origin]) => (
+        [
+          origin,
+          { column: origin.column + 1, row: origin.row },
+          { column: origin.column, row: origin.row + 1 },
+          { column: origin.column + 1, row: origin.row + 1 },
+        ].map((position) => ({ kind, ...position }))
+      ))
+      expect(new Set(reservedCells.map(({ column, row }) => `${column}:${row}`))).toHaveProperty('size', 12)
+      reservedCells.forEach(({ kind, column, row }) => {
+        const cell = result.scenario.cells[row][column]
+        expect(result.scenario.territories[row][column]).toBe(region.id)
+        expect(cell.object).toBeUndefined()
+        expect(cell.vegetation).toBe(false)
+        expect(cell.landform).not.toBe('peak')
+        if (kind === 'plain') expect(cell.landform).toBe('plain')
+        if (kind === 'hill') expect(cell.landform).toBe('hill')
+      })
+      region.validCastleCells.forEach((castle) => {
+        expect(reservedCells.some(({ column, row }) => column === castle.column && row === castle.row)).toBe(false)
+      })
+      const clearCellCount = result.scenario.territories.reduce((total, row, rowIndex) => (
+        total + row.reduce((rowTotal, owner, column) => {
+          const cell = result.scenario.cells[rowIndex][column]
+          return rowTotal + Number(owner === region.id && cell.landform !== 'peak' && !cell.vegetation && !cell.object)
+        }, 0)
+      ), 0)
+      expect(clearCellCount - 1).toBeGreaterThanOrEqual(gameConfig.match.minimumClearStartCells)
     })
   })
 
@@ -131,9 +160,12 @@ describe('starting domains', () => {
       const inSmallRoom = column >= 80 && column <= 94 && row >= 25 && row <= 44
       const inCorridor = row >= 33 && row <= 36 && column > 63 && column < 80
       const passable = inLargeRoom || inSmallRoom || inCorridor
-      const isStart = (column === 25 && row === 35) || (column === 87 && row === 35)
+      const isLargeStartArea = column >= 20 && column <= 30 && row >= 29 && row <= 41
+      const isSmallStartArea = column >= 82 && column <= 92 && row >= 28 && row <= 41
+      const isHillSite = ((column === 21 || column === 22) && (row === 30 || row === 31))
+        || ((column === 83 || column === 84) && (row === 29 || row === 30))
       return passable
-        ? { elevation: 0.2, landform: 'plain' as const, vegetation: !isStart }
+        ? { elevation: isHillSite ? 0.5 : 0.2, landform: isHillSite ? 'hill' as const : 'plain' as const, vegetation: !(isLargeStartArea || isSmallStartArea) }
         : { elevation: 0.95, landform: 'peak' as const, vegetation: false }
     }))
     const result = createMapScenario(lopsidedMap, 2, 4812)
@@ -148,6 +180,15 @@ describe('starting domains', () => {
       object: { type: 'castle' as const, ownerId: 'blocked', hitPoints: 100, maxHitPoints: 100 },
     })))
     expect(createMapScenario(occupiedMap, 2, 9127)).toMatchObject({ ok: false, reason: 'no-castle-sites' })
+  })
+
+  it('rejects starts without a usable hill building site', () => {
+    const plainMap = Array.from({ length: 50 }, () => Array.from({ length: 50 }, () => ({
+      elevation: 0.2,
+      landform: 'plain' as const,
+      vegetation: false,
+    })))
+    expect(createMapScenario(plainMap, 2, 9127)).toMatchObject({ ok: false, reason: 'unviable-starts' })
   })
 
   it.each(mapPresets.flatMap((preset) => [2, 3, 4].map((count) => ({ preset, count }))))(

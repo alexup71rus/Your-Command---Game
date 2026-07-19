@@ -4,6 +4,7 @@ const checks = [
   ['npm', ['run', 'lint']],
   ['npm', ['run', 'typecheck']],
   ['npm', ['test', '--', '--run']],
+  ['npm', ['run', 'build']],
 ]
 
 for (const [command, args] of checks) {

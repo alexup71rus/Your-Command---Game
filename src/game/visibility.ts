@@ -1,4 +1,5 @@
 import { gameConfig } from '../config/game'
+import { buildingRules } from '../config/rules'
 import type { GameMap, MapObject } from './map'
 import type { CellPosition } from './scenario'
 
@@ -32,12 +33,32 @@ export function calculateVisibility(map: GameMap, playerId: string): VisibilityM
       if (!object || object.ownerId !== playerId) continue
       const radius = object.type === 'squad'
         ? cell.landform === 'hill' ? gameConfig.visibility.elevatedSquadRadius : gameConfig.visibility.squadRadius
-        : gameConfig.visibility.buildingRadius
+        : object.type === 'building' && object.kind === 'tower'
+          ? buildingRules.tower.garrison?.visibilityRadius ?? gameConfig.visibility.buildingRadius
+          : gameConfig.visibility.buildingRadius
       revealRadius(visibility, { column, row }, radius)
     }
   }
 
   return visibility
+}
+
+/**
+ * Memoizes visibility by immutable map identity. Economy-only state updates can
+ * reuse the result while map-changing commands naturally invalidate it.
+ */
+export function createVisibilitySelector() {
+  let previousMap: GameMap | null = null
+  let previousPlayerId: string | null = null
+  let previousVisibility: VisibilityMap | null = null
+
+  return (map: GameMap, playerId: string) => {
+    if (map === previousMap && playerId === previousPlayerId && previousVisibility) return previousVisibility
+    previousMap = map
+    previousPlayerId = playerId
+    previousVisibility = calculateVisibility(map, playerId)
+    return previousVisibility
+  }
 }
 
 export function isCellVisible(visibility: VisibilityMap | null | undefined, position: CellPosition) {
@@ -73,7 +94,12 @@ export function visibleObjectAt(
   visibility: VisibilityMap | null | undefined,
   playerId: string,
   position: CellPosition,
-) {
+): MapObject | undefined {
   const object = map[position.row]?.[position.column]?.object
-  return object && isObjectVisible(map, visibility, playerId, position) ? object : undefined
+  if (!object || !isObjectVisible(map, visibility, playerId, position)) return undefined
+  if (object.type === 'building' && object.kind === 'tower' && object.ownerId !== playerId && !isCellVisible(visibility, position)) {
+    const { garrison: _concealedGarrison, ...publicTower } = object
+    return publicTower
+  }
+  return object
 }

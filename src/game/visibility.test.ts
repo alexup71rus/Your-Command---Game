@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
 import { createEmptyMap, type BuildingObject, type GameMap, type SquadObject } from './map'
-import { calculateVisibility, isCellVisible, isObjectVisible, visibleObjectAt } from './visibility'
+import { calculateVisibility, createVisibilitySelector, isCellVisible, isObjectVisible, visibleObjectAt } from './visibility'
 
 const squad = (ownerId: string): SquadObject => ({
   type: 'squad',
@@ -22,6 +22,17 @@ function mapWithTerrain(size = 40): GameMap {
 }
 
 describe('visibility', () => {
+  it('reuses visibility while the immutable map and player stay unchanged', () => {
+    const selectVisibility = createVisibilitySelector()
+    const map = mapWithTerrain()
+    map[20][20].object = squad('player')
+
+    const first = selectVisibility(map, 'player')
+    expect(selectVisibility(map, 'player')).toBe(first)
+    expect(selectVisibility(map, 'enemy')).not.toBe(first)
+    expect(selectVisibility(map.map((row) => row.slice()), 'player')).not.toBe(first)
+  })
+
   it('reveals a circular radius of eight cells around owned buildings', () => {
     const map = mapWithTerrain()
     map[20][20].object = { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 }
@@ -45,6 +56,18 @@ describe('visibility', () => {
     expect(isCellVisible(hillVisibility, { column: 32, row: 20 })).toBe(true)
     expect(isCellVisible(hillVisibility, { column: 33, row: 20 })).toBe(false)
     expect(gameConfig.visibility.elevatedSquadRadius).toBeGreaterThan(gameConfig.visibility.squadRadius)
+  })
+
+  it('uses the tower visibility radius and conceals an unseen enemy garrison', () => {
+    const map = mapWithTerrain()
+    map[20][20].object = { ...building('player', 'tower'), garrison: { archers: 3, health: 3 } }
+    const visibility = calculateVisibility(map, 'player')
+    expect(isCellVisible(visibility, { column: 32, row: 20 })).toBe(true)
+    expect(isCellVisible(visibility, { column: 33, row: 20 })).toBe(false)
+
+    map[35][35].object = { ...building('enemy', 'tower'), garrison: { archers: 4, health: 4 } }
+    expect(visibleObjectAt(map, visibility, 'player', { column: 35, row: 35 })).toMatchObject({ type: 'building', kind: 'tower' })
+    expect(visibleObjectAt(map, visibility, 'player', { column: 35, row: 35 })).not.toHaveProperty('garrison')
   })
 
   it('conceals only enemy squads and barracks outside sight', () => {

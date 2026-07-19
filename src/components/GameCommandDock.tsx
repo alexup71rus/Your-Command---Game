@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { LocaleDictionary, TabId } from '../config/localization'
 import { buildingRules, defaultTaxRate, economyBuildingKinds, fortificationKinds, marketPrices, resourceIds, taxRates, tradeableResources, troopKinds, troopRules, type TaxRate } from '../config/rules'
 import { gameConfig } from '../config/game'
 import type { PendingGameAction } from '../game/interaction'
 import type { BuildingKind, GameMap, ResourceId, TroopComposition, TroopKind } from '../game/map'
-import { humanDomain, maxSquadHealth, objectAt, squadHealth, squadSize, turnResourceDeltaFor, workerAssignmentAt, type MatchState } from '../game/match'
+import { armyCapacity, foodDemandFor, humanDomain, maxSquadHealth, objectAt, squadHealth, squadSize, totalArmySize, turnEconomyForecastFor, workerAssignmentAt, type MatchState } from '../game/match'
 import type { CellPosition } from '../game/scenario'
 import { GridCanvas } from './GridCanvas'
 import { TroopIcon } from './TroopIcon'
@@ -24,7 +24,10 @@ interface GameCommandDockProps {
   onChooseBuild: (kind: BuildingKind) => void
   onChooseRecruit: (troop: TroopKind, quantity: number) => void
   onSplit: (source: CellPosition) => void
-  onSplitChange: (units: TroopComposition) => void
+  onDismiss: (source: CellPosition) => void
+  onCompositionChange: (units: TroopComposition) => void
+  onConfirmDismiss: () => void
+  onTowerAction: (kind: 'garrison-enter' | 'garrison-exit' | 'tower-attack', tower: CellPosition) => void
   onCancelAction: () => void
   onSetTaxRate: (rate: TaxRate) => void
   onTrade: (position: CellPosition, resource: Exclude<ResourceId, 'gold'>, direction: 'buy' | 'sell', quantity: number) => void
@@ -65,10 +68,12 @@ function BuildingStats({ kind, text }: { kind: BuildingKind; text: LocaleDiction
     {resourceIds.filter((resource) => (rule.production[resource] ?? 0) > 0).map((resource) => <small key={resource}><b>+{rule.production[resource]}</b> {text.game.resourceNames[resource]}</small>)}
     {rule.processing && <small>{text.game.processing} <b>{rule.processing.maximumPerTurn} {text.game.resourceNames[rule.processing.input]} → {rule.processing.maximumPerTurn} {text.game.resourceNames[rule.processing.output]}</b></small>}
     {rule.foodServiceCapacity && <small>{text.game.foodService} <b>{rule.foodServiceCapacity}</b></small>}
+    {rule.housingCapacity && <small>{text.game.populationCapacity} <b>+{rule.housingCapacity}</b></small>}
     {rule.requiresFoodServiceAccess && <small>{text.game.serviceRadius} <b>≤ {gameConfig.economy.foodServiceRadius}</b></small>}
     {rule.upkeep && resourceIds.filter((resource) => (rule.upkeep?.[resource] ?? 0) > 0).map((resource) => <small key={`upkeep-${resource}`}>{text.game.upkeep} <b>{rule.upkeep?.[resource]} {text.game.resourceNames[resource]}</b> {text.game.perTurn}</small>)}
     {rule.workersRequired && <small>{text.game.workers} <b>{rule.workersRequired}</b></small>}
     {rule.minimumAdjacentForestCells && <small>{text.game.forestNeighbors} <b>{rule.minimumAdjacentForestCells}+</b></small>}
+    {rule.garrison && <><small>{text.game.towerCapacity} <b>{rule.garrison.capacity}</b></small><small>{text.game.towerRange} <b>{rule.garrison.attackRange}</b></small><small>{text.game.towerSight} <b>{rule.garrison.visibilityRadius}</b></small></>}
   </span>
 }
 
@@ -109,7 +114,7 @@ function SquadMapPreview({ troop, quantity }: { troop: TroopKind; quantity: numb
   return <div className="building-preview-canvas unit-preview-canvas" aria-hidden="true"><GridCanvas map={map} participants={previewParticipants} cameraCommand={previewCameraCommand} onContextRequest={ignorePreviewEvent} onMapClick={ignorePreviewEvent} onNavigate={ignorePreviewEvent} ariaLabel="" /></div>
 }
 
-function SelectionSummary({ match, position, text, locked, onSplit, onOrderPreview }: { match: MatchState; position: CellPosition | null; text: LocaleDictionary; locked: boolean; onSplit: (source: CellPosition) => void; onOrderPreview: (cost: number) => void }) {
+function SelectionSummary({ match, position, text, locked, onSplit, onDismiss, onTowerAction, onOrderPreview }: { match: MatchState; position: CellPosition | null; text: LocaleDictionary; locked: boolean; onSplit: (source: CellPosition) => void; onDismiss: (source: CellPosition) => void; onTowerAction: GameCommandDockProps['onTowerAction']; onOrderPreview: (cost: number) => void }) {
   if (!position) return <aside className="selection-summary empty"><p>{text.game.selectCell}</p></aside>
   const cell = match.scenario.cells[position.row]?.[position.column]
   const object = objectAt(match, position)
@@ -127,31 +132,44 @@ function SelectionSummary({ match, position, text, locked, onSplit, onOrderPrevi
         : text.game.workerProductionFull
     : null
   const splitDisabled = locked || match.ordersRemaining < gameConfig.turn.squadReorganizationOrderCost
+  const towerRule = buildingRules.tower.garrison!
+  const towerGarrison = object?.type === 'building' && object.kind === 'tower' ? object.garrison : undefined
+  const towerTransferDisabled = locked || match.ordersRemaining < towerRule.transferOrderCost
+  const towerAttackDisabled = locked || !towerGarrison || match.ordersRemaining < towerRule.attackOrderCost
+  const towerEnterDisabled = towerTransferDisabled || (towerGarrison?.archers ?? 0) >= towerRule.capacity
+  const towerExitDisabled = towerTransferDisabled || !towerGarrison
   const formatEndurance = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1)
   return (
     <aside className="selection-summary">
       <h3>{title}</h3>
       {!object && <p>{terrain}</p>}
-      {object?.type === 'squad' && <div className="selection-unit-line">{troopKinds.map((kind) => (object.units[kind] ?? 0) > 0 && <small key={kind}>{troopName(text, kind)} <b>{object.units[kind]}</b></small>)}</div>}
+      {object?.type === 'squad' && <div className="selection-unit-line">{troopKinds.map((kind) => (object.units[kind] ?? 0) > 0 && <small key={kind}><TroopIcon kind={kind} /><span>{troopName(text, kind)}</span><b>{object.units[kind]}</b></small>)}</div>}
       {object?.type === 'squad' && <div className="selection-health squad-health"><i style={{ width: `${maxEndurance > 0 ? Math.max(0, squadEndurance / maxEndurance * 100) : 0}%` }} /><small>{text.game.squadHealth} {formatEndurance(squadEndurance)}/{formatEndurance(maxEndurance)}</small></div>}
       {(object?.type === 'building' || object?.type === 'castle') && <div className="selection-health"><i style={{ width: `${Math.max(0, object.hitPoints / object.maxHitPoints * 100)}%` }} /><small>{text.game.hitPoints} {object.hitPoints}/{object.maxHitPoints}</small></div>}
       {workerAssignment && <div className={`selection-workers${workerAssignment.assigned < workerAssignment.required ? ' understaffed' : ''}`}><span>{text.game.workers} <b>{workerAssignment.assigned}/{workerAssignment.required}</b></span><small>{workerStatus}</small></div>}
-      {object?.type === 'squad' && owned && <div className="selection-squad-controls"><span className="selection-guidance" title={squadHint}><b aria-hidden="true">↗</b>{text.game.squadActionHint}</span>{squadSize(object) > 1 && <button type="button" className="selection-action" disabled={splitDisabled} title={splitDisabled && !locked ? text.game.failures['not-enough-orders'] : text.game.split} {...orderPreviewHandlers(gameConfig.turn.squadReorganizationOrderCost, splitDisabled, onOrderPreview)} onClick={() => onSplit(position)}>{text.game.split}</button>}</div>}
+      {object?.type === 'squad' && owned && <div className="selection-squad-controls"><span className="selection-guidance" title={squadHint}><b aria-hidden="true">↗</b><span>{text.game.squadActionHint}</span></span>{squadSize(object) > 1 && <><button type="button" className="selection-action" disabled={splitDisabled} title={splitDisabled && !locked ? text.game.failures['not-enough-orders'] : text.game.split} {...orderPreviewHandlers(gameConfig.turn.squadReorganizationOrderCost, splitDisabled, onOrderPreview)} onClick={() => onSplit(position)}>{text.game.split}</button><button type="button" className="selection-action" disabled={splitDisabled} {...orderPreviewHandlers(gameConfig.turn.squadReorganizationOrderCost, splitDisabled, onOrderPreview)} onClick={() => onDismiss(position)}>{text.game.dismiss}</button></>}</div>}
+      {object?.type === 'building' && object.kind === 'tower' && owned && <div className="tower-garrison-summary"><div><span>{text.game.garrison}</span><strong><TroopIcon kind="archers" />{towerGarrison?.archers ?? 0}<small>/{towerRule.capacity}</small></strong></div><div className="tower-actions"><button type="button" disabled={towerEnterDisabled} {...orderPreviewHandlers(towerRule.transferOrderCost, towerEnterDisabled, onOrderPreview)} onClick={() => onTowerAction('garrison-enter', position)}>{text.game.garrisonEnter}</button><button type="button" disabled={towerExitDisabled} {...orderPreviewHandlers(towerRule.transferOrderCost, towerExitDisabled, onOrderPreview)} onClick={() => onTowerAction('garrison-exit', position)}>{text.game.garrisonExit}</button><button type="button" disabled={towerAttackDisabled} {...orderPreviewHandlers(towerRule.attackOrderCost, towerAttackDisabled, onOrderPreview)} onClick={() => onTowerAction('tower-attack', position)}>{text.game.towerAttack}</button></div></div>}
     </aside>
   )
 }
 
-function ActionModePanel({ match, action, text, onSplitChange, onCancel }: { match: MatchState; action: PendingGameAction; text: LocaleDictionary; onSplitChange: (units: TroopComposition) => void; onCancel: () => void }) {
-  if (action.kind === 'split') {
+function ActionModePanel({ match, action, text, onCompositionChange, onConfirmDismiss, onCancel }: { match: MatchState; action: PendingGameAction; text: LocaleDictionary; onCompositionChange: (units: TroopComposition) => void; onConfirmDismiss: () => void; onCancel: () => void }) {
+  if (action.kind === 'split' || action.kind === 'dismiss') {
     const squad = objectAt(match, action.source)
     const available = squad?.type === 'squad' ? squad.units : { militia: 0, spearmen: 0, archers: 0, knights: 0 }
     const selected = squadSize({ units: action.units })
     const total = squad?.type === 'squad' ? squadSize(squad) : 0
-    return <section className="action-mode-panel split-mode-panel"><div className="split-mode-copy"><span>{text.game.splitMode}</span><div className="split-totals"><span><b>{selected}</b><small>{text.game.splitNewSquad}</small></span><span><b>{Math.max(0, total - selected)}</b><small>{text.game.splitRemaining}</small></span></div><p>{text.game.splitHint}</p></div><div className="split-composition">{troopKinds.filter((kind) => (available[kind] ?? 0) > 0).map((kind) => {
+    const dismissing = action.kind === 'dismiss'
+    return <section className="action-mode-panel split-mode-panel"><div className="split-mode-copy"><span>{dismissing ? text.game.dismissMode : text.game.splitMode}</span><div className="split-totals"><span><b>{selected}</b><small>{dismissing ? text.game.dismiss : text.game.splitNewSquad}</small></span><span><b>{Math.max(0, total - selected)}</b><small>{text.game.splitRemaining}</small></span></div><p>{dismissing ? text.game.dismissHint : text.game.splitHint}</p></div><div className="split-composition">{troopKinds.filter((kind) => (available[kind] ?? 0) > 0).map((kind) => {
       const amount = action.units[kind] ?? 0
       const name = troopName(text, kind)
-      return <div key={kind}><span>{name}<small>/ {available[kind]}</small></span><button type="button" aria-label={`− ${name}`} disabled={amount <= 0 || selected <= 1} onClick={() => onSplitChange({ ...action.units, [kind]: amount - 1 })}>−</button><b>{amount}</b><button type="button" aria-label={`+ ${name}`} disabled={amount >= (available[kind] ?? 0) || selected >= total - 1} onClick={() => onSplitChange({ ...action.units, [kind]: amount + 1 })}>+</button></div>
-    })}</div><button type="button" className="cancel-command" onClick={onCancel}>{text.game.cancel}</button></section>
+      return <div key={kind}><span>{name}<small>/ {available[kind]}</small></span><button type="button" aria-label={`− ${name}`} disabled={amount <= 0} onClick={() => onCompositionChange({ ...action.units, [kind]: amount - 1 })}>−</button><b>{amount}</b><button type="button" aria-label={`+ ${name}`} disabled={amount >= (available[kind] ?? 0) || selected >= total} onClick={() => onCompositionChange({ ...action.units, [kind]: amount + 1 })}>+</button></div>
+    })}</div><div className="action-mode-actions">{dismissing && <button type="button" className="confirm-command" disabled={selected < 1 || selected >= total} onClick={onConfirmDismiss}>{text.game.confirmDismiss}</button>}<button type="button" className="cancel-command" onClick={onCancel}>{text.game.cancel}</button></div></section>
+  }
+  if (action.kind === 'garrison-enter' || action.kind === 'garrison-exit' || action.kind === 'tower-attack') {
+    const title = action.kind === 'garrison-enter' ? text.game.garrisonEnterMode : action.kind === 'garrison-exit' ? text.game.garrisonExitMode : text.game.towerAttackMode
+    const hint = action.kind === 'garrison-enter' ? text.game.garrisonEnterHint : action.kind === 'garrison-exit' ? text.game.garrisonExitHint : text.game.towerAttackHint
+    return <section className="action-mode-panel tower-action-mode"><div className="action-mode-copy"><span>{title}</span><strong>{text.game.buildingNames.tower}</strong><p>{hint}</p></div><BuildingMapPreview kind="tower" text={text} /><button type="button" className="cancel-command" onClick={onCancel}>{text.game.cancel}</button></section>
   }
   const title = action.kind === 'build' ? text.game.placementMode : text.game.recruitmentMode
   const name = action.kind === 'build' ? text.game.buildingNames[action.building] : `${troopName(text, action.troop)} × ${action.quantity}`
@@ -167,7 +185,7 @@ function BuildingsPanel({ match, text, locked, onChoose, onOrderPreview }: { mat
     const carousel = carouselRef.current
     const card = carousel?.querySelector<HTMLElement>(':scope > button')
     if (!carousel || !card) return
-    carousel.scrollBy({ left: direction * (card.getBoundingClientRect().width + 7), behavior: 'smooth' })
+    carousel.scrollBy({ left: direction * (card.getBoundingClientRect().width + 7), behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   }
   return <div className="command-carousel"><button type="button" className="carousel-arrow previous" disabled={edge.start} aria-label={text.game.previousItems} onClick={() => scroll(-1)}>‹</button><div ref={carouselRef} className="command-card-grid building-command-grid" onScroll={(event) => syncEdge(event.currentTarget)}>{economyBuildingKinds.map((kind) => {
     const unavailable = buildingUnavailableReason(match, kind, locked, text)
@@ -183,12 +201,13 @@ function BarracksPanel({ match, text, locked, quantity, onChoose, onOrderPreview
   const carouselRef = useRef<HTMLDivElement>(null)
   const [edge, setEdge] = useState({ start: true, end: false })
   const domain = humanDomain(match)
+  const armySpace = Math.max(0, armyCapacity - totalArmySize(match))
   const syncEdge = (element: HTMLDivElement) => setEdge({ start: element.scrollLeft <= 1, end: element.scrollLeft + element.clientWidth >= element.scrollWidth - 1 })
   const scroll = (direction: -1 | 1) => {
     const carousel = carouselRef.current
     const card = carousel?.querySelector<HTMLElement>(':scope > button')
     if (!carousel || !card) return
-    carousel.scrollBy({ left: direction * (card.getBoundingClientRect().width + 7), behavior: 'smooth' })
+    carousel.scrollBy({ left: direction * (card.getBoundingClientRect().width + 7), behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   }
   return <div className="command-carousel troop-command-carousel"><button type="button" className="carousel-arrow previous" disabled={edge.start} aria-label={text.game.previousTroops} onClick={() => scroll(-1)}>‹</button><div ref={carouselRef} className="command-card-grid troop-command-grid" onScroll={(event) => syncEdge(event.currentTarget)}>{troopKinds.map((troop) => {
     const rule = troopRules[troop]
@@ -200,7 +219,8 @@ function BarracksPanel({ match, text, locked, quantity, onChoose, onOrderPreview
     const unavailable = match.status !== 'playing' ? text.game.failures['game-over']
       : locked ? text.game.opponentTurn
         : match.ordersRemaining < rule.actionCost ? text.game.failures['not-enough-orders']
-          : maxByPopulation < quantity ? text.game.failures['not-enough-population']
+          : armySpace < quantity ? text.game.failures['army-full']
+            : maxByPopulation < quantity ? text.game.failures['not-enough-population']
             : maxByResources < quantity ? text.game.failures['not-enough-resources']
               : null
     return <button type="button" className="troop-command-card" key={troop} disabled={Boolean(unavailable)} title={unavailable ?? text.game.troopDescriptions[troop]} {...orderPreviewHandlers(rule.actionCost, Boolean(unavailable), onOrderPreview)} onClick={() => onChoose(troop, quantity)}><span><strong>{troopName(text, troop)}</strong><small>{text.game.troopDescriptions[troop] || troop}</small></span><span className="troop-card-visual"><span className="troop-card-emblem"><TroopIcon kind={troop} /></span><span className="troop-card-stats"><span><small>{text.game.damage}</small><b>{rule.damage}</b></span><span><small>{text.game.movementCost}</small><b>{troopMovementOrderCost(troop)} <i aria-hidden="true">◆</i></b></span></span></span><Cost cost={rule.resourceCost} text={text} multiplier={quantity} /></button>
@@ -209,24 +229,29 @@ function BarracksPanel({ match, text, locked, quantity, onChoose, onOrderPreview
 
 function FortificationsPanel({ match, text, locked, onChoose, onOrderPreview }: { match: MatchState; text: LocaleDictionary; locked: boolean; onChoose: (kind: BuildingKind) => void; onOrderPreview: (cost: number) => void }) {
   return <div className="command-card-grid fortification-command-grid">{fortificationKinds.map((kind) => {
+    const rule = buildingRules[kind]
     const unavailable = buildingUnavailableReason(match, kind, locked, text)
-    return <button type="button" className="fortification-command-card" key={kind} disabled={Boolean(unavailable)} title={unavailable ?? text.game.buildingDescriptions[kind]} {...orderPreviewHandlers(buildingRules[kind].actionCost, Boolean(unavailable), onOrderPreview)} onClick={() => onChoose(kind)}><span><strong>{text.game.buildingNames[kind]}</strong><small>{text.game.buildingDescriptions[kind]}</small></span><span className="fortification-card-visual"><span className="fortification-card-emblem"><FortificationIcon kind={kind} /></span><span className="fortification-card-stats"><small>{text.game.hitPoints}</small><b>{buildingRules[kind].hitPoints}</b></span></span><Cost cost={buildingRules[kind].resourceCost} text={text} /></button>
+    return <button type="button" className="fortification-command-card" key={kind} disabled={Boolean(unavailable)} title={unavailable ?? text.game.buildingDescriptions[kind]} {...orderPreviewHandlers(rule.actionCost, Boolean(unavailable), onOrderPreview)} onClick={() => onChoose(kind)}><span><strong>{text.game.buildingNames[kind]}</strong><small>{text.game.buildingDescriptions[kind]}</small></span><span className="fortification-card-visual"><span className="fortification-card-emblem"><FortificationIcon kind={kind} /></span><span className="fortification-card-stats"><span><small>{text.game.hitPoints}</small><b>{rule.hitPoints}</b></span>{rule.incomingDamageMultiplier && <span><small>{text.game.defense}</small><b>{Math.round((1 - rule.incomingDamageMultiplier) * 100)}%</b></span>}{rule.garrison && <><span><small>{text.game.towerRange}</small><b>{rule.garrison.attackRange}</b></span><span><small>{text.game.towerSight}</small><b>{rule.garrison.visibilityRadius}</b></span><span><small>{text.game.towerCapacity}</small><b>{rule.garrison.capacity}</b></span></>}</span></span><Cost cost={rule.resourceCost} text={text} /></button>
   })}</div>
 }
 
 function CastleEconomyPanel({ match, text, locked, onSetTaxRate }: { match: MatchState; text: LocaleDictionary; locked: boolean; onSetTaxRate: (rate: TaxRate) => void }) {
   const domain = humanDomain(match)
-  const delta = turnResourceDeltaFor(match, match.playerId)
+  const forecast = turnEconomyForecastFor(match, match.playerId)
   const rate = domain.taxRate ?? defaultTaxRate
   const selectedTaxRule = taxRates[rate]
-  const taxGold = Math.floor(domain.population * selectedTaxRule.goldPerPerson)
-  const taxGrain = Math.ceil(domain.population * selectedTaxRule.foodPerPerson)
+  const taxGold = forecast?.taxIncome ?? Math.floor(domain.population * selectedTaxRule.goldPerPerson)
+  const foodDemand = forecast?.foodDemand ?? foodDemandFor(match, match.playerId)
+  const upkeepGold = forecast?.upkeep.gold ?? 0
   const productionPenalty = text.game.productionPenalty || text.game.production.toLowerCase()
   const resourceForecast = (resource: 'grain' | 'meat' | 'gold') => {
-    const projected = domain.resources[resource] + delta[resource]
-    return <div className={`economy-balance${projected < 0 ? ' deficit' : ''}`}><span>{text.game.resourceNames[resource]}</span><strong>{domain.resources[resource]} <i>→</i> {Math.max(0, projected)}</strong><small>{projected < 0 ? text.game.deficit : text.game.stable}</small></div>
+    const projected = forecast?.resources[resource] ?? domain.resources[resource]
+    const deficit = resource === 'gold'
+      ? (forecast?.uncoveredUpkeep.gold ?? 0) > 0
+      : Boolean(forecast && !forecast.food.fed && projected === 0)
+    return <div className={`economy-balance${deficit ? ' deficit' : ''}`}><span>{text.game.resourceNames[resource]}</span><strong>{domain.resources[resource]} <i>→</i> {projected}</strong><small>{deficit ? text.game.deficit : text.game.stable}</small></div>
   }
-  return <section className="castle-economy-panel"><div className="economy-forecast">{resourceForecast('grain')}{resourceForecast('meat')}{resourceForecast('gold')}<div className="tax-impact"><span>{text.game.taxIncome}</span><strong>{taxGold > 0 ? '+' : ''}{taxGold} {text.game.resourceNames.gold.toLowerCase()}</strong><strong>{taxGrain > 0 ? '−' : ''}{taxGrain} {text.game.resourceNames.grain.toLowerCase()}</strong>{selectedTaxRule.productionAdjustment < 0 && <strong>−{Math.abs(selectedTaxRule.productionAdjustment)} {productionPenalty}</strong>}</div></div><div className="tax-control"><span>{text.game.taxes}</span><div>{(['none', 'moderate', 'extortionate'] as TaxRate[]).map((candidate) => <button type="button" key={candidate} disabled={locked} className={candidate === rate ? 'active' : ''} aria-pressed={candidate === rate} onClick={() => onSetTaxRate(candidate)}><span>{text.game.taxRates[candidate]}</span></button>)}</div></div></section>
+  return <section className="castle-economy-panel"><div className="economy-forecast">{resourceForecast('grain')}{resourceForecast('meat')}{resourceForecast('gold')}<div className={`tax-impact${forecast && (!forecast.food.fed || !forecast.upkeepPaid) ? ' deficit' : ''}`}><span>{text.game.nextTurn}</span><strong>+{taxGold} {text.game.resourceNames.gold.toLowerCase()}</strong><strong>−{foodDemand} {text.game.foodDemand.toLowerCase()}</strong><strong>−{upkeepGold} {text.game.resourceNames.gold.toLowerCase()} · {text.game.upkeep.toLowerCase()}</strong>{forecast && !forecast.food.fed && <strong>{text.game.foodShortage}</strong>}{forecast?.desertion && <strong>{text.game.turnDesertion.replace('{unit}', text.game.troopNames[forecast.desertion.kind])}</strong>}{selectedTaxRule.productionAdjustment < 0 && <strong>−{Math.abs(selectedTaxRule.productionAdjustment)} {productionPenalty}</strong>}</div></div><div className="tax-control"><span>{text.game.taxes}</span><div>{(['none', 'moderate', 'extortionate'] as TaxRate[]).map((candidate) => <button type="button" key={candidate} disabled={locked} className={candidate === rate ? 'active' : ''} aria-pressed={candidate === rate} onClick={() => onSetTaxRate(candidate)}><span>{text.game.taxRates[candidate]}</span></button>)}</div></div></section>
 }
 
 function MarketPanel({ match, position, text, locked, onTrade }: { match: MatchState; position: CellPosition; text: LocaleDictionary; locked: boolean; onTrade: GameCommandDockProps['onTrade'] }) {
@@ -240,22 +265,37 @@ function MarketPanel({ match, position, text, locked, onTrade }: { match: MatchS
 
 export function GameCommandDock(props: GameCommandDockProps) {
   const [recruitQuantity, setRecruitQuantity] = useState(1)
-  const activeTabLabel = props.text.tabs.find((tab) => tab.id === props.activeTab)?.label ?? props.text.tabs[0].label
+  const dockId = useId()
+  const tabRefs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({})
   const selectedObject = props.selectedCell ? objectAt(props.match, props.selectedCell) : null
   const ownedCastle = selectedObject?.type === 'castle' && selectedObject.ownerId === props.match.playerId
   const ownedMarket = selectedObject?.type === 'building' && selectedObject.kind === 'market' && selectedObject.ownerId === props.match.playerId
   const commandsLocked = props.locked || props.match.status !== 'playing'
   const showRecruitQuantity = !props.pendingAction && !ownedCastle && !ownedMarket && props.activeTab === 'barracks'
+  const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, current: TabId) => {
+    const tabs = props.text.tabs.map((tab) => tab.id)
+    const currentIndex = tabs.indexOf(current)
+    const nextIndex = event.key === 'ArrowRight' ? (currentIndex + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (currentIndex - 1 + tabs.length) % tabs.length
+        : event.key === 'Home' ? 0
+          : event.key === 'End' ? tabs.length - 1
+            : null
+    if (nextIndex === null) return
+    event.preventDefault()
+    const next = tabs[nextIndex]
+    props.onTabChange(next)
+    window.requestAnimationFrame(() => tabRefs.current[next]?.focus())
+  }
   return (
     <section className={`command-dock${commandsLocked ? ' locked' : ''}`} aria-label={props.text.interface.controlPanel} aria-busy={props.locked}>
       <div className="command-panel">
-        {showRecruitQuantity ? <QuantityPicker quantity={recruitQuantity} setQuantity={setRecruitQuantity} text={props.text} locked={commandsLocked} /> : <SelectionSummary match={props.match} position={props.selectedCell} text={props.text} locked={commandsLocked} onSplit={props.onSplit} onOrderPreview={props.onOrderPreview} />}
-        <div className="command-panel-main" role="tabpanel" aria-label={activeTabLabel}>
+        {showRecruitQuantity ? <QuantityPicker quantity={recruitQuantity} setQuantity={setRecruitQuantity} text={props.text} locked={commandsLocked} /> : <SelectionSummary match={props.match} position={props.selectedCell} text={props.text} locked={commandsLocked} onSplit={props.onSplit} onDismiss={props.onDismiss} onTowerAction={props.onTowerAction} onOrderPreview={props.onOrderPreview} />}
+        <div className="command-panel-main" id={`${dockId}-panel`} role="tabpanel" aria-labelledby={`${dockId}-tab-${props.activeTab}`}>
           {props.feedback && <div className="command-feedback" role="status">{props.feedback}</div>}
-          {props.pendingAction ? <ActionModePanel match={props.match} action={props.pendingAction} text={props.text} onSplitChange={props.onSplitChange} onCancel={props.onCancelAction} /> : ownedCastle ? <CastleEconomyPanel match={props.match} text={props.text} locked={commandsLocked} onSetTaxRate={props.onSetTaxRate} /> : ownedMarket && props.selectedCell ? <MarketPanel match={props.match} position={props.selectedCell} text={props.text} locked={commandsLocked} onTrade={props.onTrade} /> : props.activeTab === 'buildings' ? <BuildingsPanel match={props.match} text={props.text} locked={commandsLocked} onChoose={props.onChooseBuild} onOrderPreview={props.onOrderPreview} /> : props.activeTab === 'barracks' ? <BarracksPanel match={props.match} text={props.text} locked={commandsLocked} quantity={recruitQuantity} onChoose={props.onChooseRecruit} onOrderPreview={props.onOrderPreview} /> : <FortificationsPanel match={props.match} text={props.text} locked={commandsLocked} onChoose={props.onChooseBuild} onOrderPreview={props.onOrderPreview} />}
+          {props.pendingAction ? <ActionModePanel match={props.match} action={props.pendingAction} text={props.text} onCompositionChange={props.onCompositionChange} onConfirmDismiss={props.onConfirmDismiss} onCancel={props.onCancelAction} /> : ownedCastle ? <CastleEconomyPanel match={props.match} text={props.text} locked={commandsLocked} onSetTaxRate={props.onSetTaxRate} /> : ownedMarket && props.selectedCell ? <MarketPanel match={props.match} position={props.selectedCell} text={props.text} locked={commandsLocked} onTrade={props.onTrade} /> : props.activeTab === 'buildings' ? <BuildingsPanel match={props.match} text={props.text} locked={commandsLocked} onChoose={props.onChooseBuild} onOrderPreview={props.onOrderPreview} /> : props.activeTab === 'barracks' ? <BarracksPanel match={props.match} text={props.text} locked={commandsLocked} quantity={recruitQuantity} onChoose={props.onChooseRecruit} onOrderPreview={props.onOrderPreview} /> : <FortificationsPanel match={props.match} text={props.text} locked={commandsLocked} onChoose={props.onChooseBuild} onOrderPreview={props.onOrderPreview} />}
         </div>
       </div>
-      <nav className="tabs" aria-label={props.text.interface.controlSections}>{props.text.tabs.map((tab) => <button key={tab.id} type="button" className={tab.id === props.activeTab ? 'tab active' : 'tab'} aria-selected={tab.id === props.activeTab} role="tab" onClick={() => props.onTabChange(tab.id)}><span className="tab-glyph" aria-hidden="true" />{tab.label}</button>)}</nav>
+      <nav className="tabs" role="tablist" aria-label={props.text.interface.controlSections}>{props.text.tabs.map((tab) => <button ref={(element) => { tabRefs.current[tab.id] = element }} key={tab.id} id={`${dockId}-tab-${tab.id}`} type="button" className={tab.id === props.activeTab ? 'tab active' : 'tab'} aria-controls={`${dockId}-panel`} aria-selected={tab.id === props.activeTab} role="tab" tabIndex={tab.id === props.activeTab ? 0 : -1} onKeyDown={(event) => moveTabFocus(event, tab.id)} onClick={() => props.onTabChange(tab.id)}><span className="tab-glyph" aria-hidden="true" />{tab.label}</button>)}</nav>
     </section>
   )
 }

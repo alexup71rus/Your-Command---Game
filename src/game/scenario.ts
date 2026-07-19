@@ -40,6 +40,11 @@ export interface StartRegion {
   color: string
   center: CellPosition
   validCastleCells: CellPosition[]
+  reservedBuildSites: {
+    plain: CellPosition
+    hill: CellPosition
+    extra: CellPosition
+  }
   score: RegionScore
 }
 
@@ -64,7 +69,7 @@ export interface MatchSetup {
 
 export type ScenarioResult =
   | { ok: true; scenario: MapScenario }
-  | { ok: false; reason: 'not-enough-land' | 'no-castle-sites'; balance?: undefined }
+  | { ok: false; reason: 'not-enough-land' | 'no-castle-sites' | 'unviable-starts'; balance?: undefined }
   | { ok: false; reason: 'unbalanced-regions'; balance: RegionBalance }
 
 export const REGION_COLORS = ['#d2b45f', '#6f9c83', '#a26f61', '#718cac'] as const
@@ -304,7 +309,16 @@ function assignTerritories(map: GameMap, component: CellPosition[], centers: Cel
   return territories
 }
 
-export function isCastleSiteValid(scenario: Pick<MapScenario, 'cells' | 'territories'>, regionId: string, position: CellPosition) {
+function footprintCells(origin: CellPosition) {
+  return [
+    origin,
+    { column: origin.column + 1, row: origin.row },
+    { column: origin.column, row: origin.row + 1 },
+    { column: origin.column + 1, row: origin.row + 1 },
+  ]
+}
+
+function isBaseCastleSiteValid(scenario: Pick<MapScenario, 'cells' | 'territories'>, regionId: string, position: CellPosition) {
   const { column, row } = position
   const cell = scenario.cells[row]?.[column]
   if (!cell || scenario.territories[row]?.[column] !== regionId) return false
@@ -318,7 +332,69 @@ export function isCastleSiteValid(scenario: Pick<MapScenario, 'cells' | 'territo
   return true
 }
 
-function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosition[], count: number) {
+export function isCastleSiteValid(
+  scenario: Pick<MapScenario, 'cells' | 'territories'> & Partial<Pick<MapScenario, 'regions'>>,
+  regionId: string,
+  position: CellPosition,
+) {
+  if (!isBaseCastleSiteValid(scenario, regionId, position)) return false
+  const region = scenario.regions?.find((candidate) => candidate.id === regionId)
+  if (!region) return true
+  return !Object.values(region.reservedBuildSites).flatMap(footprintCells)
+    .some((reserved) => reserved.column === position.column && reserved.row === position.row)
+}
+
+function reservedBuildSitesFor(
+  map: GameMap,
+  territories: TerritoryMap,
+  regionId: string,
+  castleCells: CellPosition[],
+) {
+  const clearCells = (origin: CellPosition) => footprintCells(origin).every(({ column, row }) => {
+    const cell = map[row]?.[column]
+    return territories[row]?.[column] === regionId
+      && Boolean(cell)
+      && (cell.landform === 'plain' || cell.landform === 'hill')
+      && !cell.vegetation
+      && !cell.object
+  })
+  const clearCellCount = territories.reduce((total, row, rowIndex) => total + row.reduce((rowTotal, id, column) => {
+    const cell = map[rowIndex]?.[column]
+    return rowTotal + Number(id === regionId && (cell?.landform === 'plain' || cell?.landform === 'hill') && !cell.vegetation && !cell.object)
+  }, 0), 0)
+  // Founding consumes one otherwise clear cell. Preserve the configured
+  // development space after the castle has been placed.
+  if (clearCellCount <= gameConfig.match.minimumClearStartCells) return null
+
+  const origins = territories.flatMap((row, rowIndex) => row.flatMap((id, column) => (
+    id === regionId && clearCells({ column, row: rowIndex }) ? [{ column, row: rowIndex }] : []
+  )))
+  const plains = origins.filter((origin) => footprintCells(origin).every(({ column, row }) => map[row][column].landform === 'plain'))
+  const hills = origins.filter((origin) => footprintCells(origin).every(({ column, row }) => map[row][column].landform === 'hill'))
+  const overlaps = (first: CellPosition, second: CellPosition) => {
+    const secondKeys = new Set(footprintCells(second).map(({ column, row }) => `${column}:${row}`))
+    return footprintCells(first).some(({ column, row }) => secondKeys.has(`${column}:${row}`))
+  }
+
+  for (const plain of plains) {
+    for (const hill of hills) {
+      for (const extra of origins) {
+        if (overlaps(plain, extra) || overlaps(hill, extra)) continue
+        const reserved = { plain, hill, extra }
+        const reservedCells = new Set(Object.values(reserved).flatMap(footprintCells).map(({ column, row }) => `${column}:${row}`))
+        if (!castleCells.some(({ column, row }) => !reservedCells.has(`${column}:${row}`))) continue
+        return reserved
+      }
+    }
+  }
+  return null
+}
+
+type RegionBuildResult =
+  | { ok: true; regions: StartRegion[] }
+  | { ok: false; reason: 'no-castle-sites' | 'unviable-starts' }
+
+function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosition[], count: number): RegionBuildResult {
   const regions: StartRegion[] = []
   for (let index = 0; index < count; index += 1) {
     const id = `region-${index}`
@@ -334,8 +410,8 @@ function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosi
       }
     }
     const partialScenario = { cells: map, territories }
-    const validCastleCells = cells
-      .filter((position) => isCastleSiteValid(partialScenario, id, position))
+    const baseCastleCells = cells
+      .filter((position) => isBaseCastleSiteValid(partialScenario, id, position))
       .sort((a, b) => {
         const score = (position: CellPosition) => {
           const distance = Math.hypot(position.column - centers[index].column, position.row - centers[index].row)
@@ -344,6 +420,12 @@ function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosi
         }
         return score(b) - score(a)
       })
+    if (baseCastleCells.length === 0) return { ok: false, reason: 'no-castle-sites' }
+    const reservedBuildSites = reservedBuildSitesFor(map, territories, id, baseCastleCells)
+    if (!reservedBuildSites) return { ok: false, reason: 'unviable-starts' }
+    const reservedCells = new Set(Object.values(reservedBuildSites).flatMap(footprintCells).map(({ column, row }) => `${column}:${row}`))
+    const validCastleCells = baseCastleCells.filter(({ column, row }) => !reservedCells.has(`${column}:${row}`))
+    if (validCastleCells.length === 0) return { ok: false, reason: 'no-castle-sites' }
     const quality = cells.length
       + forest * gameConfig.match.forestRegionValue
       + hills * gameConfig.match.hillRegionValue
@@ -353,10 +435,11 @@ function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosi
       color: REGION_COLORS[index],
       center: validCastleCells[0] ?? centers[index],
       validCastleCells,
+      reservedBuildSites,
       score: { cells: cells.length, forest, hills, quality },
     })
   }
-  return regions
+  return { ok: true, regions }
 }
 
 export function createMapScenario(
@@ -365,39 +448,45 @@ export function createMapScenario(
   seed: number,
   metadata: { id?: string; name?: string } = {},
 ): ScenarioResult {
-  const count = Math.max(gameConfig.match.minParticipants, Math.min(gameConfig.match.maxParticipants, participantCount))
+  const requestedCount = Number.isFinite(participantCount) ? Math.round(participantCount) : gameConfig.match.defaultParticipants
+  const count = Math.max(gameConfig.match.minParticipants, Math.min(gameConfig.match.maxParticipants, requestedCount))
   const component = largestPassableComponent(map)
   if (component.length < count * 64) return { ok: false, reason: 'not-enough-land' }
-  const candidates = Array.from({ length: gameConfig.match.regionSearchAttempts }, (_, attempt) => {
+  let sawCandidate = false
+  let sawCastleSites = false
+  let firstViableBalance: RegionBalance | null = null
+  for (let attempt = 0; attempt < gameConfig.match.regionSearchAttempts; attempt += 1) {
     const centers = chooseCenters(map, component, count, seed, attempt)
-    if (centers.length !== count) return null
+    if (centers.length !== count) continue
+    sawCandidate = true
     const territories = assignTerritories(map, component, centers)
     const balance = addTerritoryShape(evaluateRegionResourceBalance(regionScoresForTerritories(map, territories, count)), territories, centers)
-    return { attempt, centers, territories, balance }
-  }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-    .sort((a, b) => a.balance.score - b.balance.score || a.attempt - b.attempt)
-  if (candidates.length === 0) return { ok: false, reason: 'not-enough-land' }
-
-  const candidatesWithSites = candidates.map((candidate) => ({
-    ...candidate,
-    regions: buildRegions(map, candidate.territories, candidate.centers, count),
-  })).filter((candidate) => candidate.regions.every((region) => region.validCastleCells.length > 0))
-  if (candidatesWithSites.length === 0) return { ok: false, reason: 'no-castle-sites' }
-  const selected = candidatesWithSites.find((candidate) => isRegionBalanceAcceptable(candidate.balance))
-  if (!selected) return { ok: false, reason: 'unbalanced-regions', balance: candidatesWithSites[0].balance }
-  return {
-    ok: true,
-    scenario: {
-      id: metadata.id ?? `custom-${seed}`,
-      name: metadata.name ?? 'Custom world',
-      seed,
-      participantCount: count,
-      cells: map,
-      territories: selected.territories,
-      regions: selected.regions,
-      participants: [],
-    },
+    const built = buildRegions(map, territories, centers, count)
+    if (!built.ok) {
+      if (built.reason === 'unviable-starts') sawCastleSites = true
+      continue
+    }
+    sawCastleSites = true
+    firstViableBalance ??= balance
+    if (!isRegionBalanceAcceptable(balance)) continue
+    return {
+      ok: true,
+      scenario: {
+        id: metadata.id ?? `custom-${seed}`,
+        name: metadata.name ?? 'Custom world',
+        seed,
+        participantCount: count,
+        cells: map,
+        territories,
+        regions: built.regions,
+        participants: [],
+      },
+    }
   }
+  if (!sawCandidate) return { ok: false, reason: 'not-enough-land' }
+  if (!sawCastleSites) return { ok: false, reason: 'no-castle-sites' }
+  if (!firstViableBalance) return { ok: false, reason: 'unviable-starts' }
+  return { ok: false, reason: 'unbalanced-regions', balance: firstViableBalance }
 }
 
 export function foundMatch(scenario: MapScenario, humanRegionId: string, humanCastle: CellPosition): MapScenario {

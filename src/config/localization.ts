@@ -22,6 +22,12 @@ export interface LocaleDictionary {
     start: string
     starting: string
     mapError: string
+    mapUnviable: string
+    workerError: string
+    retry: string
+    mapSaveFailed: string
+    mapDeleteFailed: string
+    mapReadFailed: string
     loadGame: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
@@ -52,8 +58,6 @@ export interface LocaleDictionary {
     freePeople: string
     diverseDiet: string
   }
-  resources: string[]
-  troops: string[]
   tabs: Array<{ id: TabId; label: string }>
   game: {
     resourceNames: Record<ResourceId, string>
@@ -61,30 +65,28 @@ export interface LocaleDictionary {
     buildingDescriptions: Record<BuildingKind, string>
     troopNames: Record<TroopKind, string>
     troopDescriptions: Record<TroopKind, string>
-    selectedCell: string
     selectCell: string
     emptyCell: string
     castle: string
     squad: string
-    ownObject: string
-    enemyObject: string
     terrainPlain: string
     terrainHill: string
     terrainForest: string
     hitPoints: string
-    squadSize: string
+    defense: string
     squadHealth: string
     damage: string
     movementCost: string
-    orders: string
     cost: string
     perTurn: string
-    build: string
-    recruit: string
     quantity: string
     placementMode: string
     recruitmentMode: string
     splitMode: string
+    dismissMode: string
+    garrisonEnterMode: string
+    garrisonExitMode: string
+    towerAttackMode: string
     buildHint: string
     recruitHint: string
     moveHint: string
@@ -93,11 +95,25 @@ export interface LocaleDictionary {
     routeUnavailable: string
     routeOrdersFinished: string
     splitHint: string
+    dismissHint: string
+    garrisonEnterHint: string
+    garrisonExitHint: string
+    towerAttackHint: string
     squadActionHint: string
     splitNewSquad: string
     splitRemaining: string
     cancel: string
     split: string
+    dismiss: string
+    confirmDismiss: string
+    garrison: string
+    garrisonEnter: string
+    garrisonExit: string
+    towerAttack: string
+    towerRange: string
+    towerSight: string
+    towerCapacity: string
+    armyLimit: string
     endTurn: string
     opponentTurn: string
     endTurnHint: string
@@ -113,22 +129,14 @@ export interface LocaleDictionary {
     workerProductionFull: string
     workerProductionReduced: string
     workerProductionStopped: string
-    diverseDiet: string
-    diverseDietActive: string
-    diverseDietInactive: string
-    economyTitle: string
-    economyDescription: string
     taxes: string
     taxRates: Record<'none' | 'moderate' | 'extortionate', string>
-    taxIncome: string
-    ration: string
     productionPenalty: string
     upkeep: string
-    grainDemand: string
     nextTurn: string
-    populationChange: string
     stable: string
     deficit: string
+    foodShortage: string
     marketTitle: string
     marketDescription: string
     buy: string
@@ -136,6 +144,10 @@ export interface LocaleDictionary {
     victoryTitle: string
     victoryDescription: string
     continue: string
+    turnDesertion: string
+    turnStarvation: string
+    turnCapacityLoss: string
+    turnStarvationTroop: string
     previousItems: string
     nextItems: string
     previousTroops: string
@@ -163,6 +175,7 @@ export interface LocaleDictionary {
     goHere: string
     splitSquad: string
     mergeSquads: string
+    dismissSquad: string
     removeObject: string
   }
   confirmation: {
@@ -196,13 +209,17 @@ export interface LocaleDictionary {
     saved: string
     saveFailed: string
     loadFailed: string
+    readFailed: string
+    deleteFailed: string
+    loadTitle: string
+    loadDescription: string
+    loadConfirm: string
     deleteTitle: string
     deleteDescription: string
   }
   generator: {
     title: string
     close: string
-    devLabel: string
     relief: string
     mapSize: string
     source: string
@@ -241,6 +258,10 @@ export interface LocaleDictionary {
     regionsCalculating: string
     regionsError: string
     regionsUnbalanced: string
+    regionsUnviable: string
+    workerError: string
+    retry: string
+    saveError: string
     newVariant: string
     mapName: string
     defaultMapName: string

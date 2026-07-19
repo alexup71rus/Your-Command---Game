@@ -10,7 +10,9 @@ import {
   createMatch,
   defaultSplit,
   demolish,
+  dismissSquad,
   endTurn,
+  garrisonTower,
   humanDomain,
   foodDemandFor,
   foodConsumptionFor,
@@ -24,32 +26,37 @@ import {
   squadHealth,
   squadSize,
   taxIncomeFor,
+  totalArmySize,
   troopTotals,
   trade,
+  towerAttack,
+  turnEconomyForecastFor,
   turnResourceDeltaFor,
   upkeepFor,
+  ungarrisonTower,
   workforceFor,
 } from './match'
 import type { MapScenario } from './scenario'
 
-function createScenario(): MapScenario {
-  const cells: GameMap = Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => ({
+function createScenario(size = 8): MapScenario {
+  const cells: GameMap = Array.from({ length: size }, () => Array.from({ length: size }, () => ({
     elevation: 0.2,
     landform: 'plain' as const,
     vegetation: false,
   })))
   cells[1][1] = { ...cells[1][1], object: { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 } }
-  cells[1][6] = { ...cells[1][6], object: { type: 'castle', ownerId: 'npc-2', hitPoints: 100, maxHitPoints: 100 } }
+  const npcCastleColumn = size - 2
+  cells[1][npcCastleColumn] = { ...cells[1][npcCastleColumn], object: { type: 'castle', ownerId: 'npc-2', hitPoints: 100, maxHitPoints: 100 } }
   return {
     id: 'test',
     name: 'Test',
     seed: 1,
     participantCount: 2,
     cells,
-    territories: Array.from({ length: 8 }, () => Array.from({ length: 8 }, (_, column) => column < 4 ? 'region-0' : 'region-1')),
+    territories: Array.from({ length: size }, () => Array.from({ length: size }, (_, column) => column < size / 2 ? 'region-0' : 'region-1')),
     regions: [
-      { id: 'region-0', index: 0, color: '#d2b45f', center: { column: 1, row: 1 }, validCastleCells: [], score: { cells: 32, forest: 0, hills: 0, quality: 32 } },
-      { id: 'region-1', index: 1, color: '#6f9c83', center: { column: 6, row: 1 }, validCastleCells: [], score: { cells: 32, forest: 0, hills: 0, quality: 32 } },
+      { id: 'region-0', index: 0, color: '#d2b45f', center: { column: 1, row: 1 }, validCastleCells: [], reservedBuildSites: { plain: { column: 1, row: 1 }, hill: { column: 1, row: 1 }, extra: { column: 1, row: 1 } }, score: { cells: size * size / 2, forest: 0, hills: 0, quality: size * size / 2 } },
+      { id: 'region-1', index: 1, color: '#6f9c83', center: { column: npcCastleColumn, row: 1 }, validCastleCells: [], reservedBuildSites: { plain: { column: npcCastleColumn, row: 1 }, hill: { column: npcCastleColumn, row: 1 }, extra: { column: npcCastleColumn, row: 1 } }, score: { cells: size * size / 2, forest: 0, hills: 0, quality: size * size / 2 } },
     ],
     participants: [
       { id: 'player', kind: 'human', regionId: 'region-0', color: '#d2b45f' },
@@ -310,7 +317,7 @@ describe('match rules', () => {
     const advanced = endTurn(lodge.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
-    expect(humanDomain(advanced.state).resources.meat).toBe(meatBeforeTurn + 5)
+    expect(humanDomain(advanced.state).resources.meat).toBe(meatBeforeTurn + 4)
     const noWorker = { ...lodge.state, domains: { ...lodge.state.domains, player: { ...lodge.state.domains.player, population: 0 } } }
     expect(productionFor(noWorker, 'player').meat).toBe(0)
 
@@ -460,8 +467,8 @@ describe('match rules', () => {
       church.state.scenario.cells[3][2], church.state.scenario.cells[3][3],
     ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'church')).toBe(true)
     expect(turnResourceDeltaFor(church.state, 'player').gold).toBe(4)
-    expect(turnResourceDeltaFor(church.state, 'player').grain).toBe(1)
-    expect(turnResourceDeltaFor(church.state, 'player').meat).toBe(-1)
+    expect(turnResourceDeltaFor(church.state, 'player').grain).toBe(2)
+    expect(turnResourceDeltaFor(church.state, 'player').meat).toBe(-2)
     const advanced = endTurn(church.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
@@ -635,10 +642,10 @@ describe('match rules', () => {
     expect(foodConsumptionFor(untaxed.state, 'player', { grain: 0, meat: 10 })).toEqual({ grain: 0, meat: 3, fed: true, diverseDiet: false })
   })
 
-  it('pays the additional tax demand only with grain', () => {
+  it('allows either food resource to satisfy the additional tax demand', () => {
     const match = createMatch(createScenario())
-    expect(foodConsumptionFor(match, 'player', { grain: 1, meat: 10 })).toEqual({ grain: 1, meat: 3, fed: true, diverseDiet: false })
-    expect(foodConsumptionFor(match, 'player', { grain: 0, meat: 10 })).toEqual({ grain: 0, meat: 3, fed: false, diverseDiet: false })
+    expect(foodConsumptionFor(match, 'player', { grain: 1, meat: 10 })).toEqual({ grain: 1, meat: 3, fed: true, diverseDiet: true })
+    expect(foodConsumptionFor(match, 'player', { grain: 0, meat: 10 })).toEqual({ grain: 0, meat: 4, fed: true, diverseDiet: false })
   })
 
   it('gains and loses the varied-diet bonus without stacking it', () => {
@@ -737,8 +744,288 @@ describe('match rules', () => {
       if (!advanced.ok) throw new Error('turn failed')
       state = advanced.state
     }
-    expect(humanDomain(state).populationCapacity).toBe(gameConfig.turn.basePopulationCapacity + 10)
+    expect(civilianHousingCapacityFor(state, 'player')).toBe(gameConfig.turn.basePopulationCapacity + 10 + gameConfig.economy.diverseDietPopulationCapacityBonus)
     expect(humanDomain(state).population).toBe(gameConfig.turn.startingPopulation + 6)
     expect(foodDemandFor(state, 'player')).toBeGreaterThan(initialDemand)
+  })
+
+  it('derives housing from living houses and reduces over-capacity population by only one per turn', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'kitchen', 5, 5)
+    const match = createMatch(scenario)
+    const house = build(match, 'house', { column: 2, row: 2 })
+    if (!house.ok) throw new Error('house building failed')
+    expect(civilianHousingCapacityFor(house.state, 'player')).toBe(30)
+    const removed = demolish(house.state, { column: 2, row: 2 })
+    if (!removed.ok) throw new Error('house demolition failed')
+    expect(civilianHousingCapacityFor(removed.state, 'player')).toBe(20)
+
+    const overCapacity = {
+      ...removed.state,
+      domains: {
+        ...removed.state.domains,
+        player: {
+          ...removed.state.domains.player,
+          population: 30,
+          taxRate: 'none' as const,
+          resources: { ...removed.state.domains.player.resources, grain: 100, meat: 100 },
+        },
+      },
+    }
+    const advanced = endTurn(overCapacity)
+    if (!advanced.ok) throw new Error('turn failed')
+    expect(advanced.state.domains.player.population).toBe(29)
+    expect(advanced.state.lastTurnReports.player.populationReason).toBe('capacity')
+  })
+
+  it('does not create a civilian when soldiers already fill the total housing capacity', () => {
+    const scenario = createScenario()
+    scenario.cells[2][1] = { ...scenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 10, spearmen: 0, archers: 0, knights: 0 } } }
+    scenario.cells[2][2] = { ...scenario.cells[2][2], object: { type: 'squad', ownerId: 'player', units: { militia: 10, spearmen: 0, archers: 0, knights: 0 } } }
+    const match = createMatch(scenario)
+    match.domains.player.population = 0
+    match.domains.player.taxRate = 'none'
+    match.domains.player.resources.grain = 100
+    match.domains.player.resources.meat = 0
+    const advanced = endTurn(match)
+    if (!advanced.ok) throw new Error('turn failed')
+    expect(civilianHousingCapacityFor(advanced.state, 'player')).toBe(0)
+    expect(advanced.state.domains.player.population).toBe(0)
+    expect(totalArmySize(advanced.state)).toBe(20)
+  })
+
+  it('immediately derives lower housing after an enemy house is destroyed', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'house', 5, 4, 'npc-2')
+    const house = scenario.cells[4][5].object
+    if (house?.type !== 'building') throw new Error('house missing')
+    scenario.cells[4][5] = { ...scenario.cells[4][5], object: { ...house, hitPoints: 1 } }
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+    const match = createMatch(scenario)
+    expect(civilianHousingCapacityFor(match, 'npc-2')).toBe(30)
+    const attacked = moveOrAttack(match, { column: 4, row: 4 }, { column: 5, row: 4 })
+    if (!attacked.ok) throw new Error('attack failed')
+    expect(civilianHousingCapacityFor(attacked.state, 'npc-2')).toBe(20)
+  })
+
+  it('collects taxes before upkeep and deserts exactly one cheapest troop on a deficit', () => {
+    const paidScenario = createScenario()
+    paidScenario.cells[2][1] = { ...paidScenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 4, archers: 0, knights: 0 } } }
+    const paidMatch = createMatch(paidScenario)
+    paidMatch.domains.player.resources.gold = 0
+    const paid = endTurn(paidMatch)
+    if (!paid.ok) throw new Error('turn failed')
+    expect(paid.state.lastTurnReports.player).toMatchObject({ taxIncome: 6, upkeepPaid: true, desertion: null })
+    expect(troopTotals(paid.state, 'player').spearmen).toBe(4)
+
+    const deficitScenario = createScenario()
+    deficitScenario.cells[2][1] = { ...deficitScenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 1 } } }
+    const deficitMatch = createMatch(deficitScenario)
+    deficitMatch.domains.player.taxRate = 'none'
+    deficitMatch.domains.player.resources.gold = 0
+    const deficit = endTurn(deficitMatch)
+    if (!deficit.ok) throw new Error('turn failed')
+    expect(deficit.state.lastTurnReports.player.upkeepPaid).toBe(false)
+    expect(deficit.state.lastTurnReports.player.desertion).toMatchObject({ kind: 'militia', source: 'squad' })
+    expect(troopTotals(deficit.state, 'player')).toMatchObject({ militia: 0, knights: 1 })
+  })
+
+  it('forecasts food demand after a pending desertion', () => {
+    const scenario = createScenario()
+    scenario.cells[2][1] = { ...scenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 0, knights: 1 } } }
+    const match = createMatch(scenario)
+    match.domains.player.taxRate = 'none'
+    match.domains.player.resources.gold = 0
+    const forecast = turnEconomyForecastFor(match, 'player')
+    expect(forecast?.desertion).toMatchObject({ kind: 'knights' })
+    expect(forecast?.foodDemand).toBe(foodDemandFor(match, 'player') - 1)
+  })
+
+  it('counts garrison upkeep and can desert the cheapest fighter from a tower', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'tower', 4, 4)
+    const tower = scenario.cells[4][4].object
+    if (tower?.type !== 'building') throw new Error('tower missing')
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { ...tower, garrison: { archers: 2, health: 2 } } }
+    scenario.cells[4][3] = { ...scenario.cells[4][3], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 0, knights: 1 } } }
+    const match = createMatch(scenario)
+    match.domains.player.taxRate = 'none'
+    match.domains.player.resources.gold = 0
+
+    expect(upkeepFor(match, 'player').gold).toBe(5)
+    const advanced = endTurn(match)
+    if (!advanced.ok) throw new Error('turn failed')
+    expect(advanced.state.lastTurnReports.player.desertion).toMatchObject({ kind: 'archers', source: 'garrison' })
+    expect(advanced.state.scenario.cells[4][4].object).toMatchObject({ garrison: { archers: 1, health: 1 } })
+    expect(troopTotals(advanced.state, 'player')).toMatchObject({ archers: 1, knights: 1 })
+  })
+
+  it('enforces the global 100-unit army cap including tower garrisons', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'tower', 4, 4)
+    const tower = scenario.cells[4][4].object
+    if (tower?.type !== 'building') throw new Error('tower missing')
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { ...tower, garrison: { archers: 5, health: 5 } } }
+    let remaining = 95
+    for (let row = 0; row < scenario.cells.length && remaining > 0; row += 1) {
+      for (let column = 0; column < scenario.cells[row].length && remaining > 0; column += 1) {
+        if (scenario.cells[row][column].object || (column === 1 && row === 2)) continue
+        const amount = Math.min(10, remaining)
+        scenario.cells[row][column] = { ...scenario.cells[row][column], object: { type: 'squad', ownerId: 'player', units: { militia: amount, spearmen: 0, archers: 0, knights: 0 } } }
+        remaining -= amount
+      }
+    }
+    const match = createMatch(scenario)
+    expect(totalArmySize(match)).toBe(100)
+    expect(recruit(match, 'militia', 1, { column: 1, row: 2 })).toMatchObject({ ok: false, reason: 'army-full' })
+  })
+
+  it('dismisses only a strict partial integer composition for two orders', () => {
+    const scenario = createScenario()
+    scenario.cells[2][1] = { ...scenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 6, spearmen: 0, archers: 0, knights: 0 }, health: 6 } }
+    const match = createMatch(scenario)
+    const dismissed = dismissSquad(match, { column: 1, row: 2 }, { militia: 2, spearmen: 0, archers: 0, knights: 0 })
+    if (!dismissed.ok) throw new Error('dismiss failed')
+    expect(dismissed.state.ordersRemaining).toBe(6)
+    expect(dismissed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
+    expect(dismissed.state.scenario.cells[2][1].object).toMatchObject({ type: 'squad', units: { militia: 4 }, health: 4 })
+    expect(dismissSquad(match, { column: 1, row: 2 }, { militia: 6, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+    expect(dismissSquad(match, { column: 1, row: 2 }, { militia: Number.NaN, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+    expect(splitSquad(match, { column: 1, row: 2 }, { column: 2, row: 2 }, { militia: 1.5, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+  })
+
+  it('moves up to five archers into a tower, exits only to an empty cell and protects an occupied tower from demolition', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'tower', 2, 2)
+    scenario.cells[1][2] = { ...scenario.cells[1][2], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 1, archers: 7, knights: 1 } } }
+    const entered = garrisonTower(createMatch(scenario), { column: 2, row: 1 }, { column: 2, row: 2 })
+    if (!entered.ok) throw new Error('garrison failed')
+    expect(entered.state.ordersRemaining).toBe(6)
+    expect(entered.state.scenario.cells[2][2].object).toMatchObject({ type: 'building', kind: 'tower', garrison: { archers: 5, health: 5 } })
+    expect(entered.state.scenario.cells[1][2].object).toMatchObject({ type: 'squad', units: { militia: 1, spearmen: 1, archers: 2, knights: 1 }, health: 6.85 })
+    expect(demolish(entered.state, { column: 2, row: 2 })).toMatchObject({ ok: false, reason: 'cannot-demolish' })
+
+    entered.state.scenario.cells[2][3] = { ...entered.state.scenario.cells[2][3], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+    expect(ungarrisonTower(entered.state, { column: 2, row: 2 }, { column: 3, row: 2 })).toMatchObject({ ok: false, reason: 'occupied' })
+    const exited = ungarrisonTower(entered.state, { column: 2, row: 2 }, { column: 1, row: 2 })
+    if (!exited.ok) throw new Error('ungarrison failed')
+    expect(exited.state.scenario.cells[2][1].object).toMatchObject({ type: 'squad', units: { archers: 5 }, health: 5 })
+    expect(exited.state.scenario.cells[2][2].object).toMatchObject({ type: 'building', kind: 'tower', garrison: undefined })
+    expect(demolish(exited.state, { column: 2, row: 2 }).ok).toBe(true)
+
+    const invalidScenario = createScenario()
+    placeBuilding(invalidScenario, 'tower', 2, 2)
+    invalidScenario.cells[1][2] = { ...invalidScenario.cells[1][2], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 1.5, knights: 0 } } }
+    expect(garrisonTower(createMatch(invalidScenario), { column: 2, row: 1 }, { column: 2, row: 2 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+  })
+
+  it('lets a plain-ground tower fire with its fixed height bonus and kills its garrison when destroyed', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'tower', 0, 0)
+    const tower = scenario.cells[0][0].object
+    if (tower?.type !== 'building') throw new Error('tower missing')
+    scenario.cells[0][0] = { ...scenario.cells[0][0], object: { ...tower, garrison: { archers: 5, health: 5 } } }
+    scenario.cells[0][7] = { ...scenario.cells[0][7], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    const fired = towerAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 7, row: 0 })
+    if (!fired.ok) throw new Error('tower attack failed')
+    expect(fired.state.ordersRemaining).toBe(7)
+    expect(fired.state.scenario.cells[0][7].object).toMatchObject({ hitPoints: 7 })
+
+    const destructionScenario = createScenario()
+    placeBuilding(destructionScenario, 'tower', 5, 4, 'npc-2')
+    const enemyTower = destructionScenario.cells[4][5].object
+    if (enemyTower?.type !== 'building') throw new Error('enemy tower missing')
+    destructionScenario.cells[4][5] = { ...destructionScenario.cells[4][5], object: { ...enemyTower, hitPoints: 1, garrison: { archers: 5, health: 5 } } }
+    destructionScenario.cells[4][4] = { ...destructionScenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+    const destroyed = moveOrAttack(createMatch(destructionScenario), { column: 4, row: 4 }, { column: 5, row: 4 })
+    if (!destroyed.ok) throw new Error('tower destruction failed')
+    expect(destroyed.state.scenario.cells[4][5].object).toMatchObject({ type: 'squad', ownerId: 'player' })
+    expect(troopTotals(destroyed.state, 'npc-2').archers).toBe(0)
+  })
+
+  it('enforces tower range endpoints and line-of-fire blockers', () => {
+    const atMaximum = createScenario(12)
+    placeBuilding(atMaximum, 'tower', 0, 0)
+    const tower = atMaximum.cells[0][0].object
+    if (tower?.type !== 'building') throw new Error('tower missing')
+    atMaximum.cells[0][0] = { ...atMaximum.cells[0][0], object: { ...tower, garrison: { archers: 1, health: 1 } } }
+    atMaximum.cells[0][10] = { ...atMaximum.cells[0][10], object: { type: 'building', kind: 'house', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    expect(towerAttack(createMatch(atMaximum), { column: 0, row: 0 }, { column: 10, row: 0 }).ok).toBe(true)
+
+    const adjacent = createScenario(12)
+    placeBuilding(adjacent, 'tower', 0, 0)
+    const adjacentTower = adjacent.cells[0][0].object
+    if (adjacentTower?.type !== 'building') throw new Error('tower missing')
+    adjacent.cells[0][0] = { ...adjacent.cells[0][0], object: { ...adjacentTower, garrison: { archers: 1, health: 1 } } }
+    adjacent.cells[0][1] = { ...adjacent.cells[0][1], object: { type: 'building', kind: 'house', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    adjacent.cells[0][11] = { ...adjacent.cells[0][11], object: { type: 'building', kind: 'house', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    expect(towerAttack(createMatch(adjacent), { column: 0, row: 0 }, { column: 1, row: 0 }).ok).toBe(true)
+    expect(towerAttack(createMatch(adjacent), { column: 0, row: 0 }, { column: 11, row: 0 })).toMatchObject({ ok: false, reason: 'out-of-range' })
+
+    const blocked = createScenario(12)
+    placeBuilding(blocked, 'tower', 0, 0)
+    const blockedTower = blocked.cells[0][0].object
+    if (blockedTower?.type !== 'building') throw new Error('tower missing')
+    blocked.cells[0][0] = { ...blocked.cells[0][0], object: { ...blockedTower, garrison: { archers: 1, health: 1 } } }
+    blocked.cells[0][5] = { ...blocked.cells[0][5], vegetation: true }
+    blocked.cells[0][10] = { ...blocked.cells[0][10], object: { type: 'building', kind: 'house', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    expect(towerAttack(createMatch(blocked), { column: 0, row: 0 }, { column: 10, row: 0 })).toMatchObject({ ok: false, reason: 'ranged-shot-blocked' })
+  })
+
+  it('removes housing immediately after a ranged house destruction', () => {
+    const scenario = createScenario()
+    placeBuilding(scenario, 'house', 7, 4, 'npc-2')
+    const house = scenario.cells[4][7].object
+    if (house?.type !== 'building') throw new Error('house missing')
+    scenario.cells[4][7] = { ...scenario.cells[4][7], object: { ...house, hitPoints: 1 } }
+    scenario.cells[4][0] = { ...scenario.cells[4][0], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 1, knights: 0 }, health: 1 } }
+    const match = createMatch(scenario)
+    expect(civilianHousingCapacityFor(match, 'npc-2')).toBe(30)
+    const attacked = moveOrAttack(match, { column: 0, row: 4 }, { column: 7, row: 4 })
+    if (!attacked.ok) throw new Error('ranged attack failed')
+    expect(civilianHousingCapacityFor(attacked.state, 'npc-2')).toBe(20)
+  })
+
+  it('uses per-building wall and barbican mitigation rules', () => {
+    expect(buildingRules.wall.incomingDamageMultiplier).toBe(0.35)
+    expect(buildingRules.tower.resourceCost.iron).toBeUndefined()
+    expect(buildingRules.barbican).toMatchObject({
+      actionCost: 4,
+      resourceCost: { wood: 16, stone: 28, iron: 2, gold: 8 },
+      hitPoints: 20,
+      allowsFriendlyPassage: true,
+    })
+    expect(buildingRules.barbican.hitPoints).toBeLessThan(buildingRules.tower.hitPoints)
+    expect(buildingRules.barbican.incomingDamageMultiplier).toBeUndefined()
+    const scenario = createScenario()
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 10, spearmen: 0, archers: 0, knights: 0 } } }
+    scenario.cells[4][5] = { ...scenario.cells[4][5], object: { type: 'building', kind: 'barbican', ownerId: 'npc-2', hitPoints: 20, maxHitPoints: 20 } }
+    const attacked = moveOrAttack(createMatch(scenario), { column: 4, row: 4 }, { column: 5, row: 4 })
+    if (!attacked.ok) throw new Error('barbican attack failed')
+    expect(attacked.state.scenario.cells[4][5].object).toMatchObject({ hitPoints: 10 })
+  })
+
+  it('moves through an owned barbican while enemies must break it first', () => {
+    const createGateScenario = (units: TroopComposition, ownerId = 'player') => {
+      const scenario = createScenario()
+      placeBuilding(scenario, 'barbican', 2, 4, ownerId)
+      scenario.cells[4][1] = { ...scenario.cells[4][1], object: { type: 'squad', ownerId: 'player', units } }
+      return scenario
+    }
+
+    const militia = createGateScenario({ militia: 1, spearmen: 0, archers: 0, knights: 0 })
+    const crossed = moveOrAttack(createMatch(militia), { column: 1, row: 4 }, { column: 3, row: 4 })
+    if (!crossed.ok) throw new Error('barbican passage failed')
+    expect(crossed.state.ordersRemaining).toBe(6)
+    expect(crossed.state.scenario.cells[4][1].object).toBeUndefined()
+    expect(crossed.state.scenario.cells[4][2].object).toMatchObject({ type: 'building', kind: 'barbican' })
+    expect(crossed.state.scenario.cells[4][3].object).toMatchObject({ type: 'squad', units: { militia: 1 } })
+
+    const knights = createGateScenario({ militia: 0, spearmen: 0, archers: 0, knights: 1 })
+    const knightCrossing = moveOrAttack(createMatch(knights), { column: 1, row: 4 }, { column: 3, row: 4 })
+    expect(knightCrossing.ok && knightCrossing.state.ordersRemaining).toBe(4)
+
+    const enemyGate = createGateScenario({ militia: 1, spearmen: 0, archers: 0, knights: 0 }, 'npc-2')
+    expect(moveOrAttack(createMatch(enemyGate), { column: 1, row: 4 }, { column: 3, row: 4 })).toMatchObject({ ok: false, reason: 'not-adjacent' })
   })
 })

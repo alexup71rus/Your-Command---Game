@@ -13,7 +13,7 @@ import {
 } from '../game/camera'
 import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game/map'
 import { maxSquadHealth, squadHealth } from '../game/match'
-import { squadMovementOrderCost } from '../game/movement'
+import { squadMovementOrderCost, squadMovementOrderCostBetween } from '../game/movement'
 import { isCastleSiteValid, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
 import { isCellVisible, isObjectVisible, visibleObjectAt, type VisibilityMap } from '../game/visibility'
 
@@ -36,7 +36,7 @@ interface GridCanvasProps {
   unitAnimation?: { key: number; from: CellPosition; to: CellPosition } | null
   visibility?: VisibilityMap | null
   viewerId?: string
-  actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; units: TroopComposition } | null
+  actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; units: TroopComposition } | { kind: 'target' } | null
   isActionCellValid?: (position: CellPosition) => boolean
   cameraCommand?: CameraCommand | null
   onContextRequest: (request: MapContextRequest) => void
@@ -78,7 +78,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
   useEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
@@ -108,6 +108,7 @@ export function GridCanvas(props: GridCanvasProps) {
     let animationFrame: number | null = null
     let lastUnitAnimationKey = 0
     let activeUnitAnimation: { key: number; from: CellPosition; to: CellPosition; startedAt: number } | null = null
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const requestDraw = () => {
       if (animationFrame !== null) return
@@ -431,7 +432,7 @@ export function GridCanvas(props: GridCanvasProps) {
       context.textAlign = 'center'; context.textBaseline = 'middle'
       if (size < 25 || activeTroops.length === 0) {
         context.fillStyle = ghost ? '#192019' : '#ead99f'
-        context.font = `700 ${Math.max(8, size * 0.27)}px system-ui`
+        context.font = `700 ${Math.max(10, size * 0.27)}px system-ui`
         context.fillText(String(total), x + size * 0.5, y + size * 0.48)
         context.restore()
         return
@@ -493,8 +494,9 @@ export function GridCanvas(props: GridCanvasProps) {
       const map = current.map
       if (current.unitAnimation && current.unitAnimation.key !== lastUnitAnimationKey) {
         lastUnitAnimationKey = current.unitAnimation.key
-        activeUnitAnimation = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? null : { ...current.unitAnimation, startedAt: performance.now() }
+        activeUnitAnimation = reducedMotionQuery.matches ? null : { ...current.unitAnimation, startedAt: performance.now() }
       }
+      if (activeUnitAnimation && reducedMotionQuery.matches) activeUnitAnimation = null
       const animationElapsed = activeUnitAnimation ? performance.now() - activeUnitAnimation.startedAt : gameConfig.camera.unitMoveAnimationMs
       const animationProgress = Math.min(1, animationElapsed / gameConfig.camera.unitMoveAnimationMs)
       if (activeUnitAnimation && animationProgress >= 1) activeUnitAnimation = null
@@ -602,9 +604,10 @@ export function GridCanvas(props: GridCanvasProps) {
       const firstObjectColumn = Math.max(0, firstColumn - 1)
       for (let row = firstObjectRow; row < lastRow; row += 1) {
         for (let column = firstObjectColumn; column < lastColumn; column += 1) {
-          const object = map[row][column].object
+          const object = current.viewerId
+            ? visibleObjectAt(map, current.visibility, current.viewerId, { column, row })
+            : map[row][column].object
           if (!object) continue
-          if (current.viewerId && !isObjectVisible(map, current.visibility, current.viewerId, { column, row })) continue
           if (object.type === 'building' && object.footprint && (object.footprint.originColumn !== column || object.footprint.originRow !== row)) continue
           if (activeUnitAnimation && row === activeUnitAnimation.to.row && column === activeUnitAnimation.to.column && object.type === 'squad') continue
           const participant = current.participants?.find((candidate) => candidate.id === object.ownerId)
@@ -617,6 +620,20 @@ export function GridCanvas(props: GridCanvasProps) {
           if (object.type === 'castle') drawCastle(x, y, cellSize, color)
           else if (object.type === 'building') drawBuilding(x, y, Math.max(objectWidth, objectHeight), object.kind, color)
           else drawSquad(x, y, cellSize, object.units, color)
+          if (object.type === 'building' && object.kind === 'tower' && object.garrison && cellSize >= 22) {
+            const centerX = x + cellSize * .75
+            const centerY = y + cellSize * .25
+            const radius = Math.max(7, cellSize * .15)
+            context.save()
+            context.fillStyle = '#1b241d'; context.strokeStyle = color; context.lineWidth = Math.max(1, cellSize * .025)
+            context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.fill(); context.stroke()
+            context.strokeStyle = '#ead99f'; context.lineWidth = Math.max(1, radius * .14); context.lineCap = 'round'
+            context.beginPath(); context.arc(centerX - radius * .18, centerY, radius * .46, -Math.PI * .5, Math.PI * .5); context.stroke()
+            context.beginPath(); context.moveTo(centerX - radius * .18, centerY - radius * .46); context.lineTo(centerX + radius * .08, centerY); context.lineTo(centerX - radius * .18, centerY + radius * .46); context.moveTo(centerX - radius * .35, centerY); context.lineTo(centerX + radius * .42, centerY); context.stroke()
+            context.fillStyle = '#c7aa51'; context.beginPath(); context.arc(centerX + radius * .68, centerY + radius * .65, radius * .48, 0, Math.PI * 2); context.fill()
+            context.fillStyle = '#172018'; context.font = `800 ${Math.max(7, radius * .7)}px system-ui`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(String(object.garrison.archers), centerX + radius * .68, centerY + radius * .67)
+            context.restore()
+          }
           if (object.type === 'squad' && squadHealth(object) < maxSquadHealth(object) && cellSize >= 18) {
             const healthRatio = squadHealth(object) / maxSquadHealth(object)
             context.fillStyle = 'rgba(7,9,7,.72)'; context.fillRect(x + cellSize * 0.16, y + cellSize * 0.87, cellSize * 0.68, Math.max(2, cellSize * 0.055))
@@ -684,19 +701,7 @@ export function GridCanvas(props: GridCanvasProps) {
             { dx: 0, dy: 1, glyph: '↓' },
             { dx: 0, dy: -1, glyph: '↑' },
           ]
-          directions.forEach(({ dx, dy, glyph }) => {
-            const column = current.movementSource!.column + dx
-            const row = current.movementSource!.row + dy
-            const cell = map[row]?.[column]
-            if (!cell || cell.landform === 'peak') return
-            const target = current.viewerId
-              ? visibleObjectAt(map, current.visibility, current.viewerId, { column, row })
-              : cell.object
-            let kind: 'move' | 'merge' | 'attack' | null = null
-            if (!target && (current.movementOrdersRemaining ?? 0) >= squadMovementOrderCost(source, cell)) kind = 'move'
-            else if (target && target.ownerId !== source.ownerId && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
-            else if (target?.type === 'squad' && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.squadReorganizationOrderCost && sourceSize + Object.values(target.units).reduce((sum, amount) => sum + amount, 0) <= gameConfig.turn.squadCapacity) kind = 'merge'
-            if (!kind) return
+          const drawOrderMarker = (column: number, row: number, kind: 'move' | 'merge' | 'attack', glyph: string) => {
             const color = kind === 'attack' ? '#c97060' : kind === 'merge' ? '#78aa8d' : '#d6b85e'
             const x = mapOrigin.x + column * cellSize
             const y = mapOrigin.y + row * cellSize
@@ -713,10 +718,31 @@ export function GridCanvas(props: GridCanvasProps) {
             context.fillStyle = color
             context.beginPath(); context.arc(badgeX, badgeY, Math.max(7, cellSize * .13), 0, Math.PI * 2); context.fill()
             context.fillStyle = '#172019'
-            context.font = `800 ${Math.max(9, cellSize * .2)}px system-ui`
+            context.font = `800 ${Math.max(10, cellSize * .2)}px system-ui`
             context.textAlign = 'center'; context.textBaseline = 'middle'
             context.fillText(kind === 'merge' ? '+' : kind === 'attack' ? '×' : glyph, badgeX, badgeY)
             context.restore()
+          }
+          directions.forEach(({ dx, dy, glyph }) => {
+            const column = current.movementSource!.column + dx
+            const row = current.movementSource!.row + dy
+            const cell = map[row]?.[column]
+            if (!cell || cell.landform === 'peak') return
+            const target = current.viewerId
+              ? visibleObjectAt(map, current.visibility, current.viewerId, { column, row })
+              : cell.object
+            let kind: 'move' | 'merge' | 'attack' | null = null
+            if (!target && (current.movementOrdersRemaining ?? 0) >= squadMovementOrderCost(source, cell)) kind = 'move'
+            else if (target && target.ownerId !== source.ownerId && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
+            else if (target?.type === 'squad' && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.squadReorganizationOrderCost && sourceSize + Object.values(target.units).reduce((sum, amount) => sum + amount, 0) <= gameConfig.turn.squadCapacity) kind = 'merge'
+            if (!kind) return
+            drawOrderMarker(column, row, kind, glyph)
+          })
+          directions.forEach(({ dx, dy, glyph }) => {
+            const landing = { column: current.movementSource!.column + dx * 2, row: current.movementSource!.row + dy * 2 }
+            const cost = squadMovementOrderCostBetween(map, source, current.movementSource!, landing)
+            if (cost === null || (current.movementOrdersRemaining ?? 0) < cost) return
+            drawOrderMarker(landing.column, landing.row, 'move', glyph)
           })
           if ((source.units.archers ?? 0) > 0 && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) {
             directions.forEach(({ dx, dy }) => {
@@ -743,7 +769,7 @@ export function GridCanvas(props: GridCanvasProps) {
                     context.fillStyle = 'rgba(176, 72, 58, .22)'; context.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2)
                     context.strokeStyle = '#d97860'; context.lineWidth = Math.max(1.5, Math.min(2.5, camera.zoom * 2)); context.setLineDash([3, 3]); context.strokeRect(x + 3, y + 3, Math.max(0, cellSize - 6), Math.max(0, cellSize - 6)); context.setLineDash([])
                     context.fillStyle = '#d97860'; context.beginPath(); context.arc(x + cellSize * .76, y + cellSize * .24, Math.max(7, cellSize * .13), 0, Math.PI * 2); context.fill()
-                    context.fillStyle = '#172019'; context.font = `800 ${Math.max(8, cellSize * .17)}px system-ui`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText('◎', x + cellSize * .76, y + cellSize * .24)
+                    context.fillStyle = '#172019'; context.font = `800 ${Math.max(10, cellSize * .17)}px system-ui`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText('◎', x + cellSize * .76, y + cellSize * .24)
                     context.restore()
                   }
                   break
@@ -770,7 +796,7 @@ export function GridCanvas(props: GridCanvasProps) {
         context.fillStyle = valid ? 'rgba(211, 180, 89, .16)' : 'rgba(174, 72, 61, .18)'
         context.fillRect(x, y, previewWidth, previewHeight)
         if (current.actionPreview.kind === 'building') drawBuilding(x, y, Math.max(previewWidth, previewHeight), current.actionPreview.building, valid ? '#d2b45f' : '#b45f51', true)
-        else drawSquad(x, y, cellSize, current.actionPreview.units, valid ? '#d2b45f' : '#b45f51', true)
+        else if (current.actionPreview.kind === 'squad') drawSquad(x, y, cellSize, current.actionPreview.units, valid ? '#d2b45f' : '#b45f51', true)
       }
 
       if (current.selectedCell) {

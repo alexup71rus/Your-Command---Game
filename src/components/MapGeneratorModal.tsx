@@ -15,6 +15,7 @@ import type { SavedMapDraft } from '../game/savedMaps'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
 import { CloseIcon } from './InterfaceIcons'
 import { SelectField } from './ui/SelectField'
+import { useModalFocus } from '../hooks/useModalFocus'
 
 interface MapGeneratorModalProps {
   onApply: (scenario: MapScenario) => void
@@ -24,7 +25,7 @@ interface MapGeneratorModalProps {
   participantCount: number
   savedMapCount: number
   onParticipantChange: (count: number) => void
-  onSave: (draft: SavedMapDraft) => void
+  onSave: (draft: SavedMapDraft) => boolean
 }
 
 const colorForCell = (elevation: number, vegetation: boolean) => {
@@ -58,6 +59,7 @@ function RangeControl({
 }
 
 export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
+  const modalRef = useModalFocus<HTMLElement>()
   const [settings, setSettings] = useState<GeneratorSettings>(defaultGeneratorSettings)
   const [manualGrid, setManualGrid] = useState<ManualHeightGrid>(createManualHeightGrid)
   const [mapName, setMapName] = useState(`${text.defaultMapName} ${savedMapCount + 1}`)
@@ -68,6 +70,9 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
   const previewRef = useRef<HTMLDivElement>(null)
   const [resolvedScenarioKey, setResolvedScenarioKey] = useState('')
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
+  const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const previewMap = useMemo(
     () => generateMap(deferredSettings, deferredManualGrid),
     [deferredManualGrid, deferredSettings],
@@ -78,8 +83,10 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
     [deferredManualGrid, deferredSettings, participantCount],
   )
   const scenarioReady = resolvedScenarioKey === scenarioKey ? scenarioResult : null
+  const scenarioCalculationSettled = resolvedScenarioKey === scenarioKey
+  const workerError = workerErrorKey === scenarioKey
   const previewPending = deferredSettings !== settings || deferredManualGrid !== manualGrid
-  const generationPending = previewPending || !scenarioReady
+  const generationPending = previewPending || !scenarioCalculationSettled
 
   useEffect(() => {
     const controller = new AbortController()
@@ -87,14 +94,16 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
       .then((result) => {
         setScenarioResult(result)
         setResolvedScenarioKey(scenarioKey)
+        setWorkerErrorKey(null)
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        setScenarioResult({ ok: false, reason: 'not-enough-land' })
+        setScenarioResult(null)
         setResolvedScenarioKey(scenarioKey)
+        setWorkerErrorKey(scenarioKey)
       })
     return () => controller.abort()
-  }, [deferredSettings.seed, participantCount, scenarioKey, scenarioMap])
+  }, [deferredSettings.seed, participantCount, retryKey, scenarioKey, scenarioMap])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -152,7 +161,7 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
           context.arc(x, y, 7, 0, Math.PI * 2)
           context.fill()
           context.fillStyle = '#101510'
-          context.font = '700 8px system-ui'
+          context.font = '700 10px system-ui'
           context.textAlign = 'center'
           context.textBaseline = 'middle'
           context.fillText(String(region.index + 1), x, y + 0.5)
@@ -222,10 +231,10 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
 
   return (
     <div className="generator-backdrop" onPointerDown={onClose}>
-      <section className="generator-modal" role="dialog" aria-modal="true" aria-labelledby="generator-title" onPointerDown={(event) => event.stopPropagation()}>
+      <section ref={modalRef} tabIndex={-1} className="generator-modal" role="dialog" aria-modal="true" aria-labelledby="generator-title" onPointerDown={(event) => event.stopPropagation()}>
         <header className="generator-header">
-          <div><span className="dev-label">{text.devLabel}</span><h2 id="generator-title">{text.title}</h2></div>
-          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close}><CloseIcon /></button>
+          <div><h2 id="generator-title">{text.title}</h2></div>
+          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close} data-modal-autofocus><CloseIcon /></button>
         </header>
 
         <div className="generator-body">
@@ -262,7 +271,8 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
             </div>
             <div className="map-preview" ref={previewRef}>
               <canvas ref={canvasRef} onPointerDown={paint} onPointerMove={paint} aria-label={text.previewAria} />
-              {!scenarioReady && <div className="map-preview-loader" aria-live="polite"><span aria-hidden="true" />{text.regionsCalculating}</div>}
+              {generationPending && !workerError && <div className="map-preview-loader" aria-live="polite"><span aria-hidden="true" />{text.regionsCalculating}</div>}
+              {workerError && <div className="map-preview-loader error" role="alert"><span aria-hidden="true">!</span>{text.workerError}<button type="button" onClick={() => setRetryKey((current) => current + 1)}>{text.retry}</button></div>}
               <div className="preview-legend"><span className="forest">{text.forest}</span><span className="plain">{text.plain}</span><span className="hill">{text.elevation}</span><span className="peak">{text.peak}</span></div>
             </div>
             <div className="generator-stats">
@@ -271,16 +281,17 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
               <span><em>{text.forestCoverage}</em><strong>{formatCoverage(stats.forests)}</strong><small>{stats.forests.toLocaleString(locale)} {text.cells}</small></span>
               <span className="seed-stat"><em>{text.seed}</em><strong>{deferredSettings.seed}</strong></span>
             </div>
-            {scenarioReady && !scenarioReady.ok && <div className="region-validation invalid"><span>!</span>{scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : text.regionsError}</div>}
+            {scenarioReady && !scenarioReady.ok && <div className="region-validation invalid"><span>!</span>{scenarioReady.reason === 'unbalanced-regions' ? text.regionsUnbalanced : scenarioReady.reason === 'unviable-starts' ? text.regionsUnviable : text.regionsError}</div>}
+            {saveError && <div className="region-validation invalid" role="alert"><span>!</span>{text.saveError}</div>}
             <p className="generator-note">{text.note}</p>
           </div>
         </div>
 
         <footer className="generator-footer">
-          <label className="generator-map-name"><span>{text.mapName}</span><input value={mapName} maxLength={48} onChange={(event) => setMapName(event.target.value)} /></label>
-          <button type="button" className="secondary save-map-button" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onSave({ name: mapName.trim() || `${text.defaultMapName} ${savedMapCount + 1}`, settings, manualGrid }) }}><span>{text.saveMap}</span></button>
+          <label className="generator-map-name"><span>{text.mapName}</span><input value={mapName} maxLength={48} onChange={(event) => { setMapName(event.target.value); setSaveError(false) }} /></label>
+          <button type="button" className="secondary save-map-button" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) setSaveError(!onSave({ name: mapName.trim() || `${text.defaultMapName} ${savedMapCount + 1}`, settings, manualGrid })) }}><span>{text.saveMap}</span></button>
           <button type="button" className="secondary" onClick={regenerate}>{text.newVariant}</button>
-          <button type="button" className="primary" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onApply(scenarioReady.scenario) }}>{text.apply}</button>
+          <button type="button" className="primary" disabled={generationPending || !scenarioReady?.ok} onClick={() => { if (!generationPending && scenarioReady?.ok) onApply({ ...scenarioReady.scenario, name: mapName.trim() || `${text.defaultMapName} ${savedMapCount + 1}` }) }}>{text.apply}</button>
         </footer>
       </section>
     </div>

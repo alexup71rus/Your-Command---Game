@@ -1,9 +1,10 @@
 import type { GameMap } from './map'
-import { terrainMovementOrderMultiplier } from './movement'
+import { friendlyBarbicanPassage, terrainMovementOrderMultiplier } from './movement'
 import type { CellPosition } from './scenario'
 
 interface MovementPathOptions {
   canEnterOccupiedCell?: (position: CellPosition) => boolean
+  ownerId?: string
 }
 
 const directions = [
@@ -73,14 +74,31 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
     for (const direction of directions) {
       const next = { column: current.column + direction.column, row: current.row + direction.row }
       if (!insideMap(next)) continue
-      const nextIndex = next.row * columns + next.column
       const cell = map[next.row]?.[next.column]
-      if (!cell || cell.landform === 'peak' || (cell.object && !options.canEnterOccupiedCell?.(next))) continue
-      const cost = currentEntry.cost + terrainMovementOrderMultiplier(cell)
-      if (cost >= distances[nextIndex]) continue
-      distances[nextIndex] = cost
-      previous[nextIndex] = currentIndex
-      push({ index: nextIndex, cost, order: insertionOrder++ })
+      if (cell && cell.landform !== 'peak' && (!cell.object || options.canEnterOccupiedCell?.(next))) {
+        const nextIndex = next.row * columns + next.column
+        const cost = currentEntry.cost + terrainMovementOrderMultiplier(cell)
+        if (cost < distances[nextIndex]) {
+          distances[nextIndex] = cost
+          previous[nextIndex] = currentIndex
+          push({ index: nextIndex, cost, order: insertionOrder++ })
+        }
+      }
+
+      if (options.ownerId) {
+        const landing = { column: current.column + direction.column * 2, row: current.row + direction.row * 2 }
+        if (!insideMap(landing)) continue
+        const passage = friendlyBarbicanPassage(map, current, landing, options.ownerId)
+        if (!passage) continue
+        const landingIndex = landing.row * columns + landing.column
+        const passageCost = currentEntry.cost
+          + terrainMovementOrderMultiplier(passage.middleCell)
+          + terrainMovementOrderMultiplier(passage.destination)
+        if (passageCost >= distances[landingIndex]) continue
+        distances[landingIndex] = passageCost
+        previous[landingIndex] = currentIndex
+        push({ index: landingIndex, cost: passageCost, order: insertionOrder++ })
+      }
     }
   }
 

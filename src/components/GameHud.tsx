@@ -1,7 +1,7 @@
 import { resourceIds, troopKinds } from '../config/rules'
 import type { LocaleDictionary } from '../config/localization'
 import { gameConfig } from '../config/game'
-import { civilianPopulationCapacityFor, humanDomain, troopTotals, turnResourceDeltaFor, workforceFor, type MatchState } from '../game/match'
+import { armyCapacity, civilianPopulationCapacityFor, humanDomain, totalArmySize, troopTotals, turnResourceDeltaFor, workforceFor, type MatchState } from '../game/match'
 
 interface GameHudProps {
   match: MatchState
@@ -34,6 +34,7 @@ export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn
         <section className="hud-panel army-panel" aria-label={text.hud.army}>
           <dl className="compact-status-list troop-list">
             {troopKinds.map((troop) => <div key={troop}><dt>{text.game.troopNames[troop]}</dt><dd>{troops[troop]}</dd></div>)}
+            <div className="army-total"><dt>{text.game.armyLimit}</dt><dd>{totalArmySize(match)}/{armyCapacity}</dd></div>
           </dl>
         </section>
       </header>

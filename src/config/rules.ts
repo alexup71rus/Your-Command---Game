@@ -7,7 +7,9 @@ export interface BuildingRule {
   resourceCost: ResourceAmount
   production: ResourceAmount
   hitPoints: number
-  populationCapacity: number
+  housingCapacity?: number
+  incomingDamageMultiplier?: number
+  allowsFriendlyPassage?: boolean
   populationGrowth?: number
   upkeep?: ResourceAmount
   placement: 'open' | 'plain' | 'hill'
@@ -21,6 +23,15 @@ export interface BuildingRule {
     maximumPerTurn: number
   }
   footprint?: { columns: number; rows: number }
+  garrison?: {
+    troop: 'archers'
+    capacity: number
+    transferOrderCost: number
+    attackOrderCost: number
+    attackRange: number
+    visibilityRadius: number
+    heightDamageMultiplier: number
+  }
 }
 
 export interface TroopRule {
@@ -54,7 +65,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 28, stone: 8, gold: 8 },
     production: { grain: 18 },
     hitPoints: 10,
-    populationCapacity: 0,
     placement: 'plain',
     workersRequired: 2,
     footprint: { columns: 2, rows: 2 },
@@ -64,7 +74,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 18, stone: 5, gold: 8 },
     production: { meat: 6 },
     hitPoints: 12,
-    populationCapacity: 0,
     placement: 'open',
     minimumAdjacentForestCells: 2,
     workersRequired: 1,
@@ -74,7 +83,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 14, stone: 5, gold: 5 },
     production: { wood: 16 },
     hitPoints: 15,
-    populationCapacity: 0,
     placement: 'open',
     minimumAdjacentForestCells: 1,
     workersRequired: 1,
@@ -84,7 +92,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 20, gold: 8 },
     production: { stone: 12 },
     hitPoints: 18,
-    populationCapacity: 0,
     placement: 'hill',
     workersRequired: 2,
     footprint: { columns: 2, rows: 2 },
@@ -94,7 +101,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 18, stone: 8, gold: 10 },
     production: { ore: 6 },
     hitPoints: 15,
-    populationCapacity: 0,
     placement: 'hill',
     workersRequired: 1,
   },
@@ -104,7 +110,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     production: {},
     processing: { input: 'ore', output: 'iron', maximumPerTurn: 5 },
     hitPoints: 22,
-    populationCapacity: 0,
     placement: 'open',
     workersRequired: 2,
     footprint: { columns: 2, rows: 2 },
@@ -114,7 +119,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 20, stone: 12, gold: 8 },
     production: {},
     hitPoints: 14,
-    populationCapacity: 0,
     foodServiceCapacity: 20,
     placement: 'open',
     workersRequired: 1,
@@ -124,7 +128,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 25, stone: 10 },
     production: {},
     hitPoints: 10,
-    populationCapacity: 10,
+    housingCapacity: 10,
     placement: 'open',
     requiresFoodServiceAccess: true,
   },
@@ -133,7 +137,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 36, stone: 30, gold: 18 },
     production: {},
     hitPoints: 25,
-    populationCapacity: 0,
     placement: 'open',
     footprint: { columns: 2, rows: 2 },
   },
@@ -143,7 +146,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     production: {},
     upkeep: { gold: 4 },
     hitPoints: 30,
-    populationCapacity: 0,
     populationGrowth: 1,
     placement: 'open',
     footprint: { columns: 2, rows: 2 },
@@ -153,7 +155,6 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { wood: 32, stone: 18, gold: 20 },
     production: {},
     hitPoints: 18,
-    populationCapacity: 0,
     placement: 'open',
   },
   wall: {
@@ -161,23 +162,31 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     resourceCost: { stone: 18, wood: 4 },
     production: {},
     hitPoints: 50,
-    populationCapacity: 0,
+    incomingDamageMultiplier: 0.35,
     placement: 'open',
   },
   tower: {
     actionCost: 6,
-    resourceCost: { wood: 24, stone: 42, iron: 6, gold: 10 },
+    resourceCost: { wood: 24, stone: 42, gold: 10 },
     production: {},
     hitPoints: 30,
-    populationCapacity: 0,
     placement: 'open',
+    garrison: {
+      troop: 'archers',
+      capacity: 5,
+      transferOrderCost: 2,
+      attackOrderCost: 1,
+      attackRange: 10,
+      visibilityRadius: 12,
+      heightDamageMultiplier: 1.2,
+    },
   },
   barbican: {
-    actionCost: 6,
-    resourceCost: { wood: 30, stone: 60, iron: 10, gold: 20 },
+    actionCost: 4,
+    resourceCost: { wood: 16, stone: 28, iron: 2, gold: 8 },
     production: {},
-    hitPoints: 70,
-    populationCapacity: 0,
+    hitPoints: 20,
+    allowsFriendlyPassage: true,
     placement: 'open',
   },
 }

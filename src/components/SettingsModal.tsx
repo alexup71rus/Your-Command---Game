@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { supportedLocales, type Locale, type LocaleDictionary } from '../config/localization'
 import { CloseIcon, SoundIcon } from './InterfaceIcons'
 import { ConfirmDialog } from './ui/ConfirmDialog'
+import { useModalFocus } from '../hooks/useModalFocus'
 
 interface SettingsModalProps {
   locale: Locale
@@ -34,9 +35,12 @@ export function SettingsModal({
   onOpenSavedGames,
 }: SettingsModalProps) {
   const [confirmingExit, setConfirmingExit] = useState(false)
+  const modalRef = useModalFocus<HTMLElement>()
   return (
     <div className="settings-backdrop" onPointerDown={onClose}>
       <section
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-modal"
         role="dialog"
         aria-modal="true"
@@ -45,7 +49,7 @@ export function SettingsModal({
       >
         <header className="settings-header">
           <div><span className="settings-kicker">ESC</span><h2 id="settings-title">{text.settings.title}</h2></div>
-          <button type="button" className="settings-close" onClick={onClose} aria-label={text.settings.close}><CloseIcon /></button>
+          <button type="button" className="settings-close" onClick={onClose} aria-label={text.settings.close} data-modal-autofocus><CloseIcon /></button>
         </header>
 
         <div className="settings-content">

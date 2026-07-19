@@ -26,6 +26,7 @@ export const gameConfig = {
     maxHillCoverageSpread: 0.65,
     maxRegionCenterOffset: 0.58,
     maxRegionPerimeterRatio: 8,
+    minimumClearStartCells: 24,
   },
   turn: {
     maxOrders: 8,
@@ -41,6 +42,9 @@ export const gameConfig = {
     startingPopulation: 12,
     opponentDelayMs: 1_000,
     autoMoveStepDelayMs: 300,
+  },
+  army: {
+    capacity: 100,
   },
   economy: {
     civilianFoodDivisor: 4,

@@ -20,12 +20,18 @@ export interface BuildingObject {
   ownerId: string
   hitPoints: number
   maxHitPoints: number
+  garrison?: TowerGarrison
   footprint?: {
     originColumn: number
     originRow: number
     columns: number
     rows: number
   }
+}
+
+export interface TowerGarrison {
+  archers: number
+  health: number
 }
 
 export interface SquadObject {
