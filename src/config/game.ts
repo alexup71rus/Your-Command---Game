@@ -38,6 +38,7 @@ export const gameConfig = {
     basePopulationCapacity: 20,
     startingPopulation: 12,
     opponentDelayMs: 1_000,
+    autoMoveStepDelayMs: 300,
   },
   audio: {
     defaultVolume: 70,

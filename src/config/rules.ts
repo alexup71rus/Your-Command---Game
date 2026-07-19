@@ -10,7 +10,8 @@ export interface BuildingRule {
   populationCapacity: number
   populationGrowth?: number
   upkeep?: ResourceAmount
-  placement: 'open' | 'forest' | 'hill'
+  placement: 'open' | 'plain' | 'forest' | 'hill'
+  footprint?: { columns: number; rows: number }
 }
 
 export interface TroopRule {
@@ -43,7 +44,8 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     production: { grain: 18, meat: 2 },
     hitPoints: 10,
     populationCapacity: 0,
-    placement: 'open',
+    placement: 'plain',
+    footprint: { columns: 2, rows: 2 },
   },
   lumberMill: {
     actionCost: 4,
@@ -60,6 +62,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     hitPoints: 18,
     populationCapacity: 0,
     placement: 'hill',
+    footprint: { columns: 2, rows: 2 },
   },
   house: {
     actionCost: 4,
@@ -76,6 +79,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     hitPoints: 25,
     populationCapacity: 0,
     placement: 'open',
+    footprint: { columns: 2, rows: 2 },
   },
   church: {
     actionCost: 6,
@@ -86,6 +90,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     populationCapacity: 0,
     populationGrowth: 1,
     placement: 'open',
+    footprint: { columns: 2, rows: 2 },
   },
   market: {
     actionCost: 4,

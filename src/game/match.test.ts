@@ -6,6 +6,7 @@ import {
   build,
   createMatch,
   defaultSplit,
+  demolish,
   endTurn,
   humanDomain,
   foodDemandFor,
@@ -83,6 +84,11 @@ describe('match rules', () => {
     if (!built.ok) return
     expect(built.state.ordersRemaining).toBe(4)
     expect(built.state.scenario.cells[2][2].object).toMatchObject({ type: 'building', kind: 'farm' })
+    expect([
+      built.state.scenario.cells[2][2], built.state.scenario.cells[2][3],
+      built.state.scenario.cells[3][2], built.state.scenario.cells[3][3],
+    ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'farm')).toBe(true)
+    expect(productionFor(built.state, 'player').grain).toBe(26)
     expect(match.scenario.cells[2][2].object).toBeUndefined()
 
     const advanced = endTurn(built.state)
@@ -95,6 +101,50 @@ describe('match rules', () => {
     expect(build(match, 'farm', { column: 5, row: 2 })).toMatchObject({ ok: false, reason: 'outside-domain' })
   })
 
+  it('validates, removes and destroys a farm as one four-cell building', () => {
+    const blockedScenario = createScenario()
+    blockedScenario.cells[3][3] = { ...blockedScenario.cells[3][3], object: { type: 'building', kind: 'wall', ownerId: 'player', hitPoints: 50, maxHitPoints: 50 } }
+    expect(build(createMatch(blockedScenario), 'farm', { column: 2, row: 2 })).toMatchObject({ ok: false, reason: 'occupied' })
+    expect(build(createMatch(createScenario()), 'farm', { column: 7, row: 7 })).toMatchObject({ ok: false, reason: 'invalid-terrain' })
+
+    const built = build(createMatch(createScenario()), 'farm', { column: 2, row: 2 })
+    if (!built.ok) throw new Error('farm building failed')
+    const removed = demolish(built.state, { column: 3, row: 3 })
+    expect(removed.ok).toBe(true)
+    if (!removed.ok) return
+    expect([removed.state.scenario.cells[2][2], removed.state.scenario.cells[2][3], removed.state.scenario.cells[3][2], removed.state.scenario.cells[3][3]].every((cell) => !cell.object)).toBe(true)
+
+    const cells = built.state.scenario.cells.map((row) => row.map((cell) => ({ ...cell, object: cell.object ? { ...cell.object } : undefined })))
+    for (const [column, row] of [[2, 2], [3, 2], [2, 3], [3, 3]]) {
+      const object = cells[row][column].object
+      if (object?.type === 'building') cells[row][column].object = { ...object, ownerId: 'npc-2', hitPoints: 3 }
+    }
+    cells[2][1].object = { type: 'squad', ownerId: 'player', units: { militia: 3, spearmen: 0, archers: 0, knights: 0 } }
+    const attacked = moveOrAttack({ ...built.state, ordersRemaining: 8, scenario: { ...built.state.scenario, cells } }, { column: 1, row: 2 }, { column: 2, row: 2 })
+    expect(attacked.ok).toBe(true)
+    if (!attacked.ok) return
+    expect(attacked.state.scenario.cells[2][2].object).toMatchObject({ type: 'squad', ownerId: 'player' })
+    expect(attacked.state.scenario.cells[2][3].object).toBeUndefined()
+    expect(attacked.state.scenario.cells[3][2].object).toBeUndefined()
+    expect(attacked.state.scenario.cells[3][3].object).toBeUndefined()
+  })
+
+  it('builds a quarry over four hill cells without multiplying its production', () => {
+    const scenario = createScenario()
+    for (const [column, row] of [[1, 2], [2, 2], [1, 3], [2, 3]]) {
+      scenario.cells[row][column] = { ...scenario.cells[row][column], elevation: .65, landform: 'hill' }
+    }
+    const quarry = build(createMatch(scenario), 'quarry', { column: 1, row: 2 })
+    expect(quarry.ok).toBe(true)
+    if (!quarry.ok) return
+    expect([
+      quarry.state.scenario.cells[2][1], quarry.state.scenario.cells[2][2],
+      quarry.state.scenario.cells[3][1], quarry.state.scenario.cells[3][2],
+    ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'quarry')).toBe(true)
+    expect(productionFor(quarry.state, 'player').stone).toBe(12)
+    expect(productionFor(quarry.state, 'player').iron).toBe(2)
+  })
+
   it('recruits into a cell by the castle and spends people and two orders', () => {
     const match = createMatch(createScenario())
     const result = recruit(match, 'militia', 4, { column: 1, row: 2 })
@@ -104,6 +154,21 @@ describe('match rules', () => {
     expect(humanDomain(result.state).population).toBe(gameConfig.turn.startingPopulation - 4)
     expect(troopTotals(result.state, 'player').militia).toBe(4)
     expect(recruit(match, 'militia', 1, { column: 4, row: 4 })).toMatchObject({ ok: false, reason: 'requires-barracks' })
+  })
+
+  it('uses the full perimeter of a four-cell barracks for recruitment', () => {
+    const barracks = build(createMatch(createScenario()), 'barracks', { column: 1, row: 2 })
+    expect(barracks.ok).toBe(true)
+    if (!barracks.ok) return
+    expect([
+      barracks.state.scenario.cells[2][1], barracks.state.scenario.cells[2][2],
+      barracks.state.scenario.cells[3][1], barracks.state.scenario.cells[3][2],
+    ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'barracks')).toBe(true)
+    const recruited = recruit(barracks.state, 'militia', 1, { column: 3, row: 2 })
+    expect(recruited.ok).toBe(true)
+    if (!recruited.ok) return
+    expect(recruited.state.ordersRemaining).toBe(0)
+    expect(recruited.state.scenario.cells[2][3].object).toMatchObject({ type: 'squad', units: { militia: 1 } })
   })
 
   it('charges two orders when a squad containing knights moves', () => {
@@ -123,6 +188,10 @@ describe('match rules', () => {
     const church = build(createMatch(createScenario()), 'church', { column: 2, row: 2 })
     expect(church.ok).toBe(true)
     if (!church.ok) return
+    expect([
+      church.state.scenario.cells[2][2], church.state.scenario.cells[2][3],
+      church.state.scenario.cells[3][2], church.state.scenario.cells[3][3],
+    ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'church')).toBe(true)
     expect(turnResourceDeltaFor(church.state, 'player').gold).toBe(4)
     expect(turnResourceDeltaFor(church.state, 'player').grain).toBe(4)
     const advanced = endTurn(church.state)

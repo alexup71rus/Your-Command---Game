@@ -84,6 +84,8 @@ export interface LocaleDictionary {
     moveHint: string
     knightMoveHint: string
     archerRangeHint: string
+    routeUnavailable: string
+    routeOrdersFinished: string
     splitHint: string
     cancel: string
     split: string
@@ -135,6 +137,7 @@ export interface LocaleDictionary {
   contextMenu: {
     title: string
     cell: string
+    goHere: string
     splitSquad: string
     mergeSquads: string
     removeObject: string

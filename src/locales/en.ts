@@ -32,9 +32,9 @@ const en: LocaleDictionary = {
     resourceNames: { wood: 'Wood', stone: 'Stone', iron: 'Iron', grain: 'Grain', meat: 'Meat', gold: 'Gold' },
     buildingNames: { farm: 'Farm', lumberMill: 'Lumber mill', quarry: 'Quarry', house: 'House', barracks: 'Barracks', church: 'Church', market: 'Market', wall: 'Wall', tower: 'Tower', barbican: 'Barbican' },
     buildingDescriptions: {
-      farm: 'Produces grain and some meat on open plains.', lumberMill: 'Produces wood and must be built in a forest.', quarry: 'Extracts stone and iron on a clear hill.',
-      house: 'Raises the population capacity by 10.', barracks: 'Allows squads to form on adjacent cells.',
-      church: 'Improves population growth but costs 4 gold in upkeep each turn.',
+      farm: 'Occupies a 2 × 2 plot and produces grain and some meat on open plains.', lumberMill: 'Produces wood and must be built in a forest.', quarry: 'Occupies a 2 × 2 plot and extracts stone and iron on a clear hill.',
+      house: 'Raises the population capacity by 10.', barracks: 'Occupies a 2 × 2 plot and forms squads around its perimeter.',
+      church: 'Occupies a 2 × 2 plot, improves population growth and costs 4 gold per turn.',
       market: 'Lets you sell surpluses and buy resources you are missing.',
       wall: 'A durable barrier that takes reduced damage from ordinary troops.', tower: 'A fortified point for future garrisons and control of passages.',
       barbican: 'A heavy fortification protecting a key entrance to the domain.',
@@ -44,7 +44,7 @@ const en: LocaleDictionary = {
     selectedCell: 'Selected cell', selectCell: 'Select an object or cell on the map', emptyCell: 'Open ground', castle: 'Castle', squad: 'Squad', ownObject: 'Your object', enemyObject: 'Foreign object',
     terrainPlain: 'Plain', terrainHill: 'Height', terrainForest: 'Forest', hitPoints: 'Durability', squadSize: 'Troops', squadHealth: 'Endurance', orders: 'orders', perTurn: 'per turn',
     build: 'Place', recruit: 'Recruit', quantity: 'Quantity', placementMode: 'Construction', recruitmentMode: 'Form squad', splitMode: 'Split squad',
-    buildHint: 'Choose a suitable cell inside your domain.', recruitHint: 'Choose a cell next to your castle or barracks.', moveHint: 'Choose an adjacent cell to move, merge or attack.', knightMoveHint: 'A squad containing knights costs 2 orders per step.', archerRangeHint: 'Archers shoot in a straight line up to 5 cells away.', splitHint: 'Choose a free adjacent cell for the new squad.',
+    buildHint: 'Choose a suitable cell inside your domain.', recruitHint: 'Choose a cell next to your castle or barracks.', moveHint: 'Choose an adjacent cell to move, merge or attack.', knightMoveHint: 'A squad containing knights costs 2 orders per step.', archerRangeHint: 'Archers shoot in a straight line up to 5 cells away.', routeUnavailable: 'There is no clear path to that cell.', routeOrdersFinished: 'No orders remain — movement has stopped.', splitHint: 'Choose a free adjacent cell for the new squad.',
     cancel: 'Cancel', split: 'Split', endTurn: 'End turn', opponentTurn: 'Opponent turn', endTurnHint: 'Production yields resources while the population and army consume grain.', production: 'Production', foodDemand: 'Grain demand', populationCapacity: 'Population capacity',
     economyTitle: 'Treasury and supply', economyDescription: 'Forecast for the end of the current turn', taxes: 'Tax collection', taxRates: { none: 'No taxes', moderate: 'Moderate', extortionate: 'Extortionate' }, taxIncome: 'Taxes', upkeep: 'Upkeep', grainDemand: 'Grain consumption', nextTurn: 'After turn', populationChange: 'Population', stable: 'Supply is sufficient', deficit: 'Deficit expected', marketTitle: 'Market', marketDescription: 'Trading costs no orders. Buying always costs more than selling.', buy: 'Buy', sell: 'Sell',
     victoryTitle: 'The domains are conquered', victoryDescription: 'Every foreign castle has fallen. The map remains available for inspection.', continue: 'Continue viewing',
@@ -64,7 +64,7 @@ const en: LocaleDictionary = {
     title: 'Sound', description: 'Interface and map action sounds', enable: 'Enable sound', disable: 'Disable sound', enabled: 'On', disabled: 'Off',
   },
   contextMenu: {
-    title: 'Cell actions', cell: 'Cell', splitSquad: 'Split squad', mergeSquads: 'Merge squads', removeObject: 'Remove object',
+    title: 'Cell actions', cell: 'Cell', goHere: 'Move here', splitSquad: 'Split squad', mergeSquads: 'Merge squads', removeObject: 'Remove object',
   },
   confirmation: {
     cancel: 'Cancel', deleteMapTitle: 'Delete map?', deleteMapDescription: 'The map will be removed from this browser. This cannot be undone.', deleteMapAction: 'Delete',

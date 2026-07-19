@@ -8,6 +8,7 @@
 
 * {
   box-sizing: border-box;
+  cursor: default !important;
   scrollbar-color: rgba(193, 164, 86, .46) rgba(8, 12, 9, .36);
   scrollbar-width: thin;
 }
@@ -531,6 +532,9 @@ button {
   cursor: grab;
   touch-action: none;
 }
+
+.grid-canvas.territory-inspecting { cursor: grab !important; }
+.grid-canvas.territory-inspecting[data-dragging="true"] { cursor: grabbing !important; }
 
 .grid-canvas[data-dragging="true"] {
   cursor: grabbing;

@@ -33,10 +33,12 @@ import {
   splitFailure,
   splitSquad,
   squadSize,
+  squadMovementOrderCost,
   trade,
   type CommandResult,
   type MatchState,
 } from './game/match'
+import { findMovementPath } from './game/pathfinding'
 import { createSavedMap, defaultMapSelection, loadSavedMaps, persistSavedMaps, savedSelection, type MapSelection, type SavedMapDraft } from './game/savedMaps'
 import { deleteSavedGame, listSavedGames, loadSavedGame, saveGame, type SavedGameSummary } from './game/savedGames'
 import { foundMatch, isCastleSiteValid, type CellPosition, type MapScenario } from './game/scenario'
@@ -66,6 +68,8 @@ export function App() {
   const [territoriesHeld, setTerritoriesHeld] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('buildings')
   const [selectedCell, setSelectedCell] = useState<CellPosition | null>(null)
+  const [autoMoveTarget, setAutoMoveTarget] = useState<CellPosition | null>(null)
+  const [autoMovePath, setAutoMovePath] = useState<CellPosition[] | null>(null)
   const [pendingAction, setPendingAction] = useState<PendingGameAction | null>(null)
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null)
   const [outcomeDismissed, setOutcomeDismissed] = useState(false)
@@ -80,6 +84,11 @@ export function App() {
   const { locale, setLocale, text } = useLocalization()
   const { visible: navigationHintVisible, markLearned } = useNavigationHint()
   const { enabled: soundEnabled, volume, play: playSound, setVolume, toggle: toggleSound } = useSoundEffects()
+
+  const cancelAutoMove = useCallback(() => {
+    setAutoMoveTarget(null)
+    setAutoMovePath(null)
+  }, [])
 
   useEffect(() => {
     listSavedGames().then(setSavedGames).catch(() => setSavedGames([]))
@@ -119,6 +128,7 @@ export function App() {
       setSelectedRegionId(null)
       setCastleDraft(null)
       setSelectedCell(null)
+      cancelAutoMove()
       setPendingAction(null)
       setCommandFeedback(null)
       setTerritoriesHeld(false)
@@ -140,7 +150,7 @@ export function App() {
     } finally {
       setSavedGamesBusy(false)
     }
-  }, [playSound, savedGamesBusy, text])
+  }, [cancelAutoMove, playSound, savedGamesBusy, text])
 
   const removeSavedGame = useCallback(async (id: string) => {
     if (savedGamesBusy) return
@@ -174,6 +184,7 @@ export function App() {
     setCastleDraft(null)
     setContextMenu(null)
     setSelectedCell(null)
+    cancelAutoMove()
     setPendingAction(null)
     setCommandFeedback(null)
     setOpponentTurn(false)
@@ -181,7 +192,7 @@ export function App() {
     setCameraCommand({ kind: 'overview', key: ++focusId.current })
     setUnitAnimation(null)
     setPhase('founding')
-  }, [])
+  }, [cancelAutoMove])
 
   const openGenerator = useCallback(() => setOverlay('generator'), [])
   const closeGenerator = useCallback(() => setOverlay(null), [])
@@ -221,13 +232,14 @@ export function App() {
     setContextMenu(null)
     setActiveTab('buildings')
     setSelectedCell(null)
+    cancelAutoMove()
     setPendingAction(null)
     setCommandFeedback(null)
     setOutcomeDismissed(false)
     setOpponentTurn(false)
     setOverlay(null)
     setPhase('menu')
-  }, [])
+  }, [cancelAutoMove])
 
   const selectRegion = useCallback((regionId: string | null) => {
     setSelectedRegionId(regionId)
@@ -253,6 +265,7 @@ export function App() {
 
   const handleMapClick = useCallback((request: MapClickRequest) => {
     if (phase === 'playing' && opponentTurn) return
+    cancelAutoMove()
     const position = { column: request.column, row: request.row }
     const selectedForGesture = phase === 'playing' && match && selectedCell ? objectAt(match, selectedCell) : null
     const targetForGesture = phase === 'playing' && match ? objectAt(match, position) : null
@@ -327,32 +340,35 @@ export function App() {
       return
     }
     setCastleDraft(position)
-  }, [applyCommand, createBurst, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId])
+  }, [applyCommand, cancelAutoMove, createBurst, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId])
 
   const confirmFounding = useCallback(() => {
     if (!scenario || !selectedRegionId || !castleDraft || !isCastleSiteValid(scenario, selectedRegionId, castleDraft)) return
     const foundedScenario = foundMatch(scenario, selectedRegionId, castleDraft)
     setScenario(foundedScenario)
     setMatch(createMatch(foundedScenario))
+    cancelAutoMove()
     setCameraCommand({ kind: 'cell', ...castleDraft, zoom: gameConfig.camera.gameStartZoom, key: ++focusId.current })
     setPhase('playing')
     setTerritoriesHeld(false)
     setOutcomeDismissed(false)
     setOpponentTurn(false)
     playSound('action')
-  }, [castleDraft, playSound, scenario, selectedRegionId])
+  }, [cancelAutoMove, castleDraft, playSound, scenario, selectedRegionId])
 
   const startBuilding = useCallback((building: BuildingKind) => {
     if (opponentTurn) return
+    cancelAutoMove()
     setPendingAction({ kind: 'build', building })
     setCommandFeedback(null)
-  }, [opponentTurn])
+  }, [cancelAutoMove, opponentTurn])
 
   const startRecruitment = useCallback((troop: TroopKind, quantity: number) => {
     if (opponentTurn) return
+    cancelAutoMove()
     setPendingAction({ kind: 'recruit', troop, quantity })
     setCommandFeedback(null)
-  }, [opponentTurn])
+  }, [cancelAutoMove, opponentTurn])
 
   const changeTaxRate = useCallback((rate: TaxRate) => {
     if (!match || opponentTurn) return
@@ -368,11 +384,12 @@ export function App() {
     if (!match || opponentTurn) return
     const object = objectAt(match, source)
     if (object?.type !== 'squad' || object.ownerId !== match.playerId || squadSize(object) < 2) return
+    cancelAutoMove()
     setSelectedCell(source)
     setPendingAction({ kind: 'split', source, units: defaultSplit(object) })
     setContextMenu(null)
     setCommandFeedback(null)
-  }, [match, opponentTurn])
+  }, [cancelAutoMove, match, opponentTurn])
 
   const changeSplit = useCallback((units: TroopComposition) => {
     setPendingAction((current) => current?.kind === 'split' ? { ...current, units } : current)
@@ -380,13 +397,14 @@ export function App() {
 
   const finishTurn = useCallback(() => {
     if (!match || opponentTurn) return
+    cancelAutoMove()
     setOpponentTurn(true)
     setPendingAction(null)
     setContextMenu(null)
     setCommandFeedback(null)
     setSelectedCell(null)
     playSound('action')
-  }, [match, opponentTurn, playSound])
+  }, [cancelAutoMove, match, opponentTurn, playSound])
 
   const actionCellValid = useCallback((position: CellPosition) => {
     if (!match || !pendingAction || opponentTurn) return false
@@ -397,13 +415,32 @@ export function App() {
 
   const openContextMenu = useCallback((request: MapContextRequest) => {
     if (phase !== 'playing' || opponentTurn) return
+    cancelAutoMove()
     const menuWidth = 270
     const menuHeight = 220
     const viewportPadding = 16
     setContextMenu({ ...request, left: Math.max(viewportPadding, Math.min(request.clientX + 8, window.innerWidth - menuWidth - viewportPadding)), top: Math.max(viewportPadding, Math.min(request.clientY + 8, window.innerHeight - menuHeight - viewportPadding)) })
     createBurst(request.clientX, request.clientY, 'context')
     playSound('context')
-  }, [createBurst, opponentTurn, phase, playSound])
+  }, [cancelAutoMove, createBurst, opponentTurn, phase, playSound])
+
+  const startAutoMovement = useCallback(() => {
+    if (!match || !contextMenu || !selectedCell || opponentTurn) return
+    const squad = objectAt(match, selectedCell)
+    if (squad?.type !== 'squad' || squad.ownerId !== match.playerId) return
+    const target = { column: contextMenu.column, row: contextMenu.row }
+    const path = findMovementPath(match.scenario.cells, selectedCell, target)
+    setContextMenu(null)
+    setPendingAction(null)
+    if (!path || path.length < 2) {
+      setCommandFeedback(text?.game.routeUnavailable ?? null)
+      cancelAutoMove()
+      return
+    }
+    setCommandFeedback(null)
+    setAutoMoveTarget(target)
+    setAutoMovePath(path)
+  }, [cancelAutoMove, contextMenu, match, opponentTurn, selectedCell, text])
 
   const removeContextObject = useCallback(() => {
     if (!match || !contextMenu || opponentTurn) return
@@ -427,11 +464,54 @@ export function App() {
   }
 
   useEffect(() => {
+    if (!autoMoveTarget) return
+    const timeout = window.setTimeout(() => {
+      if (phase !== 'playing' || opponentTurn || overlay !== null || pendingAction || !match || !selectedCell) {
+        cancelAutoMove()
+        return
+      }
+      const squad = objectAt(match, selectedCell)
+      if (squad?.type !== 'squad' || squad.ownerId !== match.playerId || isSamePosition(selectedCell, autoMoveTarget)) {
+        cancelAutoMove()
+        return
+      }
+      const path = findMovementPath(match.scenario.cells, selectedCell, autoMoveTarget)
+      if (!path || path.length < 2) {
+        setCommandFeedback(text?.game.routeUnavailable ?? null)
+        cancelAutoMove()
+        return
+      }
+      setAutoMovePath(path)
+      if (match.ordersRemaining < squadMovementOrderCost(squad)) {
+        setCommandFeedback(text?.game.routeOrdersFinished ?? null)
+        cancelAutoMove()
+        return
+      }
+      const next = path[1]
+      const result = moveOrAttack(match, selectedCell, next)
+      if (!result.ok) {
+        setCommandFeedback(result.reason === 'not-enough-orders' ? text?.game.routeOrdersFinished ?? null : text?.game.failures[result.reason] ?? null)
+        cancelAutoMove()
+        playSound('dismiss')
+        return
+      }
+      setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: next })
+      setMatch(result.state)
+      setScenario(result.state.scenario)
+      setSelectedCell(next)
+      setCommandFeedback(null)
+      playSound('action')
+    }, gameConfig.turn.autoMoveStepDelayMs)
+    return () => window.clearTimeout(timeout)
+  }, [autoMoveTarget, cancelAutoMove, match, opponentTurn, overlay, pendingAction, phase, playSound, selectedCell, text])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Shift' && phase !== 'menu' && overlay === null) setTerritoriesHeld(true)
       if (event.key !== 'Escape') return
       event.preventDefault()
       setTerritoriesHeld(false)
+      cancelAutoMove()
       if (contextMenu) setContextMenu(null)
       else setOverlay(overlayAfterEscape(phase, overlay))
     }
@@ -441,7 +521,7 @@ export function App() {
     window.addEventListener('keyup', releaseShift)
     window.addEventListener('blur', releaseShiftOnBlur)
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', releaseShift); window.removeEventListener('blur', releaseShiftOnBlur) }
-  }, [contextMenu, overlay, phase])
+  }, [cancelAutoMove, contextMenu, overlay, phase])
 
   useEffect(() => {
     if (!opponentTurn || !match) return
@@ -463,7 +543,7 @@ export function App() {
   }, [commandFeedback])
 
   if (!text) return <main className="game-shell loading-shell" aria-busy="true" />
-  const utilityControls = <UtilityControls settingsLabel={text.settings.title} settingsHint={text.interface.settingsHint} soundEnabled={soundEnabled} soundEnableLabel={text.sound.enable} soundDisableLabel={text.sound.disable} onOpenSettings={() => { setTerritoriesHeld(false); setOverlay('settings') }} onToggleSound={toggleSound} />
+  const utilityControls = <UtilityControls settingsLabel={text.settings.title} settingsHint={text.interface.settingsHint} soundEnabled={soundEnabled} soundEnableLabel={text.sound.enable} soundDisableLabel={text.sound.disable} onOpenSettings={() => { setTerritoriesHeld(false); cancelAutoMove(); setOverlay('settings') }} onToggleSound={toggleSound} />
   if (phase === 'menu') {
     return (
       <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
@@ -491,6 +571,22 @@ export function App() {
   const contextObject = match && contextMenu ? objectAt(match, contextMenu) : null
   const contextOwned = contextObject?.ownerId === match?.playerId
   const selectedMapObject = match && selectedCell ? objectAt(match, selectedCell) : null
+  const contextCell = contextMenu ? activeScenario.cells[contextMenu.row]?.[contextMenu.column] : null
+  const canOfferAutoMove = Boolean(
+    contextMenu
+    && selectedCell
+    && selectedMapObject?.type === 'squad'
+    && selectedMapObject.ownerId === match?.playerId
+    && !isSamePosition(selectedCell, contextMenu)
+    && contextCell
+    && contextCell.landform !== 'peak'
+    && !contextCell.object,
+  )
+  const contextHasObjectAction = Boolean(
+    contextObject
+    && contextOwned
+    && (contextObject.type === 'squad' || contextObject.type !== 'castle'),
+  )
   const movementSource = phase === 'playing'
     && !opponentTurn
     && !pendingAction
@@ -501,12 +597,12 @@ export function App() {
 
   return (
     <main className={`game-shell phase-${phase}`} onPointerDownCapture={handleInterfacePointerDown}>
-      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} showTerritories={phase === 'founding' || territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? selectedCell : null} movementSource={movementSource} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} ariaLabel={text.interface.mapAria} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
+      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} showTerritories={phase === 'founding' || territoriesHeld} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? selectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} ariaLabel={text.interface.mapAria} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
       {phase === 'playing' && match && <>
         <GameHud match={match} text={text} opponentTurn={opponentTurn} onEndTurn={finishTurn} />
-        <GameCommandDock match={match} selectedCell={selectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onTabChange={(tab) => { setActiveTab(tab); setSelectedCell(null); setPendingAction(null); setCommandFeedback(null) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onSplitChange={changeSplit} onCancelAction={() => setPendingAction(null)} onSetTaxRate={changeTaxRate} onTrade={tradeAtMarket} />
+        <GameCommandDock match={match} selectedCell={selectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onTabChange={(tab) => { cancelAutoMove(); setActiveTab(tab); setSelectedCell(null); setPendingAction(null); setCommandFeedback(null) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onSplitChange={changeSplit} onCancelAction={() => setPendingAction(null)} onSetTaxRate={changeTaxRate} onTrade={tradeAtMarket} />
         {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
       </>}
 
@@ -514,7 +610,16 @@ export function App() {
 
       {utilityControls}
 
-      {contextMenu && <div className="context-backdrop" onPointerDown={() => setContextMenu(null)} role="presentation"><section className="context-menu" style={{ left: contextMenu.left, top: contextMenu.top }} role="menu" aria-label={text.contextMenu.title} onPointerDown={(event) => event.stopPropagation()}><div className="context-menu-heading"><span>{text.contextMenu.title}</span><small>{text.contextMenu.cell} {contextMenu.column + 1}:{contextMenu.row + 1}</small></div>{contextObject?.type === 'squad' && contextOwned && squadSize(contextObject) > 1 && <button type="button" role="menuitem" onClick={() => startSplit(contextMenu)}>{text.contextMenu.splitSquad}</button>}{contextObject?.type === 'squad' && contextOwned && <button type="button" role="menuitem" onClick={() => { setSelectedCell(contextMenu); setPendingAction(null); setCommandFeedback(text.game.moveHint); setContextMenu(null) }}>{text.contextMenu.mergeSquads}</button>}{contextObject && contextOwned && contextObject.type !== 'castle' && <button type="button" role="menuitem" className="danger" onClick={removeContextObject}>{text.contextMenu.removeObject}</button>}{(!contextObject || !contextOwned || contextObject.type === 'castle') && <p className="context-menu-empty">{text.game.selectCell}</p>}</section></div>}
+      {contextMenu && <div className="context-backdrop" onPointerDown={() => setContextMenu(null)} role="presentation">
+        <section className="context-menu" style={{ left: contextMenu.left, top: contextMenu.top }} role="menu" aria-label={text.contextMenu.title} onPointerDown={(event) => event.stopPropagation()}>
+          <div className="context-menu-heading"><span>{text.contextMenu.title}</span><small>{text.contextMenu.cell} {contextMenu.column + 1}:{contextMenu.row + 1}</small></div>
+          {canOfferAutoMove && <button type="button" role="menuitem" onClick={startAutoMovement}>{text.contextMenu.goHere}</button>}
+          {contextObject?.type === 'squad' && contextOwned && squadSize(contextObject) > 1 && <button type="button" role="menuitem" onClick={() => startSplit(contextMenu)}>{text.contextMenu.splitSquad}</button>}
+          {contextObject?.type === 'squad' && contextOwned && <button type="button" role="menuitem" onClick={() => { setSelectedCell(contextMenu); setPendingAction(null); setCommandFeedback(text.game.moveHint); setContextMenu(null) }}>{text.contextMenu.mergeSquads}</button>}
+          {contextObject && contextOwned && contextObject.type !== 'castle' && <button type="button" role="menuitem" className="danger" onClick={removeContextObject}>{text.contextMenu.removeObject}</button>}
+          {!canOfferAutoMove && !contextHasObjectAction && <p className="context-menu-empty">{text.game.selectCell}</p>}
+        </section>
+      </div>}
 
       {match?.status === 'won' && !outcomeDismissed && <GameOutcomeModal text={text.game} onContinue={() => setOutcomeDismissed(true)} />}
 

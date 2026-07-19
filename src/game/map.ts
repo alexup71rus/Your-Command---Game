@@ -20,6 +20,12 @@ export interface BuildingObject {
   ownerId: string
   hitPoints: number
   maxHitPoints: number
+  footprint?: {
+    originColumn: number
+    originRow: number
+    columns: number
+    rows: number
+  }
 }
 
 export interface SquadObject {
