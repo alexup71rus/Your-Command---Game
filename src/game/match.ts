@@ -54,7 +54,7 @@ export interface FoodDemand {
 }
 
 export interface FoodConsumption {
-  grain: number
+  flour: number
   meat: number
   fruit: number
   fed: boolean
@@ -1169,7 +1169,7 @@ export function foodDemandFor(state: MatchState, ownerId: string) {
 export function foodConsumptionFor(
   state: MatchState,
   ownerId: string,
-  available: Pick<Record<ResourceId, number>, 'grain' | 'meat' | 'fruit'> = state.domains[ownerId]?.resources ?? { grain: 0, meat: 0, fruit: 0 },
+  available: Pick<Record<ResourceId, number>, 'flour' | 'meat' | 'fruit'> = state.domains[ownerId]?.resources ?? { flour: 0, meat: 0, fruit: 0 },
 ): FoodConsumption {
   const demand = foodDemandBreakdownFor(state, ownerId)
   return consumeFood(demand, available)
@@ -1177,11 +1177,11 @@ export function foodConsumptionFor(
 
 function consumeFood(
   demand: FoodDemand,
-  available: Pick<Record<ResourceId, number>, 'grain' | 'meat' | 'fruit'>,
+  available: Pick<Record<ResourceId, number>, 'flour' | 'meat' | 'fruit'>,
 ): FoodConsumption {
   let remaining = demand.total
-  const availableStaples = { grain: available.grain, meat: available.meat, fruit: available.fruit }
-  const consumedStaples = { grain: 0, meat: 0, fruit: 0 }
+  const availableStaples = { flour: available.flour, meat: available.meat, fruit: available.fruit }
+  const consumedStaples = { flour: 0, meat: 0, fruit: 0 }
   const evenShare = Math.floor(demand.total / gameConfig.economy.foodResources.length)
   const extraUnits = demand.total % gameConfig.economy.foodResources.length
   gameConfig.economy.foodResources.forEach((resource, index) => {
@@ -1202,7 +1202,7 @@ function consumeFood(
     && minimumVariety > 0
     && minimumVariety * gameConfig.economy.foodResources.length <= demand.total
     && gameConfig.economy.foodResources.every((resource) => consumedStaples[resource] >= minimumVariety)
-  return { grain: consumedStaples.grain, meat: consumedStaples.meat, fruit: consumedStaples.fruit, fed, diverseDiet }
+  return { flour: consumedStaples.flour, meat: consumedStaples.meat, fruit: consumedStaples.fruit, fed, diverseDiet }
 }
 
 export function taxIncomeFor(state: MatchState, ownerId: string) {
@@ -1282,7 +1282,7 @@ function resolveTurnEconomy(state: MatchState, ownerId: string): TurnEconomyReso
   const demand = foodDemandBreakdownFor(afterDesertion, ownerId, workforce)
   const foodDemand = demand.total
   const food = consumeFood(demand, resources)
-  resources = { ...resources, grain: resources.grain - food.grain, meat: resources.meat - food.meat, fruit: resources.fruit - food.fruit }
+  resources = { ...resources, flour: resources.flour - food.flour, meat: resources.meat - food.meat, fruit: resources.fruit - food.fruit }
   return { resources, foodDemand, food, upkeepPaid, uncoveredUpkeep, desertion: desertionResult.loss, cells: desertionResult.cells, production, taxIncome, upkeep, processing, workforce }
 }
 

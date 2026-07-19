@@ -27,10 +27,10 @@ const en: LocaleDictionary = {
     { id: 'buildings', label: 'Buildings' }, { id: 'barracks', label: 'Barracks' }, { id: 'castle', label: 'Castle' },
   ],
   game: {
-    resourceNames: { wood: 'Wood', stone: 'Stone', ore: 'Ore', iron: 'Iron', grain: 'Grain', meat: 'Meat', fruit: 'Fruit', gold: 'Gold' },
+    resourceNames: { wood: 'Wood', stone: 'Stone', ore: 'Ore', iron: 'Iron', flour: 'Flour', meat: 'Meat', fruit: 'Fruit', gold: 'Gold' },
     buildingNames: { mill: 'Mill', farm: 'Farm', orchard: 'Apple orchard', huntingLodge: 'Hunting lodge', lumberMill: 'Lumber mill', quarry: 'Quarry', mine: 'Mine', smelter: 'Smelter', kitchen: 'Kitchen', house: 'House', barracks: 'Barracks', church: 'Church', market: 'Market', wall: 'Wall', tower: 'Tower', barbican: 'Barbican' },
     buildingDescriptions: {
-      mill: 'Supports up to two farms within a two-cell radius.', farm: 'Produces grain at scale on open plains and requires an active mill.', orchard: 'A dependable fruit source on clear passable ground.', huntingLodge: 'A compact source of meat that needs a dense forest edge.', lumberMill: 'Produces wood from a clear passable cell beside a forest.', quarry: 'Extracts stone on a clear hill.', mine: 'Extracts ore on a clear hill cell.', smelter: 'Processes ore into iron when enough workers are assigned.', kitchen: 'Serves a growing settlement and lets housing spread beyond the castle.',
+      mill: 'Supports up to two farms within a two-cell radius.', farm: 'Produces flour at scale on open plains and requires an active mill.', orchard: 'A dependable fruit source on clear passable ground.', huntingLodge: 'A compact source of meat that needs a dense forest edge.', lumberMill: 'Produces wood from a clear passable cell beside a forest.', quarry: 'Extracts stone on a clear hill.', mine: 'Extracts ore on a clear hill cell.', smelter: 'Processes ore into iron when enough workers are assigned.', kitchen: 'Serves a growing settlement and lets housing spread beyond the castle.',
       house: 'Raises housing capacity. Must be within 5 cells of a castle or kitchen.', barracks: 'Forms squads around the full perimeter of the building.',
       church: 'Improves population growth and requires ongoing upkeep.',
       market: 'Lets you sell surpluses and buy resources you are missing. Each domain may have only one market.',

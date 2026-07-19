@@ -59,7 +59,7 @@ export const gameConfig = {
   economy: {
     civilianFoodPerPerson: 1,
     soldierFoodPerUnit: 1,
-    foodResources: ['grain', 'meat', 'fruit'],
+    foodResources: ['flour', 'meat', 'fruit'],
     diverseDietMinimumShare: 0.2,
     diverseDietPopulationGrowthBonus: 1,
     diverseDietDamageMultiplier: 1.05,

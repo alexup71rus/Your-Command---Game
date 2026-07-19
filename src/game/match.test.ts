@@ -123,7 +123,7 @@ describe('match rules', () => {
     expect(buildingRules.mine.workersRequired).toBe(1)
     expect(buildingRules.smelter.workersRequired).toBe(2)
     expect(buildingRules.mill).toMatchObject({ resourceCost: { wood: 20, stone: 12, gold: 10 }, farmSupport: { radius: 2, capacity: 2 }, workersRequired: 1 })
-    expect(buildingRules.farm).toMatchObject({ resourceCost: { wood: 28, gold: 8 }, production: { grain: 14 }, workersRequired: 2, requiresMillSupport: true })
+    expect(buildingRules.farm).toMatchObject({ resourceCost: { wood: 28, gold: 8 }, production: { flour: 14 }, workersRequired: 2, requiresMillSupport: true })
     expect(buildingRules.orchard).toMatchObject({ resourceCost: { wood: 20, gold: 6 }, production: { fruit: 6 }, workersRequired: 1, footprint: { columns: 2, rows: 2 } })
     expect(buildingRules.huntingLodge).toMatchObject({ actionCost: 4, resourceCost: { wood: 18, gold: 8 }, production: { meat: 6 }, hitPoints: 12, workersRequired: 1 })
     expect(buildingRules.quarry.resourceCost).toEqual({ wood: 20 })
@@ -150,7 +150,7 @@ describe('match rules', () => {
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       state = advanced.state
     }
-    expect(state.domains.player.resources.grain + state.domains.player.resources.meat + state.domains.player.resources.fruit).toBe(2)
+    expect(state.domains.player.resources.flour + state.domains.player.resources.meat + state.domains.player.resources.fruit).toBe(2)
     const fifth = endTurn(state)
     if (!fifth.ok) throw new Error('turn failed')
     expect(fifth.state.lastTurnReports.player.food.fed).toBe(false)
@@ -170,7 +170,7 @@ describe('match rules', () => {
       built.state.scenario.cells[2][2], built.state.scenario.cells[2][3],
       built.state.scenario.cells[3][2], built.state.scenario.cells[3][3],
     ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'farm')).toBe(true)
-    expect(productionFor(built.state, 'player').grain).toBe(17)
+    expect(productionFor(built.state, 'player').flour).toBe(17)
     expect(productionFor(built.state, 'player').meat).toBe(0)
     expect(match.scenario.cells[2][2].object).toBeUndefined()
 
@@ -179,7 +179,7 @@ describe('match rules', () => {
     if (!advanced.ok) return
     expect(advanced.state.turn).toBe(2)
     expect(advanced.state.ordersRemaining).toBe(gameConfig.turn.maxOrders)
-    expect(humanDomain(advanced.state).resources.grain).toBeGreaterThan(humanDomain(built.state).resources.grain)
+    expect(humanDomain(advanced.state).resources.flour).toBeGreaterThan(humanDomain(built.state).resources.flour)
     expect(advanced.state.domains['npc-2'].resources.gold).toBeGreaterThan(built.state.domains['npc-2'].resources.gold)
     expect(build(match, 'farm', { column: 5, row: 2 })).toMatchObject({ ok: false, reason: 'outside-domain' })
   })
@@ -400,11 +400,11 @@ describe('match rules', () => {
     placeBuilding(scenario, 'mill', 1, 4)
     const farm = build(createMatch(scenario), 'farm', { column: 2, row: 2 })
     if (!farm.ok) throw new Error('farm building failed')
-    expect(productionFor(farm.state, 'player')).toMatchObject({ grain: 13, meat: 0 })
+    expect(productionFor(farm.state, 'player')).toMatchObject({ flour: 13, meat: 0 })
     const oneFarmWorker = { ...farm.state, domains: { ...farm.state.domains, player: { ...farm.state.domains.player, population: 2 } } }
     const noWorkers = { ...farm.state, domains: { ...farm.state.domains, player: { ...farm.state.domains.player, population: 0 } } }
-    expect(productionFor(oneFarmWorker, 'player').grain).toBe(6)
-    expect(productionFor(noWorkers, 'player').grain).toBe(0)
+    expect(productionFor(oneFarmWorker, 'player').flour).toBe(6)
+    expect(productionFor(noWorkers, 'player').flour).toBe(0)
   })
 
   it('requires a useful mill, supports only two nearby farms and stops farms with an unstaffed mill', () => {
@@ -424,10 +424,10 @@ describe('match rules', () => {
     if (!second.ok) throw new Error('second farm failed')
     expect(build({ ...second.state, ordersRemaining: 8 }, 'farm', { column: 2, row: 3 })).toMatchObject({ ok: false, reason: 'requires-support' })
     const unstaffed = { ...second.state, domains: { ...second.state.domains, player: { ...second.state.domains.player, population: 0 } } }
-    expect(productionFor(unstaffed, 'player').grain).toBe(0)
+    expect(productionFor(unstaffed, 'player').flour).toBe(0)
     const removedMill = demolish(second.state, { column: 1, row: 2 })
     if (!removedMill.ok) throw new Error('mill demolition failed')
-    expect(productionFor(removedMill.state, 'player').grain).toBe(0)
+    expect(productionFor(removedMill.state, 'player').flour).toBe(0)
     expect(workforceFor(removedMill.state, 'player').assignments.every((assignment) => assignment.blockedReason === 'missing-support')).toBe(true)
 
     const fullScenario = createScenario()
@@ -483,7 +483,7 @@ describe('match rules', () => {
     expect(workforceFor(threePeople, 'player').assignments.map(({ assigned }) => assigned)).toEqual([1, 1, 1, 0])
     const sixPeople = { ...match, domains: { ...match.domains, player: { ...match.domains.player, population: 6 } } }
     expect(workforceFor(sixPeople, 'player')).toMatchObject({ employed: 6, free: 0 })
-    expect(productionFor(sixPeople, 'player')).toMatchObject({ grain: 26, meat: 5 })
+    expect(productionFor(sixPeople, 'player')).toMatchObject({ flour: 26, meat: 5 })
   })
 
   it('staffs food, kitchens and industry in a deterministic priority order', () => {
@@ -503,7 +503,7 @@ describe('match rules', () => {
       { kind: 'mill', assigned: 1 }, { kind: 'huntingLodge', assigned: 1 }, { kind: 'farm', assigned: 2 }, { kind: 'kitchen', assigned: 1 },
       { kind: 'lumberMill', assigned: 1 }, { kind: 'quarry', assigned: 2 }, { kind: 'mine', assigned: 0 }, { kind: 'smelter', assigned: 0 },
     ])
-    expect(productionFor(eightWorkers, 'player')).toMatchObject({ grain: 13, meat: 5, wood: 9, stone: 7, ore: 0 })
+    expect(productionFor(eightWorkers, 'player')).toMatchObject({ flour: 13, meat: 5, wood: 9, stone: 7, ore: 0 })
     const elevenWorkers = { ...eightWorkers, domains: { ...eightWorkers.domains, player: { ...eightWorkers.domains.player, population: 11 } } }
     const advanced = endTurn(elevenWorkers)
     expect(advanced.ok).toBe(true)
@@ -622,7 +622,7 @@ describe('match rules', () => {
       church.state.scenario.cells[3][2], church.state.scenario.cells[3][3],
     ].every((cell) => cell.object?.type === 'building' && cell.object.kind === 'church')).toBe(true)
     expect(turnResourceDeltaFor(church.state, 'player').gold).toBe(3)
-    expect(turnResourceDeltaFor(church.state, 'player').grain).toBe(-4)
+    expect(turnResourceDeltaFor(church.state, 'player').flour).toBe(-4)
     expect(turnResourceDeltaFor(church.state, 'player').meat).toBe(0)
     const advanced = endTurn(church.state)
     expect(advanced.ok).toBe(true)
@@ -636,7 +636,7 @@ describe('match rules', () => {
     placeBuilding(scenario, 'house', 0, 4)
     const match = createMatch(scenario)
     match.domains.player.population = 8
-    match.domains.player.resources.grain = 100
+    match.domains.player.resources.flour = 100
     match.domains.player.resources.gold = 100
     const recruited = recruit(match, 'militia', 6, { column: 1, row: 2 })
     if (!recruited.ok) throw new Error('recruitment failed')
@@ -774,9 +774,9 @@ describe('match rules', () => {
     const largerPopulation = { ...extortionate.state, domains: { ...extortionate.state.domains, player: { ...extortionate.state.domains.player, population: 20 } } }
     expect(taxIncomeFor(largerPopulation, 'player')).toBe(40)
     expect(foodDemandFor(untaxed.state, 'player')).toBeLessThan(foodDemandFor(extortionate.state, 'player'))
-    expect(productionFor(untaxed.state, 'player').grain - productionFor(farm.state, 'player').grain).toBe(1)
-    expect(productionFor(untaxed.state, 'player').grain - productionFor(extortionate.state, 'player').grain).toBe(3)
-    expect(turnResourceDeltaFor(untaxed.state, 'player').grain).toBeGreaterThan(turnResourceDeltaFor(extortionate.state, 'player').grain)
+    expect(productionFor(untaxed.state, 'player').flour - productionFor(farm.state, 'player').flour).toBe(1)
+    expect(productionFor(untaxed.state, 'player').flour - productionFor(extortionate.state, 'player').flour).toBe(3)
+    expect(turnResourceDeltaFor(untaxed.state, 'player').flour).toBeGreaterThan(turnResourceDeltaFor(extortionate.state, 'player').flour)
   })
 
   it('can build the first mill, farm and house from starting resources', () => {
@@ -800,7 +800,7 @@ describe('match rules', () => {
     expect(state.domains.player.population).toBe(10)
     const forecast = turnEconomyForecastFor(state, 'player')
     expect(forecast?.foodDemand).toBe(15)
-    expect((forecast?.production.grain ?? 0) + (forecast?.production.meat ?? 0) + (forecast?.production.fruit ?? 0)).toBe(17)
+    expect((forecast?.production.flour ?? 0) + (forecast?.production.meat ?? 0) + (forecast?.production.fruit ?? 0)).toBe(17)
   })
 
   it('charges troop upkeep and allows resource trade through an owned market', () => {
@@ -827,27 +827,27 @@ describe('match rules', () => {
     const match = createMatch(createScenario())
     const untaxed = setTaxRate(match, 'none')
     if (!untaxed.ok) throw new Error('tax change failed')
-    expect(foodConsumptionFor(untaxed.state, 'player', { grain: 10, meat: 10, fruit: 0 })).toEqual({ grain: 3, meat: 2, fruit: 0, fed: true, diverseDiet: false })
+    expect(foodConsumptionFor(untaxed.state, 'player', { flour: 10, meat: 10, fruit: 0 })).toEqual({ flour: 3, meat: 2, fruit: 0, fed: true, diverseDiet: false })
     const largerScenario = createScenario()
     placeBuilding(largerScenario, 'kitchen', 2, 3)
     const largerMatch = createMatch(largerScenario)
     const largerPopulation = { ...largerMatch, domains: { ...largerMatch.domains, player: { ...largerMatch.domains.player, taxRate: 'none' as const, population: 30 } } }
-    expect(foodConsumptionFor(largerPopulation, 'player', { grain: 20, meat: 20, fruit: 20 })).toEqual({ grain: 10, meat: 10, fruit: 10, fed: true, diverseDiet: true })
-    expect(foodConsumptionFor(untaxed.state, 'player', { grain: 10, meat: 0, fruit: 0 })).toEqual({ grain: 5, meat: 0, fruit: 0, fed: true, diverseDiet: false })
-    expect(foodConsumptionFor(untaxed.state, 'player', { grain: 0, meat: 10, fruit: 0 })).toEqual({ grain: 0, meat: 5, fruit: 0, fed: true, diverseDiet: false })
+    expect(foodConsumptionFor(largerPopulation, 'player', { flour: 20, meat: 20, fruit: 20 })).toEqual({ flour: 10, meat: 10, fruit: 10, fed: true, diverseDiet: true })
+    expect(foodConsumptionFor(untaxed.state, 'player', { flour: 10, meat: 0, fruit: 0 })).toEqual({ flour: 5, meat: 0, fruit: 0, fed: true, diverseDiet: false })
+    expect(foodConsumptionFor(untaxed.state, 'player', { flour: 0, meat: 10, fruit: 0 })).toEqual({ flour: 0, meat: 5, fruit: 0, fed: true, diverseDiet: false })
   })
 
   it('allows either food resource to satisfy the additional tax demand', () => {
     const match = createMatch(createScenario())
-    expect(foodConsumptionFor(match, 'player', { grain: 1, meat: 10, fruit: 0 })).toEqual({ grain: 1, meat: 7, fruit: 0, fed: true, diverseDiet: false })
-    expect(foodConsumptionFor(match, 'player', { grain: 0, meat: 10, fruit: 0 })).toEqual({ grain: 0, meat: 8, fruit: 0, fed: true, diverseDiet: false })
+    expect(foodConsumptionFor(match, 'player', { flour: 1, meat: 10, fruit: 0 })).toEqual({ flour: 1, meat: 7, fruit: 0, fed: true, diverseDiet: false })
+    expect(foodConsumptionFor(match, 'player', { flour: 0, meat: 10, fruit: 0 })).toEqual({ flour: 0, meat: 8, fruit: 0, fed: true, diverseDiet: false })
   })
 
   it('gains and loses the varied-diet growth bonus without changing capacity', () => {
     const scenario = createScenario()
     placeBuilding(scenario, 'house', 0, 4)
     const initial = createMatch(scenario)
-    const player = { ...initial.domains.player, taxRate: 'none' as const, resources: { ...initial.domains.player.resources, grain: 10, meat: 10, fruit: 10 } }
+    const player = { ...initial.domains.player, taxRate: 'none' as const, resources: { ...initial.domains.player.resources, flour: 10, meat: 10, fruit: 10 } }
     const fed = endTurn({ ...initial, domains: { ...initial.domains, player } })
     expect(fed.ok).toBe(true)
     if (!fed.ok) return
@@ -856,7 +856,7 @@ describe('match rules', () => {
     expect(civilianPopulationCapacityFor(fed.state, 'player')).toBe(gameConfig.turn.basePopulationCapacity + 5)
     expect(fed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
 
-    const withoutMeat = { ...fed.state.domains.player, resources: { ...fed.state.domains.player.resources, grain: 10, meat: 0, fruit: 10 } }
+    const withoutMeat = { ...fed.state.domains.player, resources: { ...fed.state.domains.player.resources, flour: 10, meat: 0, fruit: 10 } }
     const lost = endTurn({ ...fed.state, domains: { ...fed.state.domains, player: withoutMeat } })
     expect(lost.ok).toBe(true)
     if (!lost.ok) return
@@ -928,7 +928,7 @@ describe('match rules', () => {
     const developedResult = simulate(developed)
     expect(developedResult.domains.player.population).toBe(19)
     expect(developedResult.domains.player.resources.gold).toBe(startingResources.gold + 40)
-    expect(developedResult.domains.player.resources.grain + developedResult.domains.player.resources.meat + developedResult.domains.player.resources.fruit).toBe(startingResources.grain + 100)
+    expect(developedResult.domains.player.resources.flour + developedResult.domains.player.resources.meat + developedResult.domains.player.resources.fruit).toBe(startingResources.flour + 100)
 
     const variedScenario = structuredClone(developedScenario)
     placeBuilding(variedScenario, 'orchard', 6, 3)
@@ -988,7 +988,7 @@ describe('match rules', () => {
     placeBuilding(scenario, 'farm', 2, 3)
     scenario.cells[7][7] = { ...scenario.cells[7][7], object: { type: 'squad', ownerId: 'player', units: { militia: 100, spearmen: 0, archers: 0, knights: 0 } } }
     const match = createMatch(scenario)
-    const player = { ...match.domains.player, population: 3, taxRate: 'none' as const, resources: { ...match.domains.player.resources, grain: 0, meat: 0, fruit: 0 } }
+    const player = { ...match.domains.player, population: 3, taxRate: 'none' as const, resources: { ...match.domains.player.resources, flour: 0, meat: 0, fruit: 0 } }
     expect(workforceFor({ ...match, domains: { ...match.domains, player } }, 'player').assignments.map(({ assigned }) => assigned)).toEqual([1, 2, 0])
     const starved = endTurn({ ...match, domains: { ...match.domains, player } })
     expect(starved.ok).toBe(true)
@@ -1003,7 +1003,7 @@ describe('match rules', () => {
     scenario.cells[0][0] = { ...scenario.cells[0][0], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 1, archers: 0, knights: 0 } } }
     scenario.cells[0][1] = { ...scenario.cells[0][1], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
     const match = createMatch(scenario)
-    const player = { ...match.domains.player, population: 0, taxRate: 'none' as const, resources: { ...match.domains.player.resources, grain: 0, meat: 0 } }
+    const player = { ...match.domains.player, population: 0, taxRate: 'none' as const, resources: { ...match.domains.player.resources, flour: 0, meat: 0 } }
     const starved = endTurn({ ...match, domains: { ...match.domains, player } })
     expect(starved.ok).toBe(true)
     if (!starved.ok) return
@@ -1014,7 +1014,7 @@ describe('match rules', () => {
     removePlayerCastle(oneLeftScenario)
     oneLeftScenario.cells[0][0] = { ...oneLeftScenario.cells[0][0], object: { type: 'squad', ownerId: 'player', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
     const oneLeftMatch = createMatch(oneLeftScenario)
-    const lastPlayer = { ...oneLeftMatch.domains.player, population: 0, taxRate: 'none' as const, resources: { ...oneLeftMatch.domains.player.resources, grain: 0, meat: 0 } }
+    const lastPlayer = { ...oneLeftMatch.domains.player, population: 0, taxRate: 'none' as const, resources: { ...oneLeftMatch.domains.player.resources, flour: 0, meat: 0 } }
     const preserved = endTurn({ ...oneLeftMatch, domains: { ...oneLeftMatch.domains, player: lastPlayer } })
     expect(preserved.ok).toBe(true)
     if (!preserved.ok) return
@@ -1037,7 +1037,7 @@ describe('match rules', () => {
     if (!house.ok) throw new Error('house building failed')
     const untaxed = setTaxRate(house.state, 'none')
     if (!untaxed.ok) throw new Error('tax change failed')
-    untaxed.state.domains.player.resources.grain = 100
+    untaxed.state.domains.player.resources.flour = 100
     untaxed.state.domains.player.resources.meat = 100
     const initialDemand = foodDemandFor(untaxed.state, 'player')
     let state = untaxed.state
@@ -1070,7 +1070,7 @@ describe('match rules', () => {
           ...removed.state.domains.player,
           population: 30,
           taxRate: 'none' as const,
-          resources: { ...removed.state.domains.player.resources, grain: 100, meat: 100 },
+          resources: { ...removed.state.domains.player.resources, flour: 100, meat: 100 },
         },
       },
     }
@@ -1087,7 +1087,7 @@ describe('match rules', () => {
     const match = createMatch(scenario)
     match.domains.player.population = 0
     match.domains.player.taxRate = 'none'
-    match.domains.player.resources.grain = 100
+    match.domains.player.resources.flour = 100
     match.domains.player.resources.meat = 0
     const advanced = endTurn(match)
     if (!advanced.ok) throw new Error('turn failed')

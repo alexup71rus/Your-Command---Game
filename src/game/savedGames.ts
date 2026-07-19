@@ -4,7 +4,7 @@ import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './ma
 import type { MatchEvent, MatchState, TurnReport } from './match'
 import type { CellPosition, MapScenario, StartRegion } from './scenario'
 
-export const SAVE_VERSION = 7
+export const SAVE_VERSION = 8
 
 export interface SavedGameSummary {
   id: string
@@ -283,7 +283,7 @@ function isTurnReport(value: unknown, owners: Set<string>, size: number): value 
     || typeof value.upkeepPaid !== 'boolean'
     || !isSignedResourceRecord(value.processing)
     || !isRecord(value.food)
-    || !isFiniteNonNegative(value.food.grain)
+    || !isFiniteNonNegative(value.food.flour)
     || !isFiniteNonNegative(value.food.meat)
     || !isFiniteNonNegative(value.food.fruit)
     || typeof value.food.fed !== 'boolean'

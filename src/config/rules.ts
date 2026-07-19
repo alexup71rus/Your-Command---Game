@@ -59,7 +59,7 @@ export interface TaxRule {
   productionAdjustment: number
 }
 
-export const resourceIds: ResourceId[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'fruit', 'gold']
+export const resourceIds: ResourceId[] = ['wood', 'stone', 'ore', 'iron', 'flour', 'meat', 'fruit', 'gold']
 export const economyBuildingKinds: BuildingKind[] = ['mill', 'farm', 'orchard', 'huntingLodge', 'lumberMill', 'quarry', 'mine', 'smelter', 'kitchen', 'house', 'barracks', 'church', 'market']
 export type EconomyBuildingCategory = 'resources' | 'food' | 'settlement'
 export const economyBuildingCategories: Record<EconomyBuildingCategory, BuildingKind[]> = {
@@ -86,7 +86,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
   farm: {
     actionCost: 4,
     resourceCost: { wood: 28, gold: 8 },
-    production: { grain: 14 },
+    production: { flour: 14 },
     hitPoints: 10,
     placement: 'plain',
     workersRequired: 2,
@@ -229,7 +229,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
 export const troopRules: Record<TroopKind, TroopRule> = {
   militia: {
     actionCost: 2,
-    resourceCost: { grain: 4, gold: 8 },
+    resourceCost: { flour: 4, gold: 8 },
     populationCost: 1,
     damage: 1,
     durability: 1,
@@ -237,7 +237,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
   },
   spearmen: {
     actionCost: 2,
-    resourceCost: { grain: 4, iron: 1, gold: 10 },
+    resourceCost: { flour: 4, iron: 1, gold: 10 },
     populationCost: 1,
     damage: 1.2,
     durability: 1.35,
@@ -245,7 +245,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
   },
   archers: {
     actionCost: 2,
-    resourceCost: { wood: 4, grain: 4, gold: 16 },
+    resourceCost: { wood: 4, flour: 4, gold: 16 },
     populationCost: 1,
     damage: 1,
     durability: 1,
@@ -253,7 +253,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
   },
   knights: {
     actionCost: 2,
-    resourceCost: { grain: 6, meat: 2, iron: 8, gold: 24 },
+    resourceCost: { flour: 6, meat: 2, iron: 8, gold: 24 },
     populationCost: 1,
     damage: 1.2,
     durability: 2.5,
@@ -266,13 +266,13 @@ export const startingResources: Record<ResourceId, number> = {
   stone: 65,
   ore: 0,
   iron: 2,
-  grain: 18,
+  flour: 18,
   meat: 0,
   fruit: 0,
   gold: 85,
 }
 
-export const castleProduction: ResourceAmount = { grain: 4, gold: 2 }
+export const castleProduction: ResourceAmount = { flour: 4, gold: 2 }
 
 export const defaultTaxRate: TaxRate = 'moderate'
 export const taxRates: Record<TaxRate, TaxRule> = {
@@ -281,13 +281,13 @@ export const taxRates: Record<TaxRate, TaxRule> = {
   extortionate: { goldPerPerson: 2, foodDemandMultiplier: 2, productionAdjustment: -3 },
 }
 
-export const tradeableResources: TradeResource[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'fruit']
+export const tradeableResources: TradeResource[] = ['wood', 'stone', 'ore', 'iron', 'flour', 'meat', 'fruit']
 export const marketPrices: Record<TradeResource, { buy: number; sell: number }> = {
   wood: { buy: 3, sell: 1 },
   stone: { buy: 4, sell: 2 },
   ore: { buy: 5, sell: 3 },
   iron: { buy: 10, sell: 6 },
-  grain: { buy: 2, sell: 1 },
+  flour: { buy: 2, sell: 1 },
   meat: { buy: 4, sell: 2 },
   fruit: { buy: 4, sell: 2 },
 }
@@ -297,7 +297,7 @@ export const marketPriceBatchSizes: Record<TradeResource, number> = {
   stone: 5,
   ore: 5,
   iron: 5,
-  grain: 10,
+  flour: 10,
   meat: 5,
   fruit: 5,
 }

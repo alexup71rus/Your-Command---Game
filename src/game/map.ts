@@ -2,7 +2,7 @@ import { gameConfig } from '../config/game'
 
 export type Landform = 'plain' | 'hill' | 'peak'
 
-export type ResourceId = 'wood' | 'stone' | 'ore' | 'iron' | 'grain' | 'meat' | 'fruit' | 'gold'
+export type ResourceId = 'wood' | 'stone' | 'ore' | 'iron' | 'flour' | 'meat' | 'fruit' | 'gold'
 export type BuildingKind = 'mill' | 'farm' | 'orchard' | 'huntingLodge' | 'lumberMill' | 'quarry' | 'mine' | 'smelter' | 'kitchen' | 'house' | 'barracks' | 'church' | 'market' | 'wall' | 'tower' | 'barbican'
 export type TroopKind = 'militia' | 'spearmen' | 'archers' | 'knights'
 export type TroopComposition = Record<TroopKind, number>
