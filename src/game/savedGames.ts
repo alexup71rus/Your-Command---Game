@@ -4,7 +4,7 @@ import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './ma
 import type { MatchEvent, MatchState, TurnReport } from './match'
 import type { CellPosition, MapScenario, StartRegion } from './scenario'
 
-export const SAVE_VERSION = 4
+export const SAVE_VERSION = 5
 
 export interface SavedGameSummary {
   id: string

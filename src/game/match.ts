@@ -213,13 +213,12 @@ export function workerAssignmentAt(state: MatchState, position: CellPosition): W
 export function civilianHousingCapacityFor(state: MatchState, ownerId: string) {
   const domain = state.domains[ownerId]
   if (!domain) return 0
-  const dietBonus = domain.diverseDiet ? gameConfig.economy.diverseDietPopulationCapacityBonus : 0
   const houses = state.scenario.cells.reduce((capacity, row) => capacity + row.reduce((rowCapacity, cell) => {
     const object = cell.object
     if (object?.type !== 'building' || object.kind !== 'house' || object.ownerId !== ownerId) return rowCapacity
     return rowCapacity + (buildingRules.house.housingCapacity ?? 0)
   }, 0), 0)
-  return Math.max(0, gameConfig.turn.basePopulationCapacity + houses + dietBonus - totalArmySize(state, ownerId))
+  return Math.max(0, gameConfig.turn.basePopulationCapacity + houses - totalArmySize(state, ownerId))
 }
 
 export function foodServiceCapacityFor(state: MatchState, ownerId: string) {
@@ -982,9 +981,10 @@ export function foodDemandBreakdownFor(state: MatchState, ownerId: string): Food
   const soldiers = squadSize({ units: troopTotals(state, ownerId) })
   const servedCivilians = Math.min(domain.population, foodServiceCapacityFor(state, ownerId))
   const unservedCivilians = Math.max(0, domain.population - servedCivilians)
-  const civilianDemand = Math.ceil(servedCivilians / gameConfig.economy.civilianFoodDivisor)
-  const soldierDemand = Math.ceil(soldiers / gameConfig.economy.soldierFoodDivisor)
-  const taxFood = Math.ceil(domain.population * taxRates[domain.taxRate ?? defaultTaxRate].foodPerPerson)
+  const civilianDemand = Math.ceil(domain.population * gameConfig.economy.civilianFoodPerPerson)
+  const soldierDemand = Math.ceil(soldiers * gameConfig.economy.soldierFoodPerUnit)
+  const foodDemandMultiplier = taxRates[domain.taxRate ?? defaultTaxRate].foodDemandMultiplier
+  const taxFood = Math.ceil(civilianDemand * (foodDemandMultiplier - 1))
   const staple = civilianDemand + soldierDemand
   return { civilians: civilianDemand, soldiers: soldierDemand, taxFood, staple, total: staple + taxFood, servedCivilians, unservedCivilians }
 }
@@ -1037,6 +1037,7 @@ export function processingFor(
   ownerId: string,
   available: Record<ResourceId, number>,
 ) {
+  const taxRule = taxRates[state.domains[ownerId]?.taxRate ?? defaultTaxRate]
   const processed = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
   let resources = { ...available }
   const assignments = new Map(workforceFor(state, ownerId).assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
@@ -1047,7 +1048,10 @@ export function processingFor(
     if (!rule) return
     const assignment = assignments.get(`${column}:${rowIndex}`)
     const workerRatio = assignment ? assignment.assigned / assignment.required : 1
-    const processingCapacity = Math.floor(rule.maximumPerTurn * workerRatio)
+    const staffedCapacity = Math.floor(rule.maximumPerTurn * workerRatio)
+    const processingCapacity = staffedCapacity > 0
+      ? Math.max(0, staffedCapacity + taxRule.productionAdjustment)
+      : 0
     const amount = Math.min(processingCapacity, resources[rule.input])
     if (amount <= 0) return
     resources = { ...resources, [rule.input]: resources[rule.input] - amount, [rule.output]: resources[rule.output] + amount }
@@ -1231,7 +1235,8 @@ export function endTurn(state: MatchState): CommandResult {
         population = Math.max(civilianCapacity, current.population - Math.min(1, gameConfig.economy.starvationPopulationLoss))
         populationReason = 'capacity'
       } else if (current.population < civilianCapacity) {
-        population = Math.min(civilianCapacity, current.population + gameConfig.economy.basePopulationGrowth + (upkeepPaid ? populationGrowthFor(afterEconomyState, participant.id) : 0))
+        const dietGrowth = food.diverseDiet ? gameConfig.economy.diverseDietPopulationGrowthBonus : 0
+        population = Math.min(civilianCapacity, current.population + gameConfig.economy.basePopulationGrowth + dietGrowth + (upkeepPaid ? populationGrowthFor(afterEconomyState, participant.id) : 0))
         if (population > current.population) populationReason = 'growth'
       }
     } else {

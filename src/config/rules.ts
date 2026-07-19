@@ -47,7 +47,7 @@ export type TaxRate = 'none' | 'moderate' | 'extortionate'
 
 export interface TaxRule {
   goldPerPerson: number
-  foodPerPerson: number
+  foodDemandMultiplier: number
   productionAdjustment: number
 }
 
@@ -231,8 +231,8 @@ export const startingResources: Record<ResourceId, number> = {
   stone: 80,
   ore: 0,
   iron: 16,
-  grain: 90,
-  meat: 24,
+  grain: 36,
+  meat: 12,
   gold: 105,
 }
 
@@ -240,9 +240,9 @@ export const castleProduction: ResourceAmount = { grain: 4, gold: 2 }
 
 export const defaultTaxRate: TaxRate = 'moderate'
 export const taxRates: Record<TaxRate, TaxRule> = {
-  none: { goldPerPerson: 0, foodPerPerson: 0, productionAdjustment: 0 },
-  moderate: { goldPerPerson: 0.5, foodPerPerson: 0.08, productionAdjustment: 0 },
-  extortionate: { goldPerPerson: 1, foodPerPerson: 0.2, productionAdjustment: -1 },
+  none: { goldPerPerson: 0, foodDemandMultiplier: 1, productionAdjustment: 0 },
+  moderate: { goldPerPerson: 1, foodDemandMultiplier: 1.5, productionAdjustment: -1 },
+  extortionate: { goldPerPerson: 2, foodDemandMultiplier: 2, productionAdjustment: -3 },
 }
 
 export const tradeableResources: Exclude<ResourceId, 'gold'>[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat']

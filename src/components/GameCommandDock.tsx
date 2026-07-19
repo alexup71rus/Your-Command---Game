@@ -243,7 +243,6 @@ function CastleEconomyPanel({ match, text, locked, onSetTaxRate }: { match: Matc
   const taxGold = forecast?.taxIncome ?? Math.floor(domain.population * selectedTaxRule.goldPerPerson)
   const foodDemand = forecast?.foodDemand ?? foodDemandFor(match, match.playerId)
   const upkeepGold = forecast?.upkeep.gold ?? 0
-  const productionPenalty = text.game.productionPenalty || text.game.production.toLowerCase()
   const resourceForecast = (resource: 'grain' | 'meat' | 'gold') => {
     const projected = forecast?.resources[resource] ?? domain.resources[resource]
     const deficit = resource === 'gold'
@@ -251,7 +250,12 @@ function CastleEconomyPanel({ match, text, locked, onSetTaxRate }: { match: Matc
       : Boolean(forecast && !forecast.food.fed && projected === 0)
     return <div className={`economy-balance${deficit ? ' deficit' : ''}`}><span>{text.game.resourceNames[resource]}</span><strong>{domain.resources[resource]} <i>→</i> {projected}</strong><small>{deficit ? text.game.deficit : text.game.stable}</small></div>
   }
-  return <section className="castle-economy-panel"><div className="economy-forecast">{resourceForecast('grain')}{resourceForecast('meat')}{resourceForecast('gold')}<div className={`tax-impact${forecast && (!forecast.food.fed || !forecast.upkeepPaid) ? ' deficit' : ''}`}><span>{text.game.nextTurn}</span><strong>+{taxGold} {text.game.resourceNames.gold.toLowerCase()}</strong><strong>−{foodDemand} {text.game.foodDemand.toLowerCase()}</strong><strong>−{upkeepGold} {text.game.resourceNames.gold.toLowerCase()} · {text.game.upkeep.toLowerCase()}</strong>{forecast && !forecast.food.fed && <strong>{text.game.foodShortage}</strong>}{forecast?.desertion && <strong>{text.game.turnDesertion.replace('{unit}', text.game.troopNames[forecast.desertion.kind])}</strong>}{selectedTaxRule.productionAdjustment < 0 && <strong>−{Math.abs(selectedTaxRule.productionAdjustment)} {productionPenalty}</strong>}</div></div><div className="tax-control"><span>{text.game.taxes}</span><div>{(['none', 'moderate', 'extortionate'] as TaxRate[]).map((candidate) => <button type="button" key={candidate} disabled={locked} className={candidate === rate ? 'active' : ''} aria-pressed={candidate === rate} onClick={() => onSetTaxRate(candidate)}><span>{text.game.taxRates[candidate]}</span></button>)}</div></div></section>
+  return <section className="castle-economy-panel"><div className="economy-forecast">{resourceForecast('grain')}{resourceForecast('meat')}{resourceForecast('gold')}<div className={`tax-impact${forecast && (!forecast.food.fed || !forecast.upkeepPaid) ? ' deficit' : ''}`}><span>{text.game.nextTurn}</span><strong>+{taxGold} {text.game.resourceNames.gold.toLowerCase()}</strong><strong>−{foodDemand} {text.game.foodDemand.toLowerCase()}</strong><strong>−{upkeepGold} {text.game.resourceNames.gold.toLowerCase()} · {text.game.upkeep.toLowerCase()}</strong>{forecast && !forecast.food.fed && <strong>{text.game.foodShortage}</strong>}{forecast?.desertion && <strong>{text.game.turnDesertion.replace('{unit}', text.game.troopNames[forecast.desertion.kind])}</strong>}</div></div><div className="tax-control"><span>{text.game.taxes}</span><div className="tax-control-legend" aria-hidden="true"><i /><small>{text.game.taxFoodShort}</small><small>{text.game.taxOutputShort}</small></div><div>{(['none', 'moderate', 'extortionate'] as TaxRate[]).map((candidate) => {
+    const rule = taxRates[candidate]
+    const productionImpact = rule.productionAdjustment < 0 ? `−${Math.abs(rule.productionAdjustment)}` : '0'
+    const impact = `${text.game.civilianFoodDemand} ×${rule.foodDemandMultiplier} · ${text.game.buildingOutput} ${productionImpact}`
+    return <button type="button" key={candidate} title={impact} aria-label={`${text.game.taxRates[candidate]}. ${impact}`} disabled={locked} className={candidate === rate ? 'active' : ''} aria-pressed={candidate === rate} onClick={() => onSetTaxRate(candidate)}><span>{text.game.taxRates[candidate]}</span><small>×{rule.foodDemandMultiplier}</small><small>{productionImpact}</small></button>
+  })}</div></div></section>
 }
 
 function MarketPanel({ match, position, text, locked, onTrade }: { match: MatchState; position: CellPosition; text: LocaleDictionary; locked: boolean; onTrade: GameCommandDockProps['onTrade'] }) {

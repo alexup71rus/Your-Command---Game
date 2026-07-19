@@ -1912,11 +1912,15 @@ small { font-size: max(10px, .833em); }
 .tax-impact strong { color: #c9cfbf; font-size: 10px; font-weight: 650; white-space: nowrap; }
 .tax-impact strong:first-of-type { color: #d8c176; }
 .tax-control { display: flex; flex-direction: column; justify-content: center; padding: 7px; border: 1px solid rgba(211, 181, 94, .12); border-radius: 8px; }
-.tax-control > span { margin-bottom: 4px; color: #8c9588; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-.tax-control > div { display: grid; gap: 4px; }
-.tax-control button { display: grid; min-height: 29px; align-content: center; padding: 3px 8px; border: 1px solid rgba(190, 201, 181, .1); border-radius: 5px; color: #8f998d; background: rgba(255,255,255,.02); text-align: left; cursor: pointer; }
-.tax-control button > span { font-size: 10px; font-weight: 700; }
+.tax-control > span { margin-bottom: 2px; color: #8c9588; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.tax-control > div:not(.tax-control-legend) { display: grid; gap: 3px; }
+.tax-control-legend { display: grid; grid-template-columns: minmax(0, 1fr) 34px 40px; align-items: center; gap: 3px; padding: 0 6px 2px; color: #697368; text-align: center; }
+.tax-control-legend small { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.tax-control button { display: grid; min-height: 25px; grid-template-columns: minmax(0, 1fr) 34px 40px; align-content: center; align-items: center; gap: 3px; padding: 2px 6px; border: 1px solid rgba(190, 201, 181, .1); border-radius: 5px; color: #8f998d; background: rgba(255,255,255,.02); text-align: left; cursor: pointer; }
+.tax-control button > span { overflow: hidden; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.tax-control button > small { color: #7f897d; font-size: 10px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; }
 .tax-control button.active { border-color: rgba(213, 181, 93, .4); color: #e0ca89; background: rgba(211, 179, 91, .09); }
+.tax-control button.active > small { color: #c7ae68; }
 .tax-control button:disabled { cursor: not-allowed; opacity: .45; }
 
 .market-panel { display: grid; height: 132px; grid-template-columns: 145px minmax(0, 1fr); gap: 8px; }

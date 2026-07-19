@@ -119,6 +119,8 @@ export interface LocaleDictionary {
     endTurnHint: string
     production: string
     foodDemand: string
+    civilianFoodDemand: string
+    buildingOutput: string
     populationCapacity: string
     workers: string
     size: string
@@ -131,7 +133,8 @@ export interface LocaleDictionary {
     workerProductionStopped: string
     taxes: string
     taxRates: Record<'none' | 'moderate' | 'extortionate', string>
-    productionPenalty: string
+    taxFoodShort: string
+    taxOutputShort: string
     upkeep: string
     nextTurn: string
     stable: string
