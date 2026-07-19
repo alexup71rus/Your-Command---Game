@@ -25,6 +25,7 @@ interface GridCanvasProps {
   regions?: StartRegion[]
   participants?: MatchParticipant[]
   showTerritories?: boolean
+  showGrid?: boolean
   territoryInspecting?: boolean
   mode?: 'playing' | 'founding'
   selectedRegionId?: string | null
@@ -78,7 +79,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
   useEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
@@ -159,7 +160,7 @@ export function GridCanvas(props: GridCanvasProps) {
 
     const drawBuilding = (x: number, y: number, size: number, kind: BuildingKind, color: string, ghost = false) => {
       const inset = size * 0.16
-      const roofColors: Record<BuildingKind, string> = { farm: '#a77b47', huntingLodge: '#72543b', lumberMill: '#6e5035', quarry: '#89877b', mine: '#696b63', smelter: '#6f584a', kitchen: '#8b6043', house: '#9b6548', barracks: '#7f5544', church: '#7f684d', market: '#a06f3f', wall: '#8e8a77', tower: '#817b6b', barbican: '#777263' }
+      const roofColors: Record<BuildingKind, string> = { mill: '#b6a072', farm: '#a77b47', orchard: '#657d4e', huntingLodge: '#72543b', lumberMill: '#6e5035', quarry: '#89877b', mine: '#696b63', smelter: '#6f584a', kitchen: '#8b6043', house: '#9b6548', barracks: '#7f5544', church: '#7f684d', market: '#a06f3f', wall: '#8e8a77', tower: '#817b6b', barbican: '#777263' }
       context.save()
       context.globalAlpha = ghost ? 0.68 : 1
       context.shadowColor = ghost ? 'transparent' : 'rgba(0, 0, 0, .32)'
@@ -168,6 +169,45 @@ export function GridCanvas(props: GridCanvasProps) {
       context.fillStyle = ghost ? color : '#c2b083'
       context.strokeStyle = color
       context.lineWidth = Math.max(1, size * 0.045)
+      if (kind === 'mill') {
+        context.fillStyle = ghost ? color : '#bcae86'
+        context.beginPath(); context.moveTo(x + size * .28, y + size * .82); context.lineTo(x + size * .36, y + size * .25); context.lineTo(x + size * .64, y + size * .25); context.lineTo(x + size * .72, y + size * .82); context.closePath(); context.fill(); context.stroke()
+        context.fillStyle = ghost ? color : '#806047'
+        context.beginPath(); context.moveTo(x + size * .31, y + size * .28); context.lineTo(x + size * .5, y + size * .1); context.lineTo(x + size * .69, y + size * .28); context.closePath(); context.fill(); context.stroke()
+        context.shadowColor = 'transparent'
+        context.fillStyle = ghost ? 'rgba(25,31,25,.3)' : '#40372d'
+        context.fillRect(x + size * .455, y + size * .63, size * .09, size * .19)
+        context.strokeStyle = ghost ? color : '#d2bd78'
+        context.lineWidth = Math.max(1.5, size * .025)
+        context.beginPath(); context.arc(x + size * .5, y + size * .43, size * .055, 0, Math.PI * 2); context.stroke()
+        for (let blade = 0; blade < 4; blade += 1) {
+          context.save(); context.translate(x + size * .5, y + size * .43); context.rotate(blade * Math.PI / 2 + .2)
+          context.beginPath(); context.moveTo(size * .045, 0); context.lineTo(size * .31, -size * .055); context.lineTo(size * .28, size * .055); context.closePath(); context.stroke(); context.restore()
+        }
+        context.restore()
+        return
+      }
+      if (kind === 'orchard') {
+        const border = size * .055
+        context.fillStyle = ghost ? color : '#485237'
+        context.fillRect(x + border, y + border, size - border * 2, size - border * 2)
+        context.strokeRect(x + border, y + border, size - border * 2, size - border * 2)
+        context.shadowColor = 'transparent'
+        for (let treeRow = 0; treeRow < 3; treeRow += 1) {
+          for (let treeColumn = 0; treeColumn < 3; treeColumn += 1) {
+            const treeX = x + size * (.22 + treeColumn * .28)
+            const treeY = y + size * (.22 + treeRow * .28)
+            context.fillStyle = ghost ? color : '#6c4e35'
+            context.fillRect(treeX - size * .018, treeY + size * .035, size * .036, size * .09)
+            context.fillStyle = ghost ? color : treeRow % 2 === treeColumn % 2 ? '#547044' : '#617b4b'
+            context.beginPath(); context.arc(treeX, treeY, size * .09, 0, Math.PI * 2); context.fill(); context.stroke()
+            context.fillStyle = ghost ? color : '#c58c4d'
+            context.beginPath(); context.arc(treeX + size * .026, treeY - size * .018, size * .014, 0, Math.PI * 2); context.fill()
+          }
+        }
+        context.restore()
+        return
+      }
       if (kind === 'farm') {
         const border = size * .055
         context.shadowBlur = ghost ? 0 : size * .04
@@ -562,16 +602,18 @@ export function GridCanvas(props: GridCanvasProps) {
         }
       }
 
-      context.lineWidth = 1
-      for (let column = firstColumn; column <= lastColumn; column += 1) {
-        const x = Math.round(mapOrigin.x + column * CELL_SIZE * camera.zoom) + 0.5
-        context.beginPath(); context.strokeStyle = column % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
-        context.moveTo(x, Math.max(0, mapOrigin.y)); context.lineTo(x, Math.min(viewport.height, mapOrigin.y + mapHeight)); context.stroke()
-      }
-      for (let row = firstRow; row <= lastRow; row += 1) {
-        const y = Math.round(mapOrigin.y + row * CELL_SIZE * camera.zoom) + 0.5
-        context.beginPath(); context.strokeStyle = row % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
-        context.moveTo(Math.max(0, mapOrigin.x), y); context.lineTo(Math.min(viewport.width, mapOrigin.x + mapWidth), y); context.stroke()
+      if (current.showGrid !== false) {
+        context.lineWidth = 1
+        for (let column = firstColumn; column <= lastColumn; column += 1) {
+          const x = Math.round(mapOrigin.x + column * CELL_SIZE * camera.zoom) + 0.5
+          context.beginPath(); context.strokeStyle = column % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
+          context.moveTo(x, Math.max(0, mapOrigin.y)); context.lineTo(x, Math.min(viewport.height, mapOrigin.y + mapHeight)); context.stroke()
+        }
+        for (let row = firstRow; row <= lastRow; row += 1) {
+          const y = Math.round(mapOrigin.y + row * CELL_SIZE * camera.zoom) + 0.5
+          context.beginPath(); context.strokeStyle = row % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
+          context.moveTo(Math.max(0, mapOrigin.x), y); context.lineTo(Math.min(viewport.width, mapOrigin.x + mapWidth), y); context.stroke()
+        }
       }
 
       if (current.movementPath && current.movementPath.length > 1) {
@@ -793,6 +835,38 @@ export function GridCanvas(props: GridCanvasProps) {
         const footprint = current.actionPreview.kind === 'building' ? buildingRules[current.actionPreview.building].footprint ?? { columns: 1, rows: 1 } : { columns: 1, rows: 1 }
         const previewWidth = cellSize * footprint.columns
         const previewHeight = cellSize * footprint.rows
+        if (current.actionPreview.kind === 'building' && current.actionPreview.building === 'mill') {
+          const support = buildingRules.mill.farmSupport!
+          const viewerRegionId = current.participants?.find((participant) => participant.id === current.viewerId)?.regionId
+          context.save()
+          for (let rowOffset = -support.radius; rowOffset <= support.radius; rowOffset += 1) {
+            for (let columnOffset = -support.radius; columnOffset <= support.radius; columnOffset += 1) {
+              if (Math.abs(columnOffset) + Math.abs(rowOffset) > support.radius) continue
+              context.fillStyle = 'rgba(211, 180, 89, .07)'
+              context.fillRect(x + columnOffset * cellSize, y + rowOffset * cellSize, cellSize, cellSize)
+            }
+          }
+          const farmFootprint = buildingRules.farm.footprint!
+          for (let farmRow = hoveredCell.row - support.radius - farmFootprint.rows + 1; farmRow <= hoveredCell.row + support.radius; farmRow += 1) {
+            for (let farmColumn = hoveredCell.column - support.radius - farmFootprint.columns + 1; farmColumn <= hoveredCell.column + support.radius; farmColumn += 1) {
+              const positions = Array.from({ length: farmFootprint.rows }, (_, rowOffset) => Array.from({ length: farmFootprint.columns }, (_, columnOffset) => ({ column: farmColumn + columnOffset, row: farmRow + rowOffset }))).flat()
+              const overlapsMill = positions.some((position) => position.column === hoveredCell!.column && position.row === hoveredCell!.row)
+              const suitable = !overlapsMill && positions.every((position) => {
+                const cell = map[position.row]?.[position.column]
+                return Boolean(cell
+                  && cell.landform === 'plain'
+                  && !cell.vegetation
+                  && !cell.object
+                  && (!viewerRegionId || current.territories?.[position.row]?.[position.column] === viewerRegionId))
+              })
+              const distance = Math.min(...positions.map((position) => Math.abs(position.column - hoveredCell!.column) + Math.abs(position.row - hoveredCell!.row)))
+              if (!suitable || distance > support.radius) continue
+              context.strokeStyle = 'rgba(151, 190, 116, .72)'; context.lineWidth = Math.max(1, camera.zoom * 1.2); context.setLineDash([4, 3])
+              context.strokeRect(mapOrigin.x + farmColumn * cellSize + 2, mapOrigin.y + farmRow * cellSize + 2, cellSize * farmFootprint.columns - 4, cellSize * farmFootprint.rows - 4)
+            }
+          }
+          context.setLineDash([]); context.restore()
+        }
         context.fillStyle = valid ? 'rgba(211, 180, 89, .16)' : 'rgba(174, 72, 61, .18)'
         context.fillRect(x, y, previewWidth, previewHeight)
         if (current.actionPreview.kind === 'building') drawBuilding(x, y, Math.max(previewWidth, previewHeight), current.actionPreview.building, valid ? '#d2b45f' : '#b45f51', true)

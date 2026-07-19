@@ -9,10 +9,14 @@ interface SettingsModalProps {
   text: LocaleDictionary
   soundEnabled: boolean
   volume: number
+  musicVolume: number
+  showGrid: boolean
   onClose: () => void
   onLocaleChange: (locale: Locale) => void
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
+  onMusicVolumeChange: (volume: number) => void
+  onShowGridChange: (visible: boolean) => void
   onReturnToMenu?: () => void
   onOpenSavedGames?: () => void
 }
@@ -27,10 +31,14 @@ export function SettingsModal({
   text,
   soundEnabled,
   volume,
+  musicVolume,
+  showGrid,
   onClose,
   onLocaleChange,
   onSoundToggle,
   onVolumeChange,
+  onMusicVolumeChange,
+  onShowGridChange,
   onReturnToMenu,
   onOpenSavedGames,
 }: SettingsModalProps) {
@@ -90,23 +98,59 @@ export function SettingsModal({
                 {soundEnabled ? text.sound.enabled : text.sound.disabled}
               </button>
               <label>
-                <span>{volume}%</span>
+                <span>{text.sound.effectsVolume} · {volume}%</span>
                 <input
                   type="range"
                   min="0"
                   max="100"
                   value={volume}
-                  aria-label={text.sound.title}
+                  aria-label={text.sound.effectsVolume}
                   onChange={(event) => onVolumeChange(Number(event.target.value))}
                 />
               </label>
             </div>
           </section>
 
+          <section className="settings-card music-settings-card">
+            <div className="settings-card-copy">
+              <h3>{text.sound.musicTitle}</h3>
+              <p>{text.sound.musicDescription}</p>
+            </div>
+            <div className="volume-control music-volume-control">
+              <label>
+                <span>{musicVolume}%</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={musicVolume}
+                  aria-label={text.sound.musicVolume}
+                  onChange={(event) => onMusicVolumeChange(Number(event.target.value))}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-card grid-settings-card">
+            <div className="settings-card-copy">
+              <h3>{text.settings.grid}</h3>
+              <p>{text.settings.gridDescription}</p>
+            </div>
+            <button
+              type="button"
+              className={`settings-grid-toggle${showGrid ? ' active' : ''}`}
+              aria-pressed={showGrid}
+              onClick={() => onShowGridChange(!showGrid)}
+            >
+              <span className="grid-toggle-icon" aria-hidden="true" />
+              {showGrid ? text.settings.gridEnabled : text.settings.gridDisabled}
+            </button>
+          </section>
+
           {onReturnToMenu && onOpenSavedGames && (
             <section className="settings-card settings-save-card">
               <div className="settings-card-copy"><h3>{text.settings.saveGame}</h3><p>{text.settings.saveGameDescription}</p></div>
-              <button type="button" className="settings-save-button" onClick={onOpenSavedGames}>{text.settings.saveGame}</button>
+              <button type="button" className="settings-save-button" onClick={onOpenSavedGames}>{text.settings.manageGames}</button>
             </section>
           )}
 

@@ -49,4 +49,13 @@ describe('saved map parameters', () => {
     expect(persistSavedMaps([savedMap])).toEqual({ ok: true })
     expect(setItem).toHaveBeenCalledWith(gameConfig.savedMaps.storageKey, JSON.stringify([savedMap]))
   })
+
+  it('reads legacy maps and migrates them without hiding readable data on a write failure', () => {
+    const raw = JSON.stringify([savedMap])
+    const getItem = vi.fn((key: string) => key === gameConfig.savedMaps.legacyStorageKey ? raw : null)
+    const setItem = vi.fn(() => { throw new Error('read-only') })
+    vi.stubGlobal('window', { localStorage: { getItem, setItem } })
+    expect(loadSavedMapsResult()).toEqual({ ok: true, maps: [savedMap] })
+    expect(setItem).toHaveBeenCalledWith(gameConfig.savedMaps.storageKey, raw)
+  })
 })

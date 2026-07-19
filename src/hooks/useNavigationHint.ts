@@ -10,11 +10,18 @@ export function navigationHintDelay(learned: Record<NavigationSkill, boolean>) {
 }
 
 function wasHintSeen() {
+  let current: string | null
+  let saved: string | null
   try {
-    return window.localStorage.getItem(gameConfig.navigationHint.storageKey) === 'true'
+    current = window.localStorage.getItem(gameConfig.navigationHint.storageKey)
+    saved = current ?? window.localStorage.getItem(gameConfig.navigationHint.legacyStorageKey)
   } catch {
     return false
   }
+  if (current === null && saved === 'true') {
+    try { window.localStorage.setItem(gameConfig.navigationHint.storageKey, 'true') } catch { /* Keep the migrated state for this session. */ }
+  }
+  return saved === 'true'
 }
 
 export function useNavigationHint() {

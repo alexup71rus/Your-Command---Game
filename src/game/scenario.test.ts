@@ -43,14 +43,14 @@ describe('starting domains', () => {
       expect(reachableCells(result.scenario.territories, region.id, region.center)).toBe(region.score.cells)
       expect(isCastleSiteValid(result.scenario, region.id, region.validCastleCells[0])).toBe(true)
       const reservedCells = Object.entries(region.reservedBuildSites).flatMap(([kind, origin]) => (
-        [
+        (kind === 'house' ? [origin] : [
           origin,
           { column: origin.column + 1, row: origin.row },
           { column: origin.column, row: origin.row + 1 },
           { column: origin.column + 1, row: origin.row + 1 },
-        ].map((position) => ({ kind, ...position }))
+        ]).map((position) => ({ kind, ...position }))
       ))
-      expect(new Set(reservedCells.map(({ column, row }) => `${column}:${row}`))).toHaveProperty('size', 12)
+      expect(new Set(reservedCells.map(({ column, row }) => `${column}:${row}`))).toHaveProperty('size', 13)
       reservedCells.forEach(({ kind, column, row }) => {
         const cell = result.scenario.cells[row][column]
         expect(result.scenario.territories[row][column]).toBe(region.id)
@@ -62,6 +62,7 @@ describe('starting domains', () => {
       })
       region.validCastleCells.forEach((castle) => {
         expect(reservedCells.some(({ column, row }) => column === castle.column && row === castle.row)).toBe(false)
+        expect(Math.abs(castle.column - region.reservedBuildSites.house.column) + Math.abs(castle.row - region.reservedBuildSites.house.row)).toBeLessThanOrEqual(gameConfig.economy.foodServiceRadius)
       })
       const clearCellCount = result.scenario.territories.reduce((total, row, rowIndex) => (
         total + row.reduce((rowTotal, owner, column) => {
@@ -198,6 +199,16 @@ describe('starting domains', () => {
       const result = createMapScenario(presetMap, count, preset.settings.seed)
       expect(result.ok).toBe(true)
       if (!result.ok) return
+      result.scenario.regions.forEach((region) => {
+        const orchardCells = [
+          region.reservedBuildSites.extra,
+          { column: region.reservedBuildSites.extra.column + 1, row: region.reservedBuildSites.extra.row },
+          { column: region.reservedBuildSites.extra.column, row: region.reservedBuildSites.extra.row + 1 },
+          { column: region.reservedBuildSites.extra.column + 1, row: region.reservedBuildSites.extra.row + 1 },
+        ]
+        expect(orchardCells.every(({ column, row }) => result.scenario.territories[row][column] === region.id && !result.scenario.cells[row][column].vegetation && result.scenario.cells[row][column].landform !== 'peak')).toBe(true)
+        expect(region.validCastleCells.every((castle) => Math.abs(castle.column - region.reservedBuildSites.house.column) + Math.abs(castle.row - region.reservedBuildSites.house.row) <= gameConfig.economy.foodServiceRadius)).toBe(true)
+      })
     },
   )
 

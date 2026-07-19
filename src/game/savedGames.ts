@@ -1,10 +1,10 @@
 import { gameConfig } from '../config/game'
-import { buildingKinds, buildingRules, resourceIds, taxRates, troopKinds, troopRules } from '../config/rules'
+import { buildingKinds, buildingRules, resourceIds, taxRates, tradeableResources, troopKinds, troopRules } from '../config/rules'
 import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './map'
 import type { MatchEvent, MatchState, TurnReport } from './match'
 import type { CellPosition, MapScenario, StartRegion } from './scenario'
 
-export const SAVE_VERSION = 5
+export const SAVE_VERSION = 7
 
 export interface SavedGameSummary {
   id: string
@@ -48,8 +48,21 @@ function isResourceRecord(value: unknown): value is Record<ResourceId, number> {
   return isRecord(value) && resourceIds.every((resource) => isFiniteNonNegative(value[resource]))
 }
 
+function isResourceAmount(value: unknown) {
+  return isRecord(value)
+    && Object.keys(value).every((resource) => resourceIds.includes(resource as ResourceId))
+    && Object.values(value).every(isNonNegativeInteger)
+}
+
 function isSignedResourceRecord(value: unknown): value is Record<ResourceId, number> {
   return isRecord(value) && resourceIds.every((resource) => typeof value[resource] === 'number' && Number.isFinite(value[resource]))
+}
+
+function isMarketActivity(value: unknown) {
+  if (!isRecord(value) || !isRecord(value.bought) || !isRecord(value.sold)) return false
+  const bought = value.bought
+  const sold = value.sold
+  return tradeableResources.every((resource) => isNonNegativeInteger(bought[resource]) && isNonNegativeInteger(sold[resource]))
 }
 
 function isComposition(value: unknown): value is TroopComposition {
@@ -78,6 +91,12 @@ function isMapObject(value: unknown, owners: Set<string>, size: number, column: 
   if (typeof value.kind !== 'string' || !buildingKinds.includes(value.kind as BuildingKind)) return false
   const kind = value.kind as BuildingKind
   if (value.maxHitPoints !== buildingRules[kind].hitPoints) return false
+  if (!isResourceAmount(value.constructionCost)) return false
+  const standardCost = buildingRules[kind].resourceCost
+  const paidStandardCost = resourceIds.every((resource) => ((value.constructionCost as Record<string, number>)[resource] ?? 0) === (standardCost[resource] ?? 0))
+  const paidEmergencyCost = Boolean(buildingRules[kind].emergencyFreeIfMissing)
+    && resourceIds.every((resource) => ((value.constructionCost as Record<string, number>)[resource] ?? 0) === 0)
+  if (!paidStandardCost && !paidEmergencyCost) return false
   const expected = buildingRules[kind].footprint ?? { columns: 1, rows: 1 }
   if (value.footprint !== undefined) {
     if (!isRecord(value.footprint)
@@ -122,7 +141,7 @@ function isRegion(value: unknown, regionIds: Set<string>, size: number): value i
     || !isFiniteNonNegative(value.score.quality)
     || !isRecord(value.reservedBuildSites)) return false
   const reservedBuildSites = value.reservedBuildSites
-  return ['plain', 'hill', 'extra'].every((key) => isPosition(reservedBuildSites[key], size))
+  return ['plain', 'hill', 'extra', 'house'].every((key) => isPosition(reservedBuildSites[key], size))
 }
 
 function isScenario(value: unknown): value is MapScenario {
@@ -211,13 +230,17 @@ function isScenario(value: unknown): value is MapScenario {
     if (region.score.cells !== territoryCells.length || region.score.forest !== forest || region.score.hills !== hills || Math.abs(region.score.quality - quality) > 1e-9) return false
     if (!region.validCastleCells.some(({ column, row }) => column === region.center.column && row === region.center.row)) return false
     if (region.validCastleCells.some(({ column, row }) => territories[row]?.[column] !== region.id)) return false
-    const reserved = Object.entries(region.reservedBuildSites).flatMap(([kind, origin]) => [
-      { kind, column: origin.column, row: origin.row },
-      { kind, column: origin.column + 1, row: origin.row },
-      { kind, column: origin.column, row: origin.row + 1 },
-      { kind, column: origin.column + 1, row: origin.row + 1 },
-    ])
-    if (new Set(reserved.map(({ column, row }) => `${column}:${row}`)).size !== 12) return false
+    const reserved = Object.entries(region.reservedBuildSites).flatMap(([kind, origin]) => (
+      kind === 'house'
+        ? [{ kind, column: origin.column, row: origin.row }]
+        : [
+            { kind, column: origin.column, row: origin.row },
+            { kind, column: origin.column + 1, row: origin.row },
+            { kind, column: origin.column, row: origin.row + 1 },
+            { kind, column: origin.column + 1, row: origin.row + 1 },
+          ]
+    ))
+    if (new Set(reserved.map(({ column, row }) => `${column}:${row}`)).size !== 13) return false
     if (reserved.some(({ kind, column, row }) => {
       const cell = cells[row]?.[column]
       return territories[row]?.[column] !== region.id
@@ -225,6 +248,8 @@ function isScenario(value: unknown): value is MapScenario {
         || (kind === 'plain' && cell.landform !== 'plain')
         || (kind === 'hill' && cell.landform !== 'hill')
     })) return false
+    const house = region.reservedBuildSites.house
+    if (region.validCastleCells.some((castle) => Math.abs(castle.column - house.column) + Math.abs(castle.row - house.row) > gameConfig.economy.foodServiceRadius)) return false
     const participant = participants.find((candidate) => candidate.regionId === region.id)
     if (!participant || participant.color !== region.color) return false
   }
@@ -260,6 +285,7 @@ function isTurnReport(value: unknown, owners: Set<string>, size: number): value 
     || !isRecord(value.food)
     || !isFiniteNonNegative(value.food.grain)
     || !isFiniteNonNegative(value.food.meat)
+    || !isFiniteNonNegative(value.food.fruit)
     || typeof value.food.fed !== 'boolean'
     || typeof value.food.diverseDiet !== 'boolean'
     || !isResourceRecord(value.resourcesAfter)
@@ -291,14 +317,23 @@ function isMatchState(value: unknown): value is MatchState {
       && isNonNegativeInteger(domain.population)
       && (domain.taxRate === undefined || (typeof domain.taxRate === 'string' && domain.taxRate in taxRates))
       && typeof domain.diverseDiet === 'boolean'
+      && isMarketActivity(domain.marketActivity)
   })) return false
   const armyCounts = Object.fromEntries([...owners].map((owner) => [owner, 0])) as Record<string, number>
-  scenario.cells.forEach((row) => row.forEach((cell) => {
+  const buildingCounts = Object.fromEntries([...owners].map((owner) => [owner, Object.fromEntries(buildingKinds.map((kind) => [kind, 0])) as Record<BuildingKind, number>])) as Record<string, Record<BuildingKind, number>>
+  scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
     if (object?.type === 'squad') armyCounts[object.ownerId] += compositionSize(object.units)
-    if (object?.type === 'building' && object.kind === 'tower' && object.garrison) armyCounts[object.ownerId] += object.garrison.archers
+    if (object?.type === 'building') {
+      if (!object.footprint || (object.footprint.originColumn === column && object.footprint.originRow === rowIndex)) buildingCounts[object.ownerId][object.kind] += 1
+      if (object.kind === 'tower' && object.garrison) armyCounts[object.ownerId] += object.garrison.archers
+    }
   }))
   if (Object.values(armyCounts).some((count) => count > gameConfig.army.capacity)) return false
+  if ([...owners].some((owner) => buildingKinds.some((kind) => {
+    const maximum = buildingRules[kind].maxPerOwner
+    return maximum !== undefined && buildingCounts[owner][kind] > maximum
+  }))) return false
   return Object.entries(value.lastTurnReports).every(([owner, report]) => owners.has(owner) && isTurnReport(report, owners, size) && report.ownerId === owner)
 }
 

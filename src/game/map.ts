@@ -2,8 +2,8 @@ import { gameConfig } from '../config/game'
 
 export type Landform = 'plain' | 'hill' | 'peak'
 
-export type ResourceId = 'wood' | 'stone' | 'ore' | 'iron' | 'grain' | 'meat' | 'gold'
-export type BuildingKind = 'farm' | 'huntingLodge' | 'lumberMill' | 'quarry' | 'mine' | 'smelter' | 'kitchen' | 'house' | 'barracks' | 'church' | 'market' | 'wall' | 'tower' | 'barbican'
+export type ResourceId = 'wood' | 'stone' | 'ore' | 'iron' | 'grain' | 'meat' | 'fruit' | 'gold'
+export type BuildingKind = 'mill' | 'farm' | 'orchard' | 'huntingLodge' | 'lumberMill' | 'quarry' | 'mine' | 'smelter' | 'kitchen' | 'house' | 'barracks' | 'church' | 'market' | 'wall' | 'tower' | 'barbican'
 export type TroopKind = 'militia' | 'spearmen' | 'archers' | 'knights'
 export type TroopComposition = Record<TroopKind, number>
 
@@ -20,6 +20,7 @@ export interface BuildingObject {
   ownerId: string
   hitPoints: number
   maxHitPoints: number
+  constructionCost?: Partial<Record<ResourceId, number>>
   garrison?: TowerGarrison
   footprint?: {
     originColumn: number

@@ -3,17 +3,27 @@ import {
   defaultLocale,
   isLocale,
   loadLocale,
+  legacyLocaleStorageKey,
   localeStorageKey,
   type Locale,
   type LocaleDictionary,
 } from '../config/localization'
 
 function readInitialLocale(): Locale {
+  let current: string | null
+  let saved: string | null
   try {
-    const saved = window.localStorage.getItem(localeStorageKey)
-    if (isLocale(saved)) return saved
+    current = window.localStorage.getItem(localeStorageKey)
+    saved = current ?? window.localStorage.getItem(legacyLocaleStorageKey)
   } catch {
     // Use browser preference when storage is unavailable.
+    return navigator.language.toLowerCase().startsWith('ru') ? 'ru' : defaultLocale
+  }
+  if (isLocale(saved)) {
+    if (current === null) {
+      try { window.localStorage.setItem(localeStorageKey, saved) } catch { /* Use the migrated locale for this session. */ }
+    }
+    return saved
   }
   return navigator.language.toLowerCase().startsWith('ru') ? 'ru' : defaultLocale
 }
@@ -38,7 +48,8 @@ export function useLocalization() {
 
   useEffect(() => {
     document.documentElement.lang = loaded?.locale ?? requestedLocale
-  }, [loaded?.locale, requestedLocale])
+    if (loaded?.dictionary.startMenu.title) document.title = loaded.dictionary.startMenu.title
+  }, [loaded?.dictionary.startMenu.title, loaded?.locale, requestedLocale])
 
   const setLocale = useCallback((nextLocale: Locale) => {
     try {

@@ -1,3 +1,12 @@
+export const gameIdentity = {
+  name: 'Ваш приказ',
+  englishName: 'Your Command',
+  slug: 'your-command',
+  version: '1.0.0',
+} as const
+
+const storageKey = (name: string) => `${gameIdentity.slug}:${name}`
+
 export const gameConfig = {
   map: {
     columns: 100,
@@ -35,6 +44,7 @@ export const gameConfig = {
     forestMovementOrderMultiplier: 2,
     squadReorganizationOrderCost: 2,
     demolishOrderCost: 2,
+    demolitionRefundRate: 0.5,
     archerRange: 8,
     squadCapacity: 10,
     castleHitPoints: 100,
@@ -49,14 +59,14 @@ export const gameConfig = {
   economy: {
     civilianFoodPerPerson: 1,
     soldierFoodPerUnit: 1,
-    foodResources: ['grain', 'meat'],
-    diverseDietMinimumShare: 0.25,
+    foodResources: ['grain', 'meat', 'fruit'],
+    diverseDietMinimumShare: 0.2,
     diverseDietPopulationGrowthBonus: 1,
     diverseDietDamageMultiplier: 1.05,
     basePopulationGrowth: 1,
     minimumPopulation: 1,
     starvationPopulationLoss: 1,
-    castleFoodServiceCapacity: 20,
+    castleFoodServiceCapacity: 10,
     foodServiceRadius: 5,
   },
   visibility: {
@@ -68,10 +78,21 @@ export const gameConfig = {
   },
   audio: {
     defaultVolume: 70,
-    volumeStorageKey: 'castle-turns:sound-volume',
-    lastVolumeStorageKey: 'castle-turns:last-sound-volume',
+    volumeStorageKey: storageKey('sound-volume'),
+    lastVolumeStorageKey: storageKey('last-sound-volume'),
+    legacyVolumeStorageKey: 'castle-turns:sound-volume',
+    legacyLastVolumeStorageKey: 'castle-turns:last-sound-volume',
     legacyEnabledStorageKey: 'castle-turns:sound-enabled',
     gainMultiplier: 2.8,
+    musicDefaultVolume: 42,
+    musicVolumeStorageKey: storageKey('music-volume'),
+    musicCrossfadeMs: 1_800,
+    combatMusicHoldMs: 12_000,
+    musicTracks: {
+      menu: 'assets/music/the-old-tower-inn.mp3',
+      settlement: 'assets/music/woodland-fantasy.mp3',
+      battle: 'assets/music/heroic-demise.mp3',
+    },
   },
   camera: {
     minZoom: 0.3,
@@ -83,12 +104,18 @@ export const gameConfig = {
     unitMoveAnimationMs: 260,
   },
   navigationHint: {
-    storageKey: 'castle-turns:navigation-hint-seen',
+    storageKey: storageKey('navigation-hint-seen'),
+    legacyStorageKey: 'castle-turns:navigation-hint-seen',
     masteredDelayMs: 10_000,
     partialDelayMs: 60_000,
   },
+  display: {
+    showGridByDefault: true,
+    gridStorageKey: storageKey('map-grid-visible'),
+  },
   savedMaps: {
-    storageKey: 'castle-turns:saved-maps',
+    storageKey: storageKey('saved-maps'),
+    legacyStorageKey: 'castle-turns:saved-maps',
   },
   savedGames: {
     databaseName: 'your-command',

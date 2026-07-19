@@ -44,6 +44,7 @@ export interface StartRegion {
     plain: CellPosition
     hill: CellPosition
     extra: CellPosition
+    house: CellPosition
   }
   score: RegionScore
 }
@@ -318,6 +319,15 @@ function footprintCells(origin: CellPosition) {
   ]
 }
 
+function reservedSiteCells(sites: StartRegion['reservedBuildSites']) {
+  return [
+    ...footprintCells(sites.plain),
+    ...footprintCells(sites.hill),
+    ...footprintCells(sites.extra),
+    sites.house,
+  ]
+}
+
 function isBaseCastleSiteValid(scenario: Pick<MapScenario, 'cells' | 'territories'>, regionId: string, position: CellPosition) {
   const { column, row } = position
   const cell = scenario.cells[row]?.[column]
@@ -340,7 +350,7 @@ export function isCastleSiteValid(
   if (!isBaseCastleSiteValid(scenario, regionId, position)) return false
   const region = scenario.regions?.find((candidate) => candidate.id === regionId)
   if (!region) return true
-  return !Object.values(region.reservedBuildSites).flatMap(footprintCells)
+  return !reservedSiteCells(region.reservedBuildSites)
     .some((reserved) => reserved.column === position.column && reserved.row === position.row)
 }
 
@@ -350,13 +360,16 @@ function reservedBuildSitesFor(
   regionId: string,
   castleCells: CellPosition[],
 ) {
-  const clearCells = (origin: CellPosition) => footprintCells(origin).every(({ column, row }) => {
+  const clearCell = ({ column, row }: CellPosition) => {
     const cell = map[row]?.[column]
     return territories[row]?.[column] === regionId
       && Boolean(cell)
       && (cell.landform === 'plain' || cell.landform === 'hill')
       && !cell.vegetation
       && !cell.object
+  }
+  const clearCells = (origin: CellPosition) => footprintCells(origin).every(({ column, row }) => {
+    return clearCell({ column, row })
   })
   const clearCellCount = territories.reduce((total, row, rowIndex) => total + row.reduce((rowTotal, id, column) => {
     const cell = map[rowIndex]?.[column]
@@ -380,10 +393,30 @@ function reservedBuildSitesFor(
     for (const hill of hills) {
       for (const extra of origins) {
         if (overlaps(plain, extra) || overlaps(hill, extra)) continue
-        const reserved = { plain, hill, extra }
-        const reservedCells = new Set(Object.values(reserved).flatMap(footprintCells).map(({ column, row }) => `${column}:${row}`))
-        if (!castleCells.some(({ column, row }) => !reservedCells.has(`${column}:${row}`))) continue
-        return reserved
+        const developmentCells = new Set([plain, hill, extra].flatMap(footprintCells).map(({ column, row }) => `${column}:${row}`))
+        for (const castle of castleCells) {
+          if (developmentCells.has(`${castle.column}:${castle.row}`)) continue
+          for (let distance = 1; distance <= gameConfig.economy.foodServiceRadius; distance += 1) {
+            for (let rowOffset = -distance; rowOffset <= distance; rowOffset += 1) {
+              const columnOffset = distance - Math.abs(rowOffset)
+              const candidates = columnOffset === 0
+                ? [{ column: castle.column, row: castle.row + rowOffset }]
+                : [
+                    { column: castle.column - columnOffset, row: castle.row + rowOffset },
+                    { column: castle.column + columnOffset, row: castle.row + rowOffset },
+                  ]
+              const house = candidates.find((candidate) => clearCell(candidate) && !developmentCells.has(`${candidate.column}:${candidate.row}`))
+              if (!house) continue
+              const reserved = { plain, hill, extra, house }
+              const reservedCells = new Set(reservedSiteCells(reserved).map(({ column, row }) => `${column}:${row}`))
+              const validCastleCells = castleCells.filter(({ column, row }) => (
+                !reservedCells.has(`${column}:${row}`)
+                && Math.abs(column - house.column) + Math.abs(row - house.row) <= gameConfig.economy.foodServiceRadius
+              ))
+              if (validCastleCells.length > 0) return { sites: reserved, validCastleCells }
+            }
+          }
+        }
       }
     }
   }
@@ -421,10 +454,9 @@ function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosi
         return score(b) - score(a)
       })
     if (baseCastleCells.length === 0) return { ok: false, reason: 'no-castle-sites' }
-    const reservedBuildSites = reservedBuildSitesFor(map, territories, id, baseCastleCells)
-    if (!reservedBuildSites) return { ok: false, reason: 'unviable-starts' }
-    const reservedCells = new Set(Object.values(reservedBuildSites).flatMap(footprintCells).map(({ column, row }) => `${column}:${row}`))
-    const validCastleCells = baseCastleCells.filter(({ column, row }) => !reservedCells.has(`${column}:${row}`))
+    const startDevelopment = reservedBuildSitesFor(map, territories, id, baseCastleCells)
+    if (!startDevelopment) return { ok: false, reason: 'unviable-starts' }
+    const { sites: reservedBuildSites, validCastleCells } = startDevelopment
     if (validCastleCells.length === 0) return { ok: false, reason: 'no-castle-sites' }
     const quality = cells.length
       + forest * gameConfig.match.forestRegionValue

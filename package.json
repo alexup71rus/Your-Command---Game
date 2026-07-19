@@ -1,7 +1,12 @@
 {
-  "name": "castle-turns",
+  "name": "your-command",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "homepage": "https://alexup71rus.github.io/Your-Command---Game/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexup71rus/Your-Command---Game.git"
+  },
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.13.0"

@@ -65,6 +65,14 @@ export function isCellVisible(visibility: VisibilityMap | null | undefined, posi
   return !visibility || visibility[position.row]?.[position.column] === 1
 }
 
+export function hasVisibleEnemyThreat(map: GameMap, visibility: VisibilityMap | null | undefined, playerId: string) {
+  return map.some((row, rowIndex) => row.some((cell, column) => {
+    const object = cell.object
+    if (!object || object.ownerId === playerId || !isCellVisible(visibility, { column, row: rowIndex })) return false
+    return object.type === 'squad' || (object.type === 'building' && object.kind === 'tower' && Boolean(object.garrison))
+  }))
+}
+
 export function isConcealedEnemyObject(object: MapObject, playerId: string) {
   return object.ownerId !== playerId && (object.type === 'squad' || (object.type === 'building' && object.kind === 'barracks'))
 }

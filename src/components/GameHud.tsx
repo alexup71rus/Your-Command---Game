@@ -1,7 +1,8 @@
+import { useMemo } from 'react'
 import { resourceIds, troopKinds } from '../config/rules'
 import type { LocaleDictionary } from '../config/localization'
 import { gameConfig } from '../config/game'
-import { armyCapacity, civilianPopulationCapacityFor, humanDomain, totalArmySize, troopTotals, turnResourceDeltaFor, workforceFor, type MatchState } from '../game/match'
+import { armyCapacity, civilianPopulationCapacityFor, humanDomain, totalArmySize, troopTotals, turnEconomyForecastFor, type MatchState } from '../game/match'
 
 interface GameHudProps {
   match: MatchState
@@ -13,9 +14,10 @@ interface GameHudProps {
 
 export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn }: GameHudProps) {
   const domain = humanDomain(match)
-  const turnDelta = turnResourceDeltaFor(match, match.playerId)
+  const forecast = useMemo(() => turnEconomyForecastFor(match, match.playerId), [match])
+  const turnDelta = Object.fromEntries(resourceIds.map((resource) => [resource, (forecast?.resources[resource] ?? domain.resources[resource]) - domain.resources[resource]])) as Record<(typeof resourceIds)[number], number>
   const troops = troopTotals(match, match.playerId)
-  const workforce = workforceFor(match, match.playerId)
+  const workforce = forecast?.workforce ?? { population: domain.population, employed: 0, free: domain.population, assignments: [] }
   const populationCapacity = civilianPopulationCapacityFor(match, match.playerId)
   const gameOver = match.status !== 'playing'
   const previewedOrders = Math.min(match.ordersRemaining, Math.max(0, previewOrderCost))

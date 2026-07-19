@@ -1,6 +1,7 @@
 import type { BuildingKind, ResourceId, TroopKind } from '../game/map'
 
 export type ResourceAmount = Partial<Record<ResourceId, number>>
+export type TradeResource = Exclude<ResourceId, 'gold'>
 
 export interface BuildingRule {
   actionCost: number
@@ -17,6 +18,13 @@ export interface BuildingRule {
   workersRequired?: number
   foodServiceCapacity?: number
   requiresFoodServiceAccess?: boolean
+  maxPerOwner?: number
+  emergencyFreeIfMissing?: boolean
+  farmSupport?: {
+    radius: number
+    capacity: number
+  }
+  requiresMillSupport?: boolean
   processing?: {
     input: ResourceId
     output: ResourceId
@@ -51,27 +59,52 @@ export interface TaxRule {
   productionAdjustment: number
 }
 
-export const resourceIds: ResourceId[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'gold']
-export const economyBuildingKinds: BuildingKind[] = ['farm', 'huntingLodge', 'lumberMill', 'quarry', 'mine', 'smelter', 'kitchen', 'house', 'barracks', 'church', 'market']
+export const resourceIds: ResourceId[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'fruit', 'gold']
+export const economyBuildingKinds: BuildingKind[] = ['mill', 'farm', 'orchard', 'huntingLodge', 'lumberMill', 'quarry', 'mine', 'smelter', 'kitchen', 'house', 'barracks', 'church', 'market']
+export type EconomyBuildingCategory = 'resources' | 'food' | 'settlement'
+export const economyBuildingCategories: Record<EconomyBuildingCategory, BuildingKind[]> = {
+  resources: ['lumberMill', 'quarry', 'mine', 'smelter'],
+  food: ['mill', 'farm', 'orchard', 'huntingLodge', 'kitchen'],
+  settlement: ['house', 'market', 'barracks', 'church'],
+}
 export const fortificationKinds: BuildingKind[] = ['wall', 'tower', 'barbican']
 export const buildingKinds: BuildingKind[] = [...economyBuildingKinds, ...fortificationKinds]
 export const troopKinds: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
-export const workerBuildingKinds: BuildingKind[] = ['farm', 'huntingLodge', 'kitchen', 'lumberMill', 'quarry', 'mine', 'smelter']
+export const workerBuildingKinds: BuildingKind[] = ['mill', 'orchard', 'huntingLodge', 'farm', 'kitchen', 'lumberMill', 'quarry', 'mine', 'smelter']
 export const starvationTroopOrder: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
 
 export const buildingRules: Record<BuildingKind, BuildingRule> = {
+  mill: {
+    actionCost: 4,
+    resourceCost: { wood: 20, stone: 12, gold: 10 },
+    production: {},
+    hitPoints: 16,
+    placement: 'open',
+    workersRequired: 1,
+    farmSupport: { radius: 2, capacity: 2 },
+  },
   farm: {
     actionCost: 4,
-    resourceCost: { wood: 28, stone: 8, gold: 8 },
-    production: { grain: 18 },
+    resourceCost: { wood: 28, gold: 8 },
+    production: { grain: 14 },
     hitPoints: 10,
     placement: 'plain',
     workersRequired: 2,
+    requiresMillSupport: true,
+    footprint: { columns: 2, rows: 2 },
+  },
+  orchard: {
+    actionCost: 4,
+    resourceCost: { wood: 20, gold: 6 },
+    production: { fruit: 6 },
+    hitPoints: 12,
+    placement: 'open',
+    workersRequired: 1,
     footprint: { columns: 2, rows: 2 },
   },
   huntingLodge: {
     actionCost: 4,
-    resourceCost: { wood: 18, stone: 5, gold: 8 },
+    resourceCost: { wood: 18, gold: 8 },
     production: { meat: 6 },
     hitPoints: 12,
     placement: 'open',
@@ -80,17 +113,18 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
   },
   lumberMill: {
     actionCost: 4,
-    resourceCost: { wood: 14, stone: 5, gold: 5 },
-    production: { wood: 16 },
+    resourceCost: { wood: 14 },
+    production: { wood: 10 },
     hitPoints: 15,
     placement: 'open',
     minimumAdjacentForestCells: 1,
     workersRequired: 1,
+    emergencyFreeIfMissing: true,
   },
   quarry: {
     actionCost: 4,
-    resourceCost: { wood: 20, gold: 8 },
-    production: { stone: 12 },
+    resourceCost: { wood: 20 },
+    production: { stone: 8 },
     hitPoints: 18,
     placement: 'hill',
     workersRequired: 2,
@@ -99,7 +133,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
   mine: {
     actionCost: 4,
     resourceCost: { wood: 18, stone: 8, gold: 10 },
-    production: { ore: 6 },
+    production: { ore: 4 },
     hitPoints: 15,
     placement: 'hill',
     workersRequired: 1,
@@ -125,10 +159,10 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
   },
   house: {
     actionCost: 4,
-    resourceCost: { wood: 25, stone: 10 },
+    resourceCost: { wood: 25, gold: 5 },
     production: {},
     hitPoints: 10,
-    housingCapacity: 10,
+    housingCapacity: 5,
     placement: 'open',
     requiresFoodServiceAccess: true,
   },
@@ -152,10 +186,11 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
   },
   market: {
     actionCost: 4,
-    resourceCost: { wood: 32, stone: 18, gold: 20 },
+    resourceCost: { gold: 28 },
     production: {},
     hitPoints: 18,
     placement: 'open',
+    maxPerOwner: 1,
   },
   wall: {
     actionCost: 2,
@@ -227,13 +262,14 @@ export const troopRules: Record<TroopKind, TroopRule> = {
 }
 
 export const startingResources: Record<ResourceId, number> = {
-  wood: 110,
-  stone: 80,
+  wood: 100,
+  stone: 65,
   ore: 0,
-  iron: 16,
-  grain: 36,
-  meat: 12,
-  gold: 105,
+  iron: 2,
+  grain: 18,
+  meat: 0,
+  fruit: 0,
+  gold: 85,
 }
 
 export const castleProduction: ResourceAmount = { grain: 4, gold: 2 }
@@ -245,12 +281,23 @@ export const taxRates: Record<TaxRate, TaxRule> = {
   extortionate: { goldPerPerson: 2, foodDemandMultiplier: 2, productionAdjustment: -3 },
 }
 
-export const tradeableResources: Exclude<ResourceId, 'gold'>[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat']
-export const marketPrices: Record<Exclude<ResourceId, 'gold'>, { buy: number; sell: number }> = {
+export const tradeableResources: TradeResource[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'fruit']
+export const marketPrices: Record<TradeResource, { buy: number; sell: number }> = {
   wood: { buy: 3, sell: 1 },
   stone: { buy: 4, sell: 2 },
   ore: { buy: 5, sell: 3 },
   iron: { buy: 10, sell: 6 },
   grain: { buy: 2, sell: 1 },
   meat: { buy: 4, sell: 2 },
+  fruit: { buy: 4, sell: 2 },
+}
+
+export const marketPriceBatchSizes: Record<TradeResource, number> = {
+  wood: 10,
+  stone: 5,
+  ore: 5,
+  iron: 5,
+  grain: 10,
+  meat: 5,
+  fruit: 5,
 }

@@ -1,4 +1,4 @@
-import { buildingRules, castleProduction, defaultTaxRate, marketPrices, resourceIds, starvationTroopOrder, startingResources, taxRates, tradeableResources, troopKinds, troopRules, workerBuildingKinds, type ResourceAmount, type TaxRate } from '../config/rules'
+import { buildingRules, castleProduction, defaultTaxRate, marketPriceBatchSizes, marketPrices, resourceIds, starvationTroopOrder, startingResources, taxRates, tradeableResources, troopKinds, troopRules, workerBuildingKinds, type ResourceAmount, type TaxRate, type TradeResource } from '../config/rules'
 import { gameConfig } from '../config/game'
 import type {
   BuildingKind,
@@ -20,6 +20,12 @@ export interface DomainEconomy {
   population: number
   taxRate?: TaxRate
   diverseDiet: boolean
+  marketActivity: MarketActivity
+}
+
+export interface MarketActivity {
+  bought: Record<TradeResource, number>
+  sold: Record<TradeResource, number>
 }
 
 export interface WorkerAssignment {
@@ -27,6 +33,7 @@ export interface WorkerAssignment {
   position: CellPosition
   required: number
   assigned: number
+  blockedReason?: 'missing-support' | 'idle-support' | 'no-workers'
 }
 
 export interface WorkforceSummary {
@@ -49,6 +56,7 @@ export interface FoodDemand {
 export interface FoodConsumption {
   grain: number
   meat: number
+  fruit: number
   fed: boolean
   diverseDiet: boolean
 }
@@ -102,6 +110,9 @@ export type CommandFailure =
   | 'invalid-terrain'
   | 'outside-domain'
   | 'outside-food-service'
+  | 'requires-support'
+  | 'requires-farm-site'
+  | 'building-limit'
   | 'not-adjacent'
   | 'not-enough-orders'
   | 'not-enough-resources'
@@ -116,6 +127,7 @@ export type CommandFailure =
   | 'cannot-demolish'
   | 'requires-market'
   | 'invalid-trade'
+  | 'market-exhausted'
   | 'ranged-shot-blocked'
   | 'out-of-range'
 
@@ -124,6 +136,8 @@ export type CommandResult =
   | { ok: false; state: MatchState; reason: CommandFailure }
 
 const emptyComposition = (): TroopComposition => ({ militia: 0, spearmen: 0, archers: 0, knights: 0 })
+const emptyTradeRecord = (): Record<TradeResource, number> => Object.fromEntries(tradeableResources.map((resource) => [resource, 0])) as Record<TradeResource, number>
+const emptyMarketActivity = (): MarketActivity => ({ bought: emptyTradeRecord(), sold: emptyTradeRecord() })
 const positionEquals = (a: CellPosition, b: CellPosition) => a.column === b.column && a.row === b.row
 const isAdjacent = (a: CellPosition, b: CellPosition) => Math.abs(a.column - b.column) + Math.abs(a.row - b.row) === 1
 const cellAt = (state: MatchState, position: CellPosition) => state.scenario.cells[position.row]?.[position.column]
@@ -182,21 +196,126 @@ export function troopTotals(state: MatchState, ownerId: string): TroopCompositio
   }, emptyComposition())
 }
 
+interface OwnedBuildingEntry {
+  kind: BuildingKind
+  position: CellPosition
+}
+
+function ownedBuildingEntries(state: MatchState, ownerId: string, kind?: BuildingKind): OwnedBuildingEntry[] {
+  return state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
+    const object = cell.object
+    if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex) || (kind && object.kind !== kind)) return []
+    return [{ kind: object.kind, position: { column, row: rowIndex } }]
+  }))
+}
+
+export function ownedBuildingCount(state: MatchState, ownerId: string, kind: BuildingKind) {
+  return ownedBuildingEntries(state, ownerId, kind).length
+}
+
+export function buildingResourceCostFor(state: MatchState, ownerId: string, kind: BuildingKind): ResourceAmount {
+  const rule = buildingRules[kind]
+  const resources = state.domains[ownerId]?.resources
+  const emergencyFree = rule.emergencyFreeIfMissing
+    && ownedBuildingCount(state, ownerId, kind) === 0
+    && resources
+    && !hasResources(resources, rule.resourceCost)
+  return emergencyFree ? {} : rule.resourceCost
+}
+
+export function isEmergencyBuildingFree(state: MatchState, ownerId: string, kind: BuildingKind) {
+  return Boolean(buildingRules[kind].emergencyFreeIfMissing)
+    && ownedBuildingCount(state, ownerId, kind) === 0
+    && Object.keys(buildingResourceCostFor(state, ownerId, kind)).length === 0
+}
+
+function buildingDistance(first: OwnedBuildingEntry, second: OwnedBuildingEntry) {
+  const firstCells = buildingFootprintPositions(first.kind, first.position)
+  const secondCells = buildingFootprintPositions(second.kind, second.position)
+  return Math.min(...firstCells.flatMap((a) => secondCells.map((b) => Math.abs(a.column - b.column) + Math.abs(a.row - b.row))))
+}
+
+function positionKey(position: CellPosition) {
+  return `${position.column}:${position.row}`
+}
+
+function farmSupportAssignments(state: MatchState, ownerId: string) {
+  const mills = ownedBuildingEntries(state, ownerId, 'mill').sort((a, b) => a.position.row - b.position.row || a.position.column - b.position.column)
+  const farms = ownedBuildingEntries(state, ownerId, 'farm')
+  farms.sort((a, b) => a.position.row - b.position.row || a.position.column - b.position.column)
+  const millRule = buildingRules.mill.farmSupport!
+  const slots = mills.flatMap((mill) => Array.from({ length: millRule.capacity }, (_, index) => ({ mill, index })))
+  const slotOwner = new Map<number, string>()
+  const farmByKey = new Map(farms.map((farm) => [positionKey(farm.position), farm]))
+
+  const candidatesFor = (farm: OwnedBuildingEntry) => slots
+    .map((slot, slotIndex) => ({ slot, slotIndex, distance: buildingDistance(farm, slot.mill) }))
+    .filter(({ distance }) => distance <= millRule.radius)
+    .sort((a, b) => a.distance - b.distance
+      || a.slot.mill.position.row - b.slot.mill.position.row
+      || a.slot.mill.position.column - b.slot.mill.position.column
+      || a.slot.index - b.slot.index)
+
+  const assign = (farm: OwnedBuildingEntry, visited: Set<number>): boolean => {
+    for (const { slotIndex } of candidatesFor(farm)) {
+      if (visited.has(slotIndex)) continue
+      visited.add(slotIndex)
+      const previousFarmKey = slotOwner.get(slotIndex)
+      if (!previousFarmKey || assign(farmByKey.get(previousFarmKey)!, visited)) {
+        slotOwner.set(slotIndex, positionKey(farm.position))
+        return true
+      }
+    }
+    return false
+  }
+
+  farms.forEach((farm) => assign(farm, new Set()))
+  const result = new Map<string, CellPosition>()
+  slotOwner.forEach((farmKey, slotIndex) => result.set(farmKey, slots[slotIndex].mill.position))
+  return result
+}
+
+export function supportingMillFor(state: MatchState, ownerId: string, farm: CellPosition, includeCandidate = false): CellPosition | null {
+  const assignments = farmSupportAssignments(state, ownerId)
+  if (!includeCandidate) return assignments.get(positionKey(farm)) ?? null
+  const millRule = buildingRules.mill.farmSupport!
+  const assignedCounts = new Map<string, number>()
+  assignments.forEach((mill) => assignedCounts.set(positionKey(mill), (assignedCounts.get(positionKey(mill)) ?? 0) + 1))
+  const candidate = { kind: 'farm' as const, position: farm }
+  return ownedBuildingEntries(state, ownerId, 'mill')
+    .map((mill) => ({ mill, distance: buildingDistance(candidate, mill) }))
+    .filter(({ mill, distance }) => distance <= millRule.radius && (assignedCounts.get(positionKey(mill.position)) ?? 0) < millRule.capacity)
+    .sort((first, second) => first.distance - second.distance
+      || first.mill.position.row - second.mill.position.row
+      || first.mill.position.column - second.mill.position.column)[0]?.mill.position ?? null
+}
+
 export function workforceFor(state: MatchState, ownerId: string): WorkforceSummary {
   const population = Math.max(0, state.domains[ownerId]?.population ?? 0)
-  const assignments = state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
+  const supports = farmSupportAssignments(state, ownerId)
+  const usedMills = new Set([...supports.values()].map(positionKey))
+  const assignments: WorkerAssignment[] = state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
     const object = cell.object
     if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return []
     const required = buildingRules[object.kind].workersRequired ?? 0
-    return required > 0 ? [{ kind: object.kind, position: { column, row: rowIndex }, required, assigned: 0 }] : []
+    if (required <= 0) return []
+    const position = { column, row: rowIndex }
+    const blockedReason = object.kind === 'farm' && !supports.has(positionKey(position))
+      ? 'missing-support' as const
+      : object.kind === 'mill' && !usedMills.has(positionKey(position))
+        ? 'idle-support' as const
+        : undefined
+    return [{ kind: object.kind, position, required, assigned: 0, blockedReason }]
   })).sort((first, second) => {
     const kindOrder = workerBuildingKinds.indexOf(first.kind) - workerBuildingKinds.indexOf(second.kind)
     return kindOrder || first.position.row - second.position.row || first.position.column - second.position.column
   })
   let available = population
   assignments.forEach((assignment) => {
+    if (assignment.blockedReason) return
     assignment.assigned = Math.min(assignment.required, available)
     available -= assignment.assigned
+    if (assignment.assigned === 0) assignment.blockedReason = 'no-workers'
   })
   return { population, employed: population - available, free: available, assignments }
 }
@@ -221,9 +340,10 @@ export function civilianHousingCapacityFor(state: MatchState, ownerId: string) {
   return Math.max(0, gameConfig.turn.basePopulationCapacity + houses - totalArmySize(state, ownerId))
 }
 
-export function foodServiceCapacityFor(state: MatchState, ownerId: string) {
-  const assignments = new Map(workforceFor(state, ownerId).assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
-  let capacity = gameConfig.economy.castleFoodServiceCapacity
+export function foodServiceCapacityFor(state: MatchState, ownerId: string, workforce = workforceFor(state, ownerId)) {
+  const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
+  const hasLivingCastle = state.scenario.cells.some((row) => row.some((cell) => cell.object?.type === 'castle' && cell.object.ownerId === ownerId))
+  let capacity = hasLivingCastle ? gameConfig.economy.castleFoodServiceCapacity : 0
   state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
     if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
@@ -250,6 +370,7 @@ export function createMatch(scenario: MapScenario): MatchState {
       population: gameConfig.turn.startingPopulation,
       taxRate: defaultTaxRate,
       diverseDiet: false,
+      marketActivity: emptyMarketActivity(),
     },
   ]))
   return {
@@ -357,13 +478,47 @@ function commandGuard(state: MatchState, actionCost: number): CommandFailure | n
   return null
 }
 
+export function buildingAvailabilityFailure(state: MatchState, kind: BuildingKind): CommandFailure | null {
+  const guard = buildingCommandGuard(state, kind)
+  if (guard) return guard
+  if (!hasResources(humanDomain(state).resources, buildingResourceCostFor(state, state.playerId, kind))) return 'not-enough-resources'
+  return null
+}
+
+function buildingCommandGuard(state: MatchState, kind: BuildingKind): CommandFailure | null {
+  const rule = buildingRules[kind]
+  const guard = commandGuard(state, rule.actionCost)
+  if (guard) return guard
+  return rule.maxPerOwner && ownedBuildingCount(state, state.playerId, kind) >= rule.maxPerOwner ? 'building-limit' : null
+}
+
 function playerRegionId(state: MatchState) {
   return participantForOwner(state, state.playerId)?.regionId
 }
 
+function hasPotentialFarmSiteForMill(state: MatchState, millPosition: CellPosition) {
+  const farmRule = buildingRules.farm
+  const millRule = buildingRules.mill.farmSupport!
+  const footprint = farmRule.footprint!
+  const regionId = playerRegionId(state)
+  if (ownedBuildingEntries(state, state.playerId, 'farm').some((farm) => buildingDistance({ kind: 'mill', position: millPosition }, farm) <= millRule.radius)) return true
+  for (let row = millPosition.row - millRule.radius - footprint.rows + 1; row <= millPosition.row + millRule.radius; row += 1) {
+    for (let column = millPosition.column - millRule.radius - footprint.columns + 1; column <= millPosition.column + millRule.radius; column += 1) {
+      const origin = { column, row }
+      const positions = buildingFootprintPositions('farm', origin)
+      if (positions.some((candidate) => positionEquals(candidate, millPosition))) continue
+      const cells = positions.map((candidate) => cellAt(state, candidate))
+      if (cells.some((cell) => !cell || cell.object || cell.landform !== 'plain' || cell.vegetation)) continue
+      if (positions.some((candidate) => state.scenario.territories[candidate.row]?.[candidate.column] !== regionId)) continue
+      if (buildingDistance({ kind: 'mill', position: millPosition }, { kind: 'farm', position: origin }) <= millRule.radius) return true
+    }
+  }
+  return false
+}
+
 export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, position: CellPosition): CommandFailure | null {
   const rule = buildingRules[kind]
-  const guard = commandGuard(state, rule.actionCost)
+  const guard = buildingCommandGuard(state, kind)
   if (guard) return guard
   const positions = buildingFootprintPositions(kind, position)
   const cells = positions.map((candidate) => cellAt(state, candidate))
@@ -393,8 +548,9 @@ export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, 
   if (placement === 'hill' && cells.some((cell) => cell?.landform !== 'hill' || cell.vegetation)) return 'invalid-terrain'
   if (placement === 'plain' && cells.some((cell) => cell?.landform !== 'plain' || cell.vegetation)) return 'invalid-terrain'
   if (placement === 'open' && cells.some((cell) => cell?.vegetation)) return 'invalid-terrain'
-  const domain = humanDomain(state)
-  if (!hasResources(domain.resources, rule.resourceCost)) return 'not-enough-resources'
+  if (kind === 'mill' && !hasPotentialFarmSiteForMill(state, position)) return 'requires-farm-site'
+  if (rule.requiresMillSupport && !supportingMillFor(state, state.playerId, position, true)) return 'requires-support'
+  if (!hasResources(humanDomain(state).resources, buildingResourceCostFor(state, state.playerId, kind))) return 'not-enough-resources'
   return null
 }
 
@@ -402,6 +558,7 @@ export function build(state: MatchState, kind: BuildingKind, position: CellPosit
   const failure = buildingPlacementFailure(state, kind, position)
   if (failure) return { ok: false, state, reason: failure }
   const rule = buildingRules[kind]
+  const constructionCost = buildingResourceCostFor(state, state.playerId, kind)
   const footprint = rule.footprint
   const object: BuildingObject = {
     type: 'building',
@@ -409,6 +566,7 @@ export function build(state: MatchState, kind: BuildingKind, position: CellPosit
     ownerId: state.playerId,
     hitPoints: rule.hitPoints,
     maxHitPoints: rule.hitPoints,
+    constructionCost: { ...constructionCost },
     footprint: footprint ? { originColumn: position.column, originRow: position.row, ...footprint } : undefined,
   }
   const next = withCells(state, buildingFootprintPositions(kind, position), (cell) => ({ ...cell, object }), { kind: 'built', position }, rule.actionCost)
@@ -421,21 +579,25 @@ export function build(state: MatchState, kind: BuildingKind, position: CellPosit
         ...next.domains,
         [state.playerId]: {
           ...domain,
-          resources: spendResources(domain.resources, rule.resourceCost),
+          resources: spendResources(domain.resources, constructionCost),
         },
       },
     },
   }
 }
 
-function recruitmentSourcePositions(state: MatchState) {
+function recruitmentSourcePositions(state: MatchState, troop: TroopKind) {
   const positions: CellPosition[] = []
   state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
     if (object?.ownerId !== state.playerId) return
-    if (object.type === 'castle' || (object.type === 'building' && object.kind === 'barracks')) positions.push({ column, row: rowIndex })
+    if ((troop === 'militia' && object.type === 'castle') || (object.type === 'building' && object.kind === 'barracks')) positions.push({ column, row: rowIndex })
   }))
   return positions
+}
+
+export function hasRecruitmentSource(state: MatchState, troop: TroopKind) {
+  return recruitmentSourcePositions(state, troop).length > 0
 }
 
 export function recruitmentFailure(state: MatchState, troop: TroopKind, quantity: number, position: CellPosition): CommandFailure | null {
@@ -448,7 +610,7 @@ export function recruitmentFailure(state: MatchState, troop: TroopKind, quantity
   if (cell.object && (cell.object.type !== 'squad' || cell.object.ownerId !== state.playerId)) return 'occupied'
   const existingSize = cell.object?.type === 'squad' ? squadSize(cell.object) : 0
   if (existingSize + quantity > gameConfig.turn.squadCapacity) return 'squad-full'
-  if (!recruitmentSourcePositions(state).some((source) => isAdjacent(source, position))) return 'requires-barracks'
+  if (!recruitmentSourcePositions(state, troop).some((source) => isAdjacent(source, position))) return 'requires-barracks'
   const domain = humanDomain(state)
   if (totalArmySize(state) + quantity > armyCapacity) return 'army-full'
   if (domain.population < rule.populationCost * quantity) return 'not-enough-population'
@@ -895,6 +1057,15 @@ export function splitSquad(state: MatchState, from: CellPosition, to: CellPositi
   }
 }
 
+export function demolitionRefundFor(object: MapObject | null | undefined): ResourceAmount {
+  if (object?.type !== 'building') return {}
+  return Object.fromEntries(
+    Object.entries(object.constructionCost ?? {})
+      .map(([resource, amount]) => [resource, Math.floor((amount ?? 0) * gameConfig.turn.demolitionRefundRate)])
+      .filter(([, amount]) => Number(amount) > 0),
+  ) as ResourceAmount
+}
+
 export function demolish(state: MatchState, position: CellPosition): CommandResult {
   const guard = commandGuard(state, gameConfig.turn.demolishOrderCost)
   if (guard) return { ok: false, state, reason: guard }
@@ -906,6 +1077,7 @@ export function demolish(state: MatchState, position: CellPosition): CommandResu
   const next = withCells(state, positions, (cell) => ({ ...cell, object: undefined }), { kind: 'demolished', position }, gameConfig.turn.demolishOrderCost)
   const domain = humanDomain(next)
   const populationReturn = object.type === 'squad' ? squadSize(object) : 0
+  const refund = demolitionRefundFor(object)
   return {
     ok: true,
     state: {
@@ -915,16 +1087,17 @@ export function demolish(state: MatchState, position: CellPosition): CommandResu
         [state.playerId]: {
           ...domain,
           population: domain.population + populationReturn,
+          resources: applyResources(domain.resources, refund),
         },
       },
     },
   }
 }
 
-export function productionFor(state: MatchState, ownerId: string) {
+export function productionFor(state: MatchState, ownerId: string, workforce = workforceFor(state, ownerId)) {
   const taxRule = taxRates[state.domains[ownerId]?.taxRate ?? defaultTaxRate]
   const production = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
-  const assignments = new Map(workforceFor(state, ownerId).assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
+  const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
   state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
     if (object?.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
@@ -975,11 +1148,11 @@ function populationGrowthFor(state: MatchState, ownerId: string) {
   return growth
 }
 
-export function foodDemandBreakdownFor(state: MatchState, ownerId: string): FoodDemand {
+export function foodDemandBreakdownFor(state: MatchState, ownerId: string, workforce = workforceFor(state, ownerId)): FoodDemand {
   const domain = state.domains[ownerId]
   if (!domain) return { civilians: 0, soldiers: 0, taxFood: 0, staple: 0, total: 0, servedCivilians: 0, unservedCivilians: 0 }
   const soldiers = squadSize({ units: troopTotals(state, ownerId) })
-  const servedCivilians = Math.min(domain.population, foodServiceCapacityFor(state, ownerId))
+  const servedCivilians = Math.min(domain.population, foodServiceCapacityFor(state, ownerId, workforce))
   const unservedCivilians = Math.max(0, domain.population - servedCivilians)
   const civilianDemand = Math.ceil(domain.population * gameConfig.economy.civilianFoodPerPerson)
   const soldierDemand = Math.ceil(soldiers * gameConfig.economy.soldierFoodPerUnit)
@@ -996,12 +1169,19 @@ export function foodDemandFor(state: MatchState, ownerId: string) {
 export function foodConsumptionFor(
   state: MatchState,
   ownerId: string,
-  available: Pick<Record<ResourceId, number>, 'grain' | 'meat'> = state.domains[ownerId]?.resources ?? { grain: 0, meat: 0 },
+  available: Pick<Record<ResourceId, number>, 'grain' | 'meat' | 'fruit'> = state.domains[ownerId]?.resources ?? { grain: 0, meat: 0, fruit: 0 },
 ): FoodConsumption {
   const demand = foodDemandBreakdownFor(state, ownerId)
+  return consumeFood(demand, available)
+}
+
+function consumeFood(
+  demand: FoodDemand,
+  available: Pick<Record<ResourceId, number>, 'grain' | 'meat' | 'fruit'>,
+): FoodConsumption {
   let remaining = demand.total
-  const availableStaples = { grain: available.grain, meat: available.meat }
-  const consumedStaples = { grain: 0, meat: 0 }
+  const availableStaples = { grain: available.grain, meat: available.meat, fruit: available.fruit }
+  const consumedStaples = { grain: 0, meat: 0, fruit: 0 }
   const evenShare = Math.floor(demand.total / gameConfig.economy.foodResources.length)
   const extraUnits = demand.total % gameConfig.economy.foodResources.length
   gameConfig.economy.foodResources.forEach((resource, index) => {
@@ -1020,10 +1200,9 @@ export function foodConsumptionFor(
   const fed = remaining === 0 && demand.unservedCivilians === 0
   const diverseDiet = fed
     && minimumVariety > 0
-    && minimumVariety * 2 <= demand.total
-    && consumedStaples.grain >= minimumVariety
-    && consumedStaples.meat >= minimumVariety
-  return { grain: consumedStaples.grain, meat: consumedStaples.meat, fed, diverseDiet }
+    && minimumVariety * gameConfig.economy.foodResources.length <= demand.total
+    && gameConfig.economy.foodResources.every((resource) => consumedStaples[resource] >= minimumVariety)
+  return { grain: consumedStaples.grain, meat: consumedStaples.meat, fruit: consumedStaples.fruit, fed, diverseDiet }
 }
 
 export function taxIncomeFor(state: MatchState, ownerId: string) {
@@ -1036,11 +1215,12 @@ export function processingFor(
   state: MatchState,
   ownerId: string,
   available: Record<ResourceId, number>,
+  workforce = workforceFor(state, ownerId),
 ) {
   const taxRule = taxRates[state.domains[ownerId]?.taxRate ?? defaultTaxRate]
   const processed = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
   let resources = { ...available }
-  const assignments = new Map(workforceFor(state, ownerId).assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
+  const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
   state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
     if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
@@ -1072,6 +1252,7 @@ export interface TurnEconomyForecast {
   taxIncome: number
   processing: Record<ResourceId, number>
   desertion: TroopLoss | null
+  workforce: WorkforceSummary
 }
 
 interface TurnEconomyResolution extends TurnEconomyForecast {
@@ -1085,7 +1266,8 @@ interface TurnEconomyResolution extends TurnEconomyForecast {
 function resolveTurnEconomy(state: MatchState, ownerId: string): TurnEconomyResolution | null {
   const current = state.domains[ownerId]
   if (!current) return null
-  const production = productionFor(state, ownerId)
+  const workforce = workforceFor(state, ownerId)
+  const production = productionFor(state, ownerId, workforce)
   const taxIncome = taxIncomeFor(state, ownerId)
   let resources = applyResources(current.resources, production)
   resources = { ...resources, gold: resources.gold + taxIncome }
@@ -1095,12 +1277,13 @@ function resolveTurnEconomy(state: MatchState, ownerId: string): TurnEconomyReso
   resources = Object.fromEntries(resourceIds.map((resource) => [resource, Math.max(0, resources[resource] - upkeep[resource])])) as Record<ResourceId, number>
   const desertionResult = upkeepPaid ? { cells: state.scenario.cells, loss: null } : removeCheapestTroop(state.scenario.cells, ownerId)
   const afterDesertion = { ...state, scenario: { ...state.scenario, cells: desertionResult.cells } }
-  const processing = processingFor(afterDesertion, ownerId, resources)
+  const processing = processingFor(afterDesertion, ownerId, resources, workforce)
   resources = applyResources(resources, processing)
-  const foodDemand = foodDemandFor(afterDesertion, ownerId)
-  const food = foodConsumptionFor(afterDesertion, ownerId, resources)
-  resources = { ...resources, grain: resources.grain - food.grain, meat: resources.meat - food.meat }
-  return { resources, foodDemand, food, upkeepPaid, uncoveredUpkeep, desertion: desertionResult.loss, cells: desertionResult.cells, production, taxIncome, upkeep, processing }
+  const demand = foodDemandBreakdownFor(afterDesertion, ownerId, workforce)
+  const foodDemand = demand.total
+  const food = consumeFood(demand, resources)
+  resources = { ...resources, grain: resources.grain - food.grain, meat: resources.meat - food.meat, fruit: resources.fruit - food.fruit }
+  return { resources, foodDemand, food, upkeepPaid, uncoveredUpkeep, desertion: desertionResult.loss, cells: desertionResult.cells, production, taxIncome, upkeep, processing, workforce }
 }
 
 export function turnEconomyForecastFor(state: MatchState, ownerId: string): TurnEconomyForecast | null {
@@ -1116,6 +1299,7 @@ export function turnEconomyForecastFor(state: MatchState, ownerId: string): Turn
     taxIncome: resolution.taxIncome,
     processing: resolution.processing,
     desertion: resolution.desertion,
+    workforce: resolution.workforce,
   } : null
 }
 
@@ -1140,13 +1324,52 @@ export function setTaxRate(state: MatchState, rate: TaxRate): CommandResult {
   }
 }
 
-export function trade(state: MatchState, marketPosition: CellPosition, resource: Exclude<ResourceId, 'gold'>, direction: 'buy' | 'sell', quantity: number): CommandResult {
+export interface TradeQuote {
+  total: number
+  currentUnitPrice: number
+  nextUnitPrice: number
+  unitsUntilNextPrice: number
+  includesUnavailableUnits: boolean
+}
+
+export function tradeQuoteFor(domain: DomainEconomy, resource: TradeResource, direction: 'buy' | 'sell', quantity: number): TradeQuote {
+  const activity = domain.marketActivity ?? emptyMarketActivity()
+  const traded = direction === 'buy' ? activity.bought[resource] : activity.sold[resource]
+  const batchSize = marketPriceBatchSizes[resource]
+  const basePrice = marketPrices[resource][direction]
+  const quotedQuantity = Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0
+  const priceAt = (offset: number) => {
+    const tier = Math.floor((traded + offset) / batchSize)
+    return direction === 'buy' ? basePrice + tier : Math.max(0, basePrice - tier)
+  }
+  const tierSumBefore = (units: number) => {
+    const fullBatches = Math.floor(units / batchSize)
+    const remainder = units % batchSize
+    return batchSize * fullBatches * (fullBatches - 1) / 2 + fullBatches * remainder
+  }
+  const pricedQuantity = direction === 'sell'
+    ? Math.min(quotedQuantity, Math.max(0, basePrice * batchSize - traded))
+    : quotedQuantity
+  const tierSum = tierSumBefore(traded + pricedQuantity) - tierSumBefore(traded)
+  const currentUnitPrice = priceAt(0)
+  return {
+    total: direction === 'buy' ? pricedQuantity * basePrice + tierSum : pricedQuantity * basePrice - tierSum,
+    currentUnitPrice,
+    nextUnitPrice: direction === 'buy' ? currentUnitPrice + 1 : Math.max(0, currentUnitPrice - 1),
+    unitsUntilNextPrice: batchSize - (traded % batchSize),
+    includesUnavailableUnits: direction === 'sell' && pricedQuantity < quotedQuantity,
+  }
+}
+
+export function trade(state: MatchState, marketPosition: CellPosition, resource: TradeResource, direction: 'buy' | 'sell', quantity: number): CommandResult {
   if (state.status !== 'playing') return { ok: false, state, reason: 'game-over' }
   const market = objectAt(state, marketPosition)
   if (market?.type !== 'building' || market.kind !== 'market' || market.ownerId !== state.playerId) return { ok: false, state, reason: 'requires-market' }
-  if (!tradeableResources.includes(resource) || !Number.isInteger(quantity) || quantity < 1) return { ok: false, state, reason: 'invalid-trade' }
+  if (!tradeableResources.includes(resource) || !Number.isSafeInteger(quantity) || quantity < 1) return { ok: false, state, reason: 'invalid-trade' }
   const domain = humanDomain(state)
-  const price = marketPrices[resource][direction] * quantity
+  const quote = tradeQuoteFor(domain, resource, direction, quantity)
+  if (quote.includesUnavailableUnits) return { ok: false, state, reason: 'market-exhausted' }
+  const price = quote.total
   if (direction === 'buy' && domain.resources.gold < price) return { ok: false, state, reason: 'not-enough-resources' }
   if (direction === 'sell' && domain.resources[resource] < quantity) return { ok: false, state, reason: 'not-enough-resources' }
   const resources = { ...domain.resources }
@@ -1157,11 +1380,14 @@ export function trade(state: MatchState, marketPosition: CellPosition, resource:
     resources[resource] -= quantity
     resources.gold += price
   }
+  const marketActivity = domain.marketActivity ?? emptyMarketActivity()
+  const activityKey = direction === 'buy' ? 'bought' : 'sold'
+  const nextActivity = { ...marketActivity[activityKey], [resource]: marketActivity[activityKey][resource] + quantity }
   return {
     ok: true,
     state: {
       ...state,
-      domains: { ...state.domains, [state.playerId]: { ...domain, resources } },
+      domains: { ...state.domains, [state.playerId]: { ...domain, resources, marketActivity: { ...marketActivity, [activityKey]: nextActivity } } },
       lastEvent: { kind: 'traded', amount: quantity },
     },
   }
@@ -1251,7 +1477,7 @@ export function endTurn(state: MatchState): CommandResult {
         starvation = starvationResult.loss
       }
     }
-    domains[participant.id] = { ...current, resources, population, diverseDiet: food.diverseDiet }
+    domains[participant.id] = { ...current, resources, population, diverseDiet: food.diverseDiet, marketActivity: emptyMarketActivity() }
     lastTurnReports[participant.id] = {
       ownerId: participant.id,
       resourcesBefore: { ...current.resources },

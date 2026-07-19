@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
 import { createEmptyMap, type BuildingObject, type GameMap, type SquadObject } from './map'
-import { calculateVisibility, createVisibilitySelector, isCellVisible, isObjectVisible, visibleObjectAt } from './visibility'
+import { calculateVisibility, createVisibilitySelector, hasVisibleEnemyThreat, isCellVisible, isObjectVisible, visibleObjectAt } from './visibility'
 
 const squad = (ownerId: string): SquadObject => ({
   type: 'squad',
@@ -81,6 +81,18 @@ describe('visibility', () => {
     expect(visibleObjectAt(map, visibility, 'player', { column: 28, row: 30 })).toBeUndefined()
     expect(visibleObjectAt(map, visibility, 'player', { column: 29, row: 30 })).toBeUndefined()
     expect(visibleObjectAt(map, visibility, 'player', { column: 30, row: 30 })).toMatchObject({ type: 'building', kind: 'farm' })
+  })
+
+  it('starts battle ambience only for threats inside current sight', () => {
+    const map = mapWithTerrain()
+    map[4][4].object = { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 }
+    map[20][20].object = squad('enemy')
+    let visibility = calculateVisibility(map, 'player')
+    expect(hasVisibleEnemyThreat(map, visibility, 'player')).toBe(false)
+
+    map[12][4].object = squad('enemy')
+    visibility = calculateVisibility(map, 'player')
+    expect(hasVisibleEnemyThreat(map, visibility, 'player')).toBe(true)
   })
 
   it('reveals an enemy barracks when any footprint cell enters sight', () => {

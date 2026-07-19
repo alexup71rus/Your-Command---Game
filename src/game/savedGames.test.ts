@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { createManualHeightGrid, generateMap } from './generator'
-import { createMatch } from './match'
+import { build, createMatch } from './match'
 import { mapPresets } from './presets'
 import { createMapScenario, foundMatch } from './scenario'
 import { isSavedGameRecord, SAVE_VERSION, transactionCompletion, type SavedGameRecord } from './savedGames'
@@ -41,6 +41,38 @@ describe('saved game schema', () => {
     expect(isSavedGameRecord({ ...validRecord, turn: validRecord.turn + 1 })).toBe(false)
   })
 
+  it('rejects malformed fruit stocks and per-turn market activity', () => {
+    const fractionalFruit = structuredClone(validRecord)
+    fractionalFruit.match.domains[fractionalFruit.match.playerId].resources.fruit = Number.NaN
+    expect(isSavedGameRecord(fractionalFruit)).toBe(false)
+
+    const fractionalActivity = structuredClone(validRecord)
+    fractionalActivity.match.domains[fractionalActivity.match.playerId].marketActivity.bought.ore = 1.5
+    expect(isSavedGameRecord(fractionalActivity)).toBe(false)
+
+    const missingActivity = structuredClone(validRecord) as unknown as { match: { playerId: string; domains: Record<string, { marketActivity?: unknown }> } }
+    delete missingActivity.match.domains[missingActivity.match.playerId].marketActivity
+    expect(isSavedGameRecord(missingActivity)).toBe(false)
+  })
+
+  it('requires a valid paid construction cost for saved buildings', () => {
+    const record = structuredClone(validRecord)
+    const regionId = record.match.scenario.participants.find((participant) => participant.id === record.match.playerId)?.regionId
+    const site = record.match.scenario.cells.flatMap((row, rowIndex) => row.map((cell, column) => ({ cell, column, row: rowIndex })))
+      .find(({ cell, column, row }) => !cell.object && !cell.vegetation && cell.landform !== 'peak' && record.match.scenario.territories[row][column] === regionId)
+    if (!site) throw new Error('Expected an open market site')
+    const built = build(record.match, 'market', { column: site.column, row: site.row })
+    if (!built.ok) throw new Error(`Expected market construction, got ${built.reason}`)
+    record.match = built.state
+    expect(isSavedGameRecord(record)).toBe(true)
+    const market = record.match.scenario.cells[site.row][site.column].object
+    if (market?.type !== 'building') throw new Error('Expected a market')
+    market.constructionCost = { gold: -1 }
+    expect(isSavedGameRecord(record)).toBe(false)
+    market.constructionCost = { gold: 280 }
+    expect(isSavedGameRecord(record)).toBe(false)
+  })
+
   it('rejects armies over the domain limit and altered maximum durability', () => {
     const oversizedArmy = structuredClone(validRecord)
     const freeCells = oversizedArmy.match.scenario.cells.flatMap((row, rowIndex) => row.map((cell, column) => ({ cell, column, row: rowIndex })))
@@ -68,12 +100,12 @@ describe('saved game schema', () => {
     processed.match.lastTurnReports[ownerId] = {
       ownerId,
       resourcesBefore: { ...resources },
-      production: { wood: 0, stone: 0, ore: 0, iron: 0, grain: 0, meat: 0, gold: 0 },
+      production: { wood: 0, stone: 0, ore: 0, iron: 0, grain: 0, meat: 0, fruit: 0, gold: 0 },
       taxIncome: 0,
-      upkeep: { wood: 0, stone: 0, ore: 0, iron: 0, grain: 0, meat: 0, gold: 0 },
+      upkeep: { wood: 0, stone: 0, ore: 0, iron: 0, grain: 0, meat: 0, fruit: 0, gold: 0 },
       upkeepPaid: true,
-      processing: { wood: 0, stone: 0, ore: -5, iron: 5, grain: 0, meat: 0, gold: 0 },
-      food: { grain: 0, meat: 0, fed: true, diverseDiet: false },
+      processing: { wood: 0, stone: 0, ore: -5, iron: 5, grain: 0, meat: 0, fruit: 0, gold: 0 },
+      food: { grain: 0, meat: 0, fruit: 0, fed: true, diverseDiet: false },
       resourcesAfter: { ...resources },
       populationBefore: 12,
       populationAfter: 12,

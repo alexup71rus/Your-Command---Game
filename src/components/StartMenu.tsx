@@ -140,10 +140,10 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
 
   return (
     <main className="start-screen">
-      <img className="start-hero-art" src="/assets/start-menu-hero.webp" alt="" aria-hidden="true" fetchPriority="high" />
+      <img className="start-hero-art" src={`${import.meta.env.BASE_URL}assets/start-menu-hero.webp`} alt="" aria-hidden="true" fetchPriority="high" />
       <div className="start-atmosphere" aria-hidden="true" />
       <section className="start-menu" aria-labelledby="start-title">
-        <header className="start-header"><span>{text.eyebrow}</span><h1 id="start-title">{text.title}</h1><p>{text.description}</p>{hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}<i aria-hidden="true">→</i></button>}</header>
+        <header className="start-header"><span>{text.eyebrow}</span><h1 id="start-title">{text.title}</h1><p>{text.description}</p></header>
 
         <div className="start-setup-workspace">
           <section className="selected-map-showcase" aria-labelledby="selected-map-title">
@@ -184,7 +184,10 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
               <button type="button" key={count} className={participantCount === count ? 'active' : ''} aria-label={`${count} · ${text.humanAndNpc}`} aria-pressed={participantCount === count} onClick={() => onParticipantChange(count)}><strong>{count}</strong></button>
             ))}
           </div></div>
-          <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : text.start}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
+          <div className="match-primary-actions">
+            {hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}</button>}
+            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : text.start}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
+          </div>
           <div className="start-utility-slot">{utilityControls}</div>
         </footer>
       </section>

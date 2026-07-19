@@ -85,7 +85,13 @@ export type SavedMapsLoadResult =
 
 export function loadSavedMapsResult(): SavedMapsLoadResult {
   try {
-    return { ok: true, maps: parseSavedMaps(window.localStorage.getItem(gameConfig.savedMaps.storageKey)) }
+    const current = window.localStorage.getItem(gameConfig.savedMaps.storageKey)
+    const raw = current ?? window.localStorage.getItem(gameConfig.savedMaps.legacyStorageKey)
+    const maps = parseSavedMaps(raw)
+    if (current === null && raw !== null) {
+      try { window.localStorage.setItem(gameConfig.savedMaps.storageKey, JSON.stringify(maps)) } catch { /* Keep readable legacy maps for this session. */ }
+    }
+    return { ok: true, maps }
   } catch (cause) {
     return { ok: false, maps: [], error: cause instanceof Error ? cause : new Error('Could not read saved maps') }
   }

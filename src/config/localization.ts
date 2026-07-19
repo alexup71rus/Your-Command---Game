@@ -78,6 +78,8 @@ export interface LocaleDictionary {
     damage: string
     movementCost: string
     cost: string
+    free: string
+    emergencyFree: string
     perTurn: string
     quantity: string
     placementMode: string
@@ -125,12 +127,17 @@ export interface LocaleDictionary {
     workers: string
     size: string
     forestNeighbors: string
+    farmCapacity: string
+    supportRadius: string
+    requiresMill: string
     processing: string
     foodService: string
     serviceRadius: string
     workerProductionFull: string
     workerProductionReduced: string
     workerProductionStopped: string
+    workerProductionUnsupported: string
+    workerSupportIdle: string
     taxes: string
     taxRates: Record<'none' | 'moderate' | 'extortionate', string>
     taxFoodShort: string
@@ -142,6 +149,11 @@ export interface LocaleDictionary {
     foodShortage: string
     marketTitle: string
     marketDescription: string
+    marketPriceChangesIn: string
+    marketUnitsToStep: string
+    marketUnavailable: string
+    foodSupply: string
+    turnsOfSupply: string
     buy: string
     sell: string
     victoryTitle: string
@@ -153,6 +165,7 @@ export interface LocaleDictionary {
     turnStarvationTroop: string
     previousItems: string
     nextItems: string
+    buildingCategories: Record<'resources' | 'food' | 'settlement', string>
     previousTroops: string
     nextTroops: string
     failures: Record<CommandFailure, string>
@@ -167,6 +180,10 @@ export interface LocaleDictionary {
   sound: {
     title: string
     description: string
+    effectsVolume: string
+    musicTitle: string
+    musicDescription: string
+    musicVolume: string
     enable: string
     disable: string
     enabled: string
@@ -180,6 +197,8 @@ export interface LocaleDictionary {
     mergeSquads: string
     dismissSquad: string
     removeObject: string
+    refund: string
+    refundNone: string
   }
   confirmation: {
     cancel: string
@@ -195,16 +214,29 @@ export interface LocaleDictionary {
     close: string
     language: string
     languageDescription: string
+    grid: string
+    gridDescription: string
+    gridEnabled: string
+    gridDisabled: string
     mainMenu: string
     mainMenuDescription: string
     saveGame: string
     saveGameDescription: string
+    manageGames: string
   }
   savedGames: {
+    kicker: string
     title: string
     close: string
     empty: string
     saveCurrent: string
+    saveCurrentDescription: string
+    saveUnavailable: string
+    save: string
+    loadSection: string
+    loadSectionDescription: string
+    slots: string
+    latest: string
     load: string
     remove: string
     turn: string
@@ -278,7 +310,8 @@ const localeLoaders: Record<Locale, () => Promise<{ default: LocaleDictionary }>
   en: () => import('../locales/en'),
 }
 
-export const localeStorageKey = 'castle-turns:locale'
+export const localeStorageKey = 'your-command:locale'
+export const legacyLocaleStorageKey = 'castle-turns:locale'
 export const defaultLocale: Locale = 'ru'
 
 export function isLocale(value: string | null): value is Locale {
