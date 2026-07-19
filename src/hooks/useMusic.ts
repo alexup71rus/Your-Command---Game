@@ -96,18 +96,40 @@ export function useMusic(scene: MusicScene, enabled: boolean) {
     })) as Record<MusicScene, HTMLAudioElement>
     tracksRef.current = tracks
 
+    const removeUnlockListeners = () => {
+      window.removeEventListener('pointerdown', unlock, true)
+      window.removeEventListener('mousedown', unlock, true)
+      window.removeEventListener('touchstart', unlock, true)
+      window.removeEventListener('keydown', unlock, true)
+    }
     const unlock = () => {
       unlockedRef.current = true
-      window.removeEventListener('pointerdown', unlock, true)
-      window.removeEventListener('keydown', unlock, true)
+      removeUnlockListeners()
       transitionTo(sceneRef.current)
     }
     window.addEventListener('pointerdown', unlock, true)
+    window.addEventListener('mousedown', unlock, true)
+    window.addEventListener('touchstart', unlock, true)
     window.addEventListener('keydown', unlock, true)
 
+    // Browsers with an existing media permission can start immediately. If
+    // autoplay is blocked, the listeners above retry on the first interaction
+    // anywhere on the start screen rather than tying playback to a control.
+    if (enabledRef.current && volumeRef.current > 0) {
+      const initialTrack = tracks[sceneRef.current]
+      initialTrack.volume = volumeRef.current / 100
+      void initialTrack.play().then(() => {
+        if (unlockedRef.current) return
+        unlockedRef.current = true
+        activeSceneRef.current = sceneRef.current
+        removeUnlockListeners()
+      }).catch(() => {
+        if (!unlockedRef.current) initialTrack.volume = 0
+      })
+    }
+
     return () => {
-      window.removeEventListener('pointerdown', unlock, true)
-      window.removeEventListener('keydown', unlock, true)
+      removeUnlockListeners()
       stopAll()
       tracksRef.current = null
     }
