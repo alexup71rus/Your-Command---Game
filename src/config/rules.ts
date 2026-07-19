@@ -10,7 +10,16 @@ export interface BuildingRule {
   populationCapacity: number
   populationGrowth?: number
   upkeep?: ResourceAmount
-  placement: 'open' | 'plain' | 'forest' | 'hill'
+  placement: 'open' | 'plain' | 'hill'
+  minimumAdjacentForestCells?: number
+  workersRequired?: number
+  foodServiceCapacity?: number
+  requiresFoodServiceAccess?: boolean
+  processing?: {
+    input: ResourceId
+    output: ResourceId
+    maximumPerTurn: number
+  }
   footprint?: { columns: number; rows: number }
 }
 
@@ -31,21 +40,34 @@ export interface TaxRule {
   productionAdjustment: number
 }
 
-export const resourceIds: ResourceId[] = ['wood', 'stone', 'iron', 'grain', 'meat', 'gold']
-export const economyBuildingKinds: BuildingKind[] = ['farm', 'lumberMill', 'quarry', 'house', 'barracks', 'church', 'market']
+export const resourceIds: ResourceId[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat', 'gold']
+export const economyBuildingKinds: BuildingKind[] = ['farm', 'huntingLodge', 'lumberMill', 'quarry', 'mine', 'smelter', 'kitchen', 'house', 'barracks', 'church', 'market']
 export const fortificationKinds: BuildingKind[] = ['wall', 'tower', 'barbican']
 export const buildingKinds: BuildingKind[] = [...economyBuildingKinds, ...fortificationKinds]
 export const troopKinds: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
+export const workerBuildingKinds: BuildingKind[] = ['farm', 'huntingLodge', 'kitchen', 'lumberMill', 'quarry', 'mine', 'smelter']
+export const starvationTroopOrder: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
 
 export const buildingRules: Record<BuildingKind, BuildingRule> = {
   farm: {
     actionCost: 4,
-    resourceCost: { wood: 24, gold: 6 },
-    production: { grain: 18, meat: 2 },
+    resourceCost: { wood: 28, stone: 8, gold: 8 },
+    production: { grain: 18 },
     hitPoints: 10,
     populationCapacity: 0,
     placement: 'plain',
+    workersRequired: 2,
     footprint: { columns: 2, rows: 2 },
+  },
+  huntingLodge: {
+    actionCost: 4,
+    resourceCost: { wood: 18, stone: 5, gold: 8 },
+    production: { meat: 6 },
+    hitPoints: 12,
+    populationCapacity: 0,
+    placement: 'open',
+    minimumAdjacentForestCells: 2,
+    workersRequired: 1,
   },
   lumberMill: {
     actionCost: 4,
@@ -53,16 +75,49 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     production: { wood: 16 },
     hitPoints: 15,
     populationCapacity: 0,
-    placement: 'forest',
+    placement: 'open',
+    minimumAdjacentForestCells: 1,
+    workersRequired: 1,
   },
   quarry: {
     actionCost: 4,
     resourceCost: { wood: 20, gold: 8 },
-    production: { stone: 12, iron: 2 },
+    production: { stone: 12 },
     hitPoints: 18,
     populationCapacity: 0,
     placement: 'hill',
+    workersRequired: 2,
     footprint: { columns: 2, rows: 2 },
+  },
+  mine: {
+    actionCost: 4,
+    resourceCost: { wood: 18, stone: 8, gold: 10 },
+    production: { ore: 6 },
+    hitPoints: 15,
+    populationCapacity: 0,
+    placement: 'hill',
+    workersRequired: 1,
+  },
+  smelter: {
+    actionCost: 4,
+    resourceCost: { wood: 32, stone: 28, gold: 24 },
+    production: {},
+    processing: { input: 'ore', output: 'iron', maximumPerTurn: 5 },
+    hitPoints: 22,
+    populationCapacity: 0,
+    placement: 'open',
+    workersRequired: 2,
+    footprint: { columns: 2, rows: 2 },
+  },
+  kitchen: {
+    actionCost: 4,
+    resourceCost: { wood: 20, stone: 12, gold: 8 },
+    production: {},
+    hitPoints: 14,
+    populationCapacity: 0,
+    foodServiceCapacity: 20,
+    placement: 'open',
+    workersRequired: 1,
   },
   house: {
     actionCost: 4,
@@ -71,6 +126,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
     hitPoints: 10,
     populationCapacity: 10,
     placement: 'open',
+    requiresFoodServiceAccess: true,
   },
   barracks: {
     actionCost: 6,
@@ -137,7 +193,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
   },
   spearmen: {
     actionCost: 2,
-    resourceCost: { grain: 4, iron: 2, gold: 10 },
+    resourceCost: { grain: 4, iron: 1, gold: 10 },
     populationCost: 1,
     damage: 1.2,
     durability: 1.35,
@@ -164,13 +220,14 @@ export const troopRules: Record<TroopKind, TroopRule> = {
 export const startingResources: Record<ResourceId, number> = {
   wood: 110,
   stone: 80,
-  iron: 28,
+  ore: 0,
+  iron: 16,
   grain: 90,
   meat: 24,
   gold: 105,
 }
 
-export const castleProduction: ResourceAmount = { grain: 8, gold: 2 }
+export const castleProduction: ResourceAmount = { grain: 4, gold: 2 }
 
 export const defaultTaxRate: TaxRate = 'moderate'
 export const taxRates: Record<TaxRate, TaxRule> = {
@@ -179,11 +236,12 @@ export const taxRates: Record<TaxRate, TaxRule> = {
   extortionate: { goldPerPerson: 1, foodPerPerson: 0.2, productionAdjustment: -1 },
 }
 
-export const tradeableResources: Exclude<ResourceId, 'gold'>[] = ['wood', 'stone', 'iron', 'grain', 'meat']
+export const tradeableResources: Exclude<ResourceId, 'gold'>[] = ['wood', 'stone', 'ore', 'iron', 'grain', 'meat']
 export const marketPrices: Record<Exclude<ResourceId, 'gold'>, { buy: number; sell: number }> = {
   wood: { buy: 3, sell: 1 },
   stone: { buy: 4, sell: 2 },
-  iron: { buy: 7, sell: 4 },
+  ore: { buy: 5, sell: 3 },
+  iron: { buy: 10, sell: 6 },
   grain: { buy: 2, sell: 1 },
   meat: { buy: 4, sell: 2 },
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { buildingKinds } from './rules'
 import { loadLocale } from './localization'
 
 describe('lazy locale loading', () => {
@@ -9,5 +10,11 @@ describe('lazy locale loading', () => {
     expect(ru.settings.title).toBe('Настройки')
     expect(en.settings.title).toBe('Settings')
     expect(ru.tabs.map((tab) => tab.id)).toEqual(en.tabs.map((tab) => tab.id))
+    buildingKinds.forEach((kind) => {
+      expect(ru.game.buildingNames[kind]).not.toHaveLength(0)
+      expect(ru.game.buildingDescriptions[kind]).not.toHaveLength(0)
+      expect(en.game.buildingNames[kind]).not.toHaveLength(0)
+      expect(en.game.buildingDescriptions[kind]).not.toHaveLength(0)
+    })
   })
 })

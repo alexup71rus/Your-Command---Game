@@ -1,7 +1,7 @@
 import { resourceIds, troopKinds } from '../config/rules'
 import type { LocaleDictionary } from '../config/localization'
 import { gameConfig } from '../config/game'
-import { humanDomain, troopTotals, turnResourceDeltaFor, type MatchState } from '../game/match'
+import { civilianPopulationCapacityFor, humanDomain, troopTotals, turnResourceDeltaFor, workforceFor, type MatchState } from '../game/match'
 
 interface GameHudProps {
   match: MatchState
@@ -14,20 +14,20 @@ export function GameHud({ match, text, opponentTurn, onEndTurn }: GameHudProps) 
   const domain = humanDomain(match)
   const turnDelta = turnResourceDeltaFor(match, match.playerId)
   const troops = troopTotals(match, match.playerId)
+  const workforce = workforceFor(match, match.playerId)
+  const populationCapacity = civilianPopulationCapacityFor(match, match.playerId)
   return (
     <>
       <header className="hud" aria-label={text.hud.state}>
         <section className="hud-panel resource-panel" aria-label={text.hud.resources}>
-          <h2>{text.hud.resources}</h2>
           <div className="resource-panel-content">
             <dl className="compact-status-list">
               {resourceIds.map((resource) => <div key={resource}><dt>{text.game.resourceNames[resource]}</dt><dd>{domain.resources[resource]}</dd>{turnDelta[resource] !== 0 && <small className={turnDelta[resource] < 0 ? 'negative' : ''}>{turnDelta[resource] > 0 ? '+' : ''}{turnDelta[resource]}</small>}</div>)}
             </dl>
-            <div className="population-summary"><span>{text.hud.people}</span><strong>{domain.population}<small>/{domain.populationCapacity}</small></strong></div>
+            <div className={`population-summary${domain.diverseDiet ? ' diverse' : ''}`} title={domain.diverseDiet ? text.hud.diverseDiet : undefined}><div><span>{text.hud.people}</span><strong>{domain.population}<small>/{populationCapacity}</small></strong></div><small>{text.hud.workers} {workforce.employed} · {text.hud.freePeople} {workforce.free}</small></div>
           </div>
         </section>
         <section className="hud-panel army-panel" aria-label={text.hud.army}>
-          <h2>{text.hud.army}</h2>
           <dl className="compact-status-list troop-list">
             {troopKinds.map((troop) => <div key={troop}><dt>{text.game.troopNames[troop]}</dt><dd>{troops[troop]}</dd></div>)}
           </dl>

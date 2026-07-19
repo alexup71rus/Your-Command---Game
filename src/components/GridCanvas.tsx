@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { gameConfig } from '../config/game'
-import { buildingRules } from '../config/rules'
+import { buildingRules, troopKinds } from '../config/rules'
 import {
   cameraForOverview,
   clampCamera,
@@ -11,8 +11,9 @@ import {
   type Point,
   type Size,
 } from '../game/camera'
-import type { BuildingKind, GameMap } from '../game/map'
+import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game/map'
 import { maxSquadHealth, squadHealth } from '../game/match'
+import { squadMovementOrderCost } from '../game/movement'
 import { isCastleSiteValid, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
 
 const CELL_SIZE = gameConfig.map.cellSize
@@ -32,7 +33,7 @@ interface GridCanvasProps {
   movementPath?: CellPosition[] | null
   movementOrdersRemaining?: number
   unitAnimation?: { key: number; from: CellPosition; to: CellPosition } | null
-  actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; count: number } | null
+  actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; units: TroopComposition } | null
   isActionCellValid?: (position: CellPosition) => boolean
   cameraCommand?: CameraCommand | null
   onContextRequest: (request: MapContextRequest) => void
@@ -154,7 +155,7 @@ export function GridCanvas(props: GridCanvasProps) {
 
     const drawBuilding = (x: number, y: number, size: number, kind: BuildingKind, color: string, ghost = false) => {
       const inset = size * 0.16
-      const roofColors: Record<BuildingKind, string> = { farm: '#a77b47', lumberMill: '#6e5035', quarry: '#89877b', house: '#9b6548', barracks: '#7f5544', church: '#7f684d', market: '#a06f3f', wall: '#8e8a77', tower: '#817b6b', barbican: '#777263' }
+      const roofColors: Record<BuildingKind, string> = { farm: '#a77b47', huntingLodge: '#72543b', lumberMill: '#6e5035', quarry: '#89877b', mine: '#696b63', smelter: '#6f584a', kitchen: '#8b6043', house: '#9b6548', barracks: '#7f5544', church: '#7f684d', market: '#a06f3f', wall: '#8e8a77', tower: '#817b6b', barbican: '#777263' }
       context.save()
       context.globalAlpha = ghost ? 0.68 : 1
       context.shadowColor = ghost ? 'transparent' : 'rgba(0, 0, 0, .32)'
@@ -231,6 +232,83 @@ export function GridCanvas(props: GridCanvasProps) {
         context.beginPath(); context.moveTo(x + size * .73, y + size * .2); context.lineTo(x + size * .73, y + size * .62); context.moveTo(x + size * .63, y + size * .62); context.lineTo(x + size * .73, y + size * .2); context.lineTo(x + size * .83, y + size * .62); context.moveTo(x + size * .7, y + size * .31); context.lineTo(x + size * .86, y + size * .31); context.stroke()
         context.fillStyle = ghost ? color : '#725743'
         context.fillRect(x + size * .82, y + size * .29, size * .09, size * .08)
+        context.restore()
+        return
+      }
+      if (kind === 'mine') {
+        context.fillStyle = ghost ? color : '#65675f'
+        context.beginPath()
+        context.moveTo(x + size * .08, y + size * .76)
+        context.lineTo(x + size * .14, y + size * .34)
+        context.lineTo(x + size * .36, y + size * .12)
+        context.lineTo(x + size * .68, y + size * .18)
+        context.lineTo(x + size * .89, y + size * .48)
+        context.lineTo(x + size * .92, y + size * .78)
+        context.closePath(); context.fill(); context.stroke()
+        context.shadowColor = 'transparent'
+        context.fillStyle = ghost ? 'rgba(24,31,24,.3)' : '#242824'
+        context.beginPath(); context.arc(x + size * .5, y + size * .62, size * .2, Math.PI, 0); context.lineTo(x + size * .7, y + size * .83); context.lineTo(x + size * .3, y + size * .83); context.closePath(); context.fill()
+        context.strokeStyle = ghost ? color : '#ad8954'
+        context.lineWidth = Math.max(1, size * .055)
+        context.beginPath(); context.moveTo(x + size * .29, y + size * .84); context.lineTo(x + size * .29, y + size * .6); context.arc(x + size * .5, y + size * .6, size * .21, Math.PI, 0); context.lineTo(x + size * .71, y + size * .84); context.stroke()
+        context.lineWidth = Math.max(1, size * .035)
+        context.beginPath(); context.moveTo(x + size * .24, y + size * .52); context.lineTo(x + size * .76, y + size * .52); context.stroke()
+        context.strokeStyle = ghost ? color : '#c1a966'
+        context.lineWidth = Math.max(1, size * .025)
+        context.beginPath(); context.moveTo(x + size * .39, y + size * .84); context.lineTo(x + size * .46, y + size * .6); context.moveTo(x + size * .61, y + size * .84); context.lineTo(x + size * .54, y + size * .6); context.stroke()
+        for (let sleeper = 0; sleeper < 3; sleeper += 1) {
+          const sleeperY = y + size * (.67 + sleeper * .075)
+          const halfWidth = size * (.045 + sleeper * .027)
+          context.beginPath(); context.moveTo(x + size * .5 - halfWidth, sleeperY); context.lineTo(x + size * .5 + halfWidth, sleeperY); context.stroke()
+        }
+        context.fillStyle = ghost ? color : '#8d8170'
+        for (const [stoneX, stoneY, radius] of [[.19,.72,.055],[.79,.71,.045],[.75,.35,.04]] as const) {
+          context.beginPath(); context.arc(x + size * stoneX, y + size * stoneY, size * radius, 0, Math.PI * 2); context.fill(); context.stroke()
+        }
+        context.restore()
+        return
+      }
+      if (kind === 'smelter') {
+        const border = size * .055
+        context.fillStyle = ghost ? color : '#51483d'
+        context.fillRect(x + border, y + border, size - border * 2, size - border * 2)
+        context.strokeRect(x + border, y + border, size - border * 2, size - border * 2)
+        context.shadowColor = 'transparent'
+        context.fillStyle = ghost ? color : '#a58e69'
+        context.fillRect(x + size * .17, y + size * .43, size * .54, size * .36)
+        context.strokeRect(x + size * .17, y + size * .43, size * .54, size * .36)
+        context.fillStyle = ghost ? color : '#6d5542'
+        context.fillRect(x + size * .58, y + size * .17, size * .15, size * .45)
+        context.strokeRect(x + size * .58, y + size * .17, size * .15, size * .45)
+        context.fillStyle = ghost ? 'rgba(42,31,26,.35)' : '#2d2925'
+        context.beginPath(); context.arc(x + size * .39, y + size * .67, size * .13, Math.PI, 0); context.lineTo(x + size * .52, y + size * .77); context.lineTo(x + size * .26, y + size * .77); context.closePath(); context.fill()
+        context.fillStyle = ghost ? color : '#d0783f'
+        context.beginPath(); context.arc(x + size * .39, y + size * .7, size * .065, Math.PI, 0); context.fill()
+        context.strokeStyle = ghost ? color : '#c8a65d'
+        context.lineWidth = Math.max(1, size * .025)
+        context.beginPath(); context.moveTo(x + size * .77, y + size * .58); context.lineTo(x + size * .9, y + size * .58); context.lineTo(x + size * .86, y + size * .78); context.lineTo(x + size * .73, y + size * .78); context.closePath(); context.stroke()
+        context.fillStyle = ghost ? color : '#696c68'
+        context.beginPath(); context.arc(x + size * .79, y + size * .7, size * .055, 0, Math.PI * 2); context.fill(); context.stroke()
+        context.restore()
+        return
+      }
+      if (kind === 'kitchen') {
+        context.fillStyle = ghost ? color : '#b5a378'
+        context.fillRect(x + size * .16, y + size * .38, size * .68, size * .46)
+        context.strokeRect(x + size * .16, y + size * .38, size * .68, size * .46)
+        context.fillStyle = ghost ? color : '#8b6043'
+        context.beginPath(); context.moveTo(x + size * .1, y + size * .4); context.lineTo(x + size * .5, y + size * .14); context.lineTo(x + size * .9, y + size * .4); context.closePath(); context.fill(); context.stroke()
+        context.fillStyle = ghost ? color : '#756352'
+        context.fillRect(x + size * .66, y + size * .14, size * .12, size * .32)
+        context.strokeRect(x + size * .66, y + size * .14, size * .12, size * .32)
+        context.shadowColor = 'transparent'
+        context.fillStyle = ghost ? 'rgba(30,35,28,.28)' : '#433a31'
+        context.fillRect(x + size * .28, y + size * .57, size * .16, size * .27)
+        context.fillStyle = ghost ? color : '#d8b55e'
+        context.beginPath(); context.arc(x + size * .62, y + size * .64, size * .105, 0, Math.PI); context.lineTo(x + size * .515, y + size * .64); context.closePath(); context.fill(); context.stroke()
+        context.strokeStyle = ghost ? color : '#d18a4f'
+        context.lineWidth = Math.max(1, size * .02)
+        context.beginPath(); context.moveTo(x + size * .58, y + size * .61); context.quadraticCurveTo(x + size * .55, y + size * .52, x + size * .59, y + size * .48); context.moveTo(x + size * .66, y + size * .61); context.quadraticCurveTo(x + size * .7, y + size * .52, x + size * .66, y + size * .46); context.stroke()
         context.restore()
         return
       }
@@ -325,13 +403,14 @@ export function GridCanvas(props: GridCanvasProps) {
       context.closePath(); context.fill(); context.stroke()
       context.fillStyle = ghost ? 'rgba(12,16,13,.32)' : '#37352d'
       if (kind === 'lumberMill') { context.fillRect(x + size * 0.42, y + size * 0.5, size * 0.16, size * 0.3); context.strokeStyle = ghost ? color : '#d4c18c'; context.beginPath(); context.arc(x + size * 0.72, y + size * 0.68, size * 0.11, 0, Math.PI * 2); context.stroke(); for (let index = 0; index < 4; index += 1) { const angle = index * Math.PI / 2; context.beginPath(); context.moveTo(x + size * .72, y + size * .68); context.lineTo(x + size * (.72 + Math.cos(angle) * .1), y + size * (.68 + Math.sin(angle) * .1)); context.stroke() } }
+      else if (kind === 'huntingLodge') { context.fillRect(x + size * .42, y + size * .57, size * .16, size * .23); context.strokeStyle = ghost ? color : '#d8bd72'; context.lineWidth = Math.max(1, size * .025); context.beginPath(); context.moveTo(x + size * .31, y + size * .6); context.quadraticCurveTo(x + size * .22, y + size * .52, x + size * .25, y + size * .41); context.moveTo(x + size * .31, y + size * .6); context.quadraticCurveTo(x + size * .4, y + size * .52, x + size * .37, y + size * .41); context.moveTo(x + size * .25, y + size * .45); context.lineTo(x + size * .2, y + size * .4); context.moveTo(x + size * .37, y + size * .45); context.lineTo(x + size * .42, y + size * .4); context.stroke(); context.fillStyle = ghost ? color : '#b99655'; context.beginPath(); context.arc(x + size * .31, y + size * .61, size * .035, 0, Math.PI * 2); context.fill() }
       else if (kind === 'market') { context.fillStyle = ghost ? color : '#d2a14c'; context.fillRect(x + size * 0.23, y + size * 0.53, size * 0.54, size * 0.11); context.fillStyle = ghost ? color : '#7e4c36'; for (let index = 0; index < 3; index += 1) context.fillRect(x + size * (.23 + index * .18), y + size * .53, size * .09, size * .11); context.strokeStyle = ghost ? color : '#dbc47b'; for (let index = 0; index < 3; index += 1) { context.beginPath(); context.moveTo(x + size * (0.28 + index * 0.2), y + size * 0.48); context.lineTo(x + size * (0.28 + index * 0.2), y + size * 0.75); context.stroke() } }
       else if (kind === 'house') { context.fillRect(x + size * .43, y + size * .57, size * .14, size * .23); context.fillStyle = ghost ? color : '#e0c982'; context.fillRect(x + size * .66, y + size * .55, size * .1, size * .1); context.fillStyle = ghost ? color : '#594332'; context.fillRect(x + size * .69, y + size * .22, size * .09, size * .2) }
       else context.fillRect(x + size * 0.43, y + size * 0.57, size * 0.14, size * 0.23)
       context.restore()
     }
 
-    const drawSquad = (x: number, y: number, size: number, count: number, color: string, ghost = false) => {
+    const drawSquad = (x: number, y: number, size: number, units: TroopComposition, color: string, ghost = false) => {
       context.save()
       context.globalAlpha = ghost ? 0.7 : 1
       context.fillStyle = ghost ? color : '#1a211b'
@@ -344,10 +423,64 @@ export function GridCanvas(props: GridCanvasProps) {
       context.quadraticCurveTo(x + size * 0.5, y + size * 0.88, x + size * 0.28, y + size * 0.65)
       context.lineTo(x + size * 0.22, y + size * 0.25)
       context.closePath(); context.fill(); context.stroke()
-      context.fillStyle = ghost ? '#192019' : '#ead99f'
-      context.font = `700 ${Math.max(8, size * 0.27)}px system-ui`
+      const activeTroops = troopKinds.filter((kind) => (units[kind] ?? 0) > 0)
+      const total = activeTroops.reduce((sum, kind) => sum + (units[kind] ?? 0), 0)
       context.textAlign = 'center'; context.textBaseline = 'middle'
-      context.fillText(String(count), x + size * 0.5, y + size * 0.48)
+      if (size < 25 || activeTroops.length === 0) {
+        context.fillStyle = ghost ? '#192019' : '#ead99f'
+        context.font = `700 ${Math.max(8, size * 0.27)}px system-ui`
+        context.fillText(String(total), x + size * 0.5, y + size * 0.48)
+        context.restore()
+        return
+      }
+
+      const layouts: Record<number, Array<[number, number]>> = {
+        1: [[.5, .48]],
+        2: [[.37, .48], [.63, .48]],
+        3: [[.36, .37], [.64, .37], [.5, .63]],
+        4: [[.37, .36], [.63, .36], [.37, .63], [.63, .63]],
+      }
+      const positions = layouts[activeTroops.length]
+      const radius = size * (activeTroops.length === 1 ? .19 : .115)
+      const drawGlyph = (kind: TroopKind, centerX: number, centerY: number) => {
+        const glyph = radius * 1.08
+        context.strokeStyle = ghost ? '#293128' : '#ead99f'
+        context.fillStyle = ghost ? '#293128' : '#ead99f'
+        context.lineWidth = Math.max(1, radius * .18)
+        context.lineCap = 'round'; context.lineJoin = 'round'
+        if (kind === 'militia') {
+          context.beginPath(); context.arc(centerX, centerY, glyph * .48, 0, Math.PI * 2); context.stroke()
+          context.beginPath(); context.moveTo(centerX, centerY - glyph * .55); context.lineTo(centerX, centerY + glyph * .55); context.stroke()
+        } else if (kind === 'spearmen') {
+          context.beginPath(); context.moveTo(centerX - glyph * .55, centerY + glyph * .55); context.lineTo(centerX + glyph * .42, centerY - glyph * .42); context.stroke()
+          context.beginPath(); context.moveTo(centerX + glyph * .18, centerY - glyph * .48); context.lineTo(centerX + glyph * .62, centerY - glyph * .62); context.lineTo(centerX + glyph * .48, centerY - glyph * .18); context.closePath(); context.fill()
+        } else if (kind === 'archers') {
+          context.beginPath(); context.arc(centerX - glyph * .18, centerY, glyph * .62, -Math.PI * .5, Math.PI * .5); context.stroke()
+          context.beginPath(); context.moveTo(centerX - glyph * .18, centerY - glyph * .62); context.lineTo(centerX + glyph * .12, centerY); context.lineTo(centerX - glyph * .18, centerY + glyph * .62); context.moveTo(centerX - glyph * .42, centerY); context.lineTo(centerX + glyph * .58, centerY); context.stroke()
+        } else {
+          context.beginPath(); context.arc(centerX, centerY - glyph * .08, glyph * .54, Math.PI, 0); context.lineTo(centerX + glyph * .48, centerY + glyph * .42); context.lineTo(centerX - glyph * .48, centerY + glyph * .42); context.closePath(); context.stroke()
+          context.beginPath(); context.moveTo(centerX, centerY - glyph * .62); context.lineTo(centerX, centerY + glyph * .42); context.moveTo(centerX, centerY); context.lineTo(centerX + glyph * .46, centerY); context.stroke()
+        }
+      }
+
+      activeTroops.forEach((kind, index) => {
+        const [offsetX, offsetY] = positions[index]
+        const centerX = x + size * offsetX
+        const centerY = y + size * offsetY
+        context.fillStyle = ghost ? 'rgba(220,195,119,.5)' : '#202921'
+        context.strokeStyle = color
+        context.lineWidth = Math.max(1, size * .025)
+        context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.fill(); context.stroke()
+        drawGlyph(kind, centerX, centerY)
+        const badgeRadius = Math.max(2.4, radius * .52)
+        const badgeX = centerX + radius * .72
+        const badgeY = centerY + radius * .68
+        context.fillStyle = ghost ? color : '#c5a950'
+        context.beginPath(); context.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2); context.fill()
+        context.fillStyle = '#172018'
+        context.font = `800 ${Math.max(5.5, badgeRadius * 1.35)}px system-ui`
+        context.fillText(String(units[kind] ?? 0), badgeX, badgeY + .2)
+      })
       context.restore()
     }
 
@@ -479,7 +612,7 @@ export function GridCanvas(props: GridCanvasProps) {
           const objectHeight = object.type === 'building' ? cellSize * (object.footprint?.rows ?? 1) : cellSize
           if (object.type === 'castle') drawCastle(x, y, cellSize, color)
           else if (object.type === 'building') drawBuilding(x, y, Math.max(objectWidth, objectHeight), object.kind, color)
-          else drawSquad(x, y, cellSize, Object.values(object.units).reduce((sum, amount) => sum + amount, 0), color)
+          else drawSquad(x, y, cellSize, object.units, color)
           if (object.type === 'squad' && squadHealth(object) < maxSquadHealth(object) && cellSize >= 18) {
             const healthRatio = squadHealth(object) / maxSquadHealth(object)
             context.fillStyle = 'rgba(7,9,7,.72)'; context.fillRect(x + cellSize * 0.16, y + cellSize * 0.87, cellSize * 0.68, Math.max(2, cellSize * 0.055))
@@ -506,7 +639,7 @@ export function GridCanvas(props: GridCanvasProps) {
           context.fillStyle = '#050806'
           context.beginPath(); context.ellipse(x + cellSize * .5, y + cellSize * .82, cellSize * .25, cellSize * .08, 0, 0, Math.PI * 2); context.fill()
           context.restore()
-          drawSquad(x, y, cellSize, Object.values(movingObject.units).reduce((sum, amount) => sum + amount, 0), color)
+          drawSquad(x, y, cellSize, movingObject.units, color)
         }
       }
 
@@ -514,7 +647,6 @@ export function GridCanvas(props: GridCanvasProps) {
         const source = map[current.movementSource.row]?.[current.movementSource.column]?.object
         if (source?.type === 'squad') {
           const sourceSize = Object.values(source.units).reduce((sum, amount) => sum + amount, 0)
-          const moveOrderCost = (source.units.knights ?? 0) > 0 ? 2 : gameConfig.turn.movementOrderCost
           const directions = [
             { dx: 1, dy: 0, glyph: '→' },
             { dx: -1, dy: 0, glyph: '←' },
@@ -528,7 +660,7 @@ export function GridCanvas(props: GridCanvasProps) {
             if (!cell || cell.landform === 'peak') return
             const target = cell.object
             let kind: 'move' | 'merge' | 'attack' | null = null
-            if (!target && (current.movementOrdersRemaining ?? 0) >= moveOrderCost) kind = 'move'
+            if (!target && (current.movementOrdersRemaining ?? 0) >= squadMovementOrderCost(source, cell)) kind = 'move'
             else if (target && target.ownerId !== source.ownerId && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
             else if (target?.type === 'squad' && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.squadReorganizationOrderCost && sourceSize + Object.values(target.units).reduce((sum, amount) => sum + amount, 0) <= gameConfig.turn.squadCapacity) kind = 'merge'
             if (!kind) return
@@ -603,7 +735,7 @@ export function GridCanvas(props: GridCanvasProps) {
         context.fillStyle = valid ? 'rgba(211, 180, 89, .16)' : 'rgba(174, 72, 61, .18)'
         context.fillRect(x, y, previewWidth, previewHeight)
         if (current.actionPreview.kind === 'building') drawBuilding(x, y, Math.max(previewWidth, previewHeight), current.actionPreview.building, valid ? '#d2b45f' : '#b45f51', true)
-        else drawSquad(x, y, cellSize, current.actionPreview.count, valid ? '#d2b45f' : '#b45f51', true)
+        else drawSquad(x, y, cellSize, current.actionPreview.units, valid ? '#d2b45f' : '#b45f51', true)
       }
 
       if (current.selectedCell) {

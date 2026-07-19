@@ -30,6 +30,8 @@ export const gameConfig = {
   turn: {
     maxOrders: 8,
     movementOrderCost: 1,
+    knightMovementOrderMultiplier: 2,
+    forestMovementOrderMultiplier: 2,
     squadReorganizationOrderCost: 2,
     demolishOrderCost: 2,
     archerRange: 5,
@@ -39,6 +41,19 @@ export const gameConfig = {
     startingPopulation: 12,
     opponentDelayMs: 1_000,
     autoMoveStepDelayMs: 300,
+  },
+  economy: {
+    civilianFoodDivisor: 4,
+    soldierFoodDivisor: 2,
+    foodResources: ['grain', 'meat'],
+    diverseDietMinimumShare: 0.25,
+    diverseDietPopulationCapacityBonus: 5,
+    diverseDietDamageMultiplier: 1.05,
+    basePopulationGrowth: 1,
+    minimumPopulation: 1,
+    starvationPopulationLoss: 1,
+    castleFoodServiceCapacity: 20,
+    foodServiceRadius: 5,
   },
   audio: {
     defaultVolume: 70,

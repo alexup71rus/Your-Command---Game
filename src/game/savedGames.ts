@@ -1,7 +1,8 @@
 import { gameConfig } from '../config/game'
+import { resourceIds } from '../config/rules'
 import type { MatchState } from './match'
 
-const SAVE_VERSION = 1
+const SAVE_VERSION = 3
 
 export interface SavedGameSummary {
   id: string
@@ -45,6 +46,8 @@ function isSavedGame(value: unknown): value is SavedGameRecord {
     && typeof record.name === 'string'
     && typeof record.updatedAt === 'number'
     && typeof record.match?.turn === 'number'
+    && typeof record.match?.domains?.[record.match.playerId]?.diverseDiet === 'boolean'
+    && resourceIds.every((resource) => typeof record.match?.domains?.[record.match.playerId]?.resources?.[resource] === 'number')
     && Array.isArray(record.match?.scenario?.cells)
 }
 

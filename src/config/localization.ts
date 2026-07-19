@@ -48,6 +48,9 @@ export interface LocaleDictionary {
     army: string
     turn: string
     ordersAvailable: string
+    workers: string
+    freePeople: string
+    diverseDiet: string
   }
   resources: string[]
   troops: string[]
@@ -72,6 +75,7 @@ export interface LocaleDictionary {
     squadSize: string
     squadHealth: string
     orders: string
+    cost: string
     perTurn: string
     build: string
     recruit: string
@@ -95,11 +99,25 @@ export interface LocaleDictionary {
     production: string
     foodDemand: string
     populationCapacity: string
+    workers: string
+    size: string
+    forestNeighbors: string
+    processing: string
+    foodService: string
+    serviceRadius: string
+    workerProductionFull: string
+    workerProductionReduced: string
+    workerProductionStopped: string
+    diverseDiet: string
+    diverseDietActive: string
+    diverseDietInactive: string
     economyTitle: string
     economyDescription: string
     taxes: string
     taxRates: Record<'none' | 'moderate' | 'extortionate', string>
     taxIncome: string
+    ration: string
+    productionPenalty: string
     upkeep: string
     grainDemand: string
     nextTurn: string

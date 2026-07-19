@@ -33,11 +33,11 @@ import {
   splitFailure,
   splitSquad,
   squadSize,
-  squadMovementOrderCost,
   trade,
   type CommandResult,
   type MatchState,
 } from './game/match'
+import { squadMovementOrderCost } from './game/movement'
 import { findMovementPath } from './game/pathfinding'
 import { createSavedMap, defaultMapSelection, loadSavedMaps, persistSavedMaps, savedSelection, type MapSelection, type SavedMapDraft } from './game/savedMaps'
 import { deleteSavedGame, listSavedGames, loadSavedGame, saveGame, type SavedGameSummary } from './game/savedGames'
@@ -482,12 +482,13 @@ export function App() {
         return
       }
       setAutoMovePath(path)
-      if (match.ordersRemaining < squadMovementOrderCost(squad)) {
+      const next = path[1]
+      const destination = match.scenario.cells[next.row]?.[next.column]
+      if (!destination || match.ordersRemaining < squadMovementOrderCost(squad, destination)) {
         setCommandFeedback(text?.game.routeOrdersFinished ?? null)
         cancelAutoMove()
         return
       }
-      const next = path[1]
       const result = moveOrAttack(match, selectedCell, next)
       if (!result.ok) {
         setCommandFeedback(result.reason === 'not-enough-orders' ? text?.game.routeOrdersFinished ?? null : text?.game.failures[result.reason] ?? null)
@@ -564,9 +565,9 @@ export function App() {
   const actionPreview = pendingAction?.kind === 'build'
     ? { kind: 'building' as const, building: pendingAction.building }
     : pendingAction?.kind === 'recruit'
-      ? { kind: 'squad' as const, count: pendingAction.quantity }
+      ? { kind: 'squad' as const, units: { militia: 0, spearmen: 0, archers: 0, knights: 0, [pendingAction.troop]: pendingAction.quantity } }
       : pendingAction?.kind === 'split'
-        ? { kind: 'squad' as const, count: squadSize({ units: pendingAction.units }) }
+        ? { kind: 'squad' as const, units: pendingAction.units }
         : null
   const contextObject = match && contextMenu ? objectAt(match, contextMenu) : null
   const contextOwned = contextObject?.ownerId === match?.playerId

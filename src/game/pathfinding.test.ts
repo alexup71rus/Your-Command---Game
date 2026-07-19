@@ -35,4 +35,15 @@ describe('movement pathfinding', () => {
     sealed[3][2] = { ...sealed[3][2], landform: 'peak' }
     expect(findMovementPath(sealed, { column: 0, row: 0 }, { column: 2, row: 2 })).toBeNull()
   })
+
+  it('prefers a cheaper clear detour over a shorter route through dense forest', () => {
+    const map = createMap()
+    for (let column = 1; column <= 3; column += 1) map[2][column] = { ...map[2][column], vegetation: true }
+
+    const path = findMovementPath(map, { column: 0, row: 2 }, { column: 4, row: 2 })
+
+    expect(path).not.toBeNull()
+    expect(path).toHaveLength(7)
+    expect(path?.slice(1).every((position) => !map[position.row][position.column].vegetation)).toBe(true)
+  })
 })
