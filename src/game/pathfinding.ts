@@ -2,6 +2,10 @@ import type { GameMap } from './map'
 import { terrainMovementOrderMultiplier } from './movement'
 import type { CellPosition } from './scenario'
 
+interface MovementPathOptions {
+  canEnterOccupiedCell?: (position: CellPosition) => boolean
+}
+
 const directions = [
   { column: 1, row: 0 },
   { column: -1, row: 0 },
@@ -11,14 +15,14 @@ const directions = [
 
 const samePosition = (first: CellPosition, second: CellPosition) => first.column === second.column && first.row === second.row
 
-export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition): CellPosition[] | null {
+export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions = {}): CellPosition[] | null {
   const rows = map.length
   const columns = map[0]?.length ?? 0
   const insideMap = (position: CellPosition) => position.column >= 0 && position.column < columns && position.row >= 0 && position.row < rows
   if (!insideMap(from) || !insideMap(to)) return null
   if (samePosition(from, to)) return [from]
   const target = map[to.row]?.[to.column]
-  if (!target || target.landform === 'peak' || target.object) return null
+  if (!target || target.landform === 'peak' || (target.object && !options.canEnterOccupiedCell?.(to))) return null
 
   const sourceIndex = from.row * columns + from.column
   const targetIndex = to.row * columns + to.column
@@ -71,7 +75,7 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
       if (!insideMap(next)) continue
       const nextIndex = next.row * columns + next.column
       const cell = map[next.row]?.[next.column]
-      if (!cell || cell.landform === 'peak' || cell.object) continue
+      if (!cell || cell.landform === 'peak' || (cell.object && !options.canEnterOccupiedCell?.(next))) continue
       const cost = currentEntry.cost + terrainMovementOrderMultiplier(cell)
       if (cost >= distances[nextIndex]) continue
       distances[nextIndex] = cost

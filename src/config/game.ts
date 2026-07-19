@@ -34,7 +34,7 @@ export const gameConfig = {
     forestMovementOrderMultiplier: 2,
     squadReorganizationOrderCost: 2,
     demolishOrderCost: 2,
-    archerRange: 5,
+    archerRange: 8,
     squadCapacity: 10,
     castleHitPoints: 100,
     basePopulationCapacity: 20,
@@ -54,6 +54,13 @@ export const gameConfig = {
     starvationPopulationLoss: 1,
     castleFoodServiceCapacity: 20,
     foodServiceRadius: 5,
+  },
+  visibility: {
+    buildingRadius: 8,
+    squadRadius: 10,
+    elevatedSquadRadius: 12,
+    fogAlpha: 0.24,
+    fogEdgeAlpha: 0.12,
   },
   audio: {
     defaultVolume: 70,

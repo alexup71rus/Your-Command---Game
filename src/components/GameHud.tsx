@@ -7,15 +7,19 @@ interface GameHudProps {
   match: MatchState
   text: LocaleDictionary
   opponentTurn: boolean
+  previewOrderCost: number
   onEndTurn: () => void
 }
 
-export function GameHud({ match, text, opponentTurn, onEndTurn }: GameHudProps) {
+export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn }: GameHudProps) {
   const domain = humanDomain(match)
   const turnDelta = turnResourceDeltaFor(match, match.playerId)
   const troops = troopTotals(match, match.playerId)
   const workforce = workforceFor(match, match.playerId)
   const populationCapacity = civilianPopulationCapacityFor(match, match.playerId)
+  const gameOver = match.status !== 'playing'
+  const previewedOrders = Math.min(match.ordersRemaining, Math.max(0, previewOrderCost))
+  const previewStart = match.ordersRemaining - previewedOrders
   return (
     <>
       <header className="hud" aria-label={text.hud.state}>
@@ -36,11 +40,15 @@ export function GameHud({ match, text, opponentTurn, onEndTurn }: GameHudProps) 
       <section className={`hud-panel turn-panel${opponentTurn ? ' opponent-turn' : ''}`} aria-label={text.hud.turn} aria-busy={opponentTurn}>
         <div className="current-turn"><span>{text.hud.turn}</span><strong>{match.turn}</strong></div>
         <div className="order-status">
-          <div className="order-markers" aria-label={`${text.hud.ordersAvailable}: ${match.ordersRemaining}`}>
-            {Array.from({ length: gameConfig.turn.maxOrders }, (_, index) => <span key={index} className={`order-marker${index >= match.ordersRemaining ? ' spent' : ''}`} aria-hidden="true" />)}
+          <div className="order-markers" aria-label={`${text.hud.ordersAvailable}: ${match.ordersRemaining}${previewedOrders ? `. ${text.game.cost}: ${previewedOrders}` : ''}`}>
+            {Array.from({ length: gameConfig.turn.maxOrders }, (_, index) => {
+              const spent = index >= match.ordersRemaining
+              const previewed = !spent && index >= previewStart
+              return <span key={index} className={`order-marker${spent ? ' spent' : previewed ? ' preview' : ''}`} aria-hidden="true" />
+            })}
           </div>
         </div>
-        <button type="button" className={`turn-end-button${match.ordersRemaining > 0 ? ' unfinished' : ''}`} disabled={opponentTurn} onClick={onEndTurn} title={opponentTurn ? undefined : text.game.endTurnHint}><span>{opponentTurn ? text.game.opponentTurn : text.game.endTurn}</span><b aria-hidden="true">{opponentTurn ? '…' : '→'}</b></button>
+        <button type="button" className={`turn-end-button${match.ordersRemaining > 0 ? ' unfinished' : ''}`} disabled={opponentTurn || gameOver} onClick={onEndTurn} title={opponentTurn || gameOver ? undefined : text.game.endTurnHint}><span>{opponentTurn ? text.game.opponentTurn : text.game.endTurn}</span><b aria-hidden="true">{opponentTurn ? '…' : '→'}</b></button>
       </section>
     </>
   )

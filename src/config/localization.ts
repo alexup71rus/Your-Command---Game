@@ -74,6 +74,8 @@ export interface LocaleDictionary {
     hitPoints: string
     squadSize: string
     squadHealth: string
+    damage: string
+    movementCost: string
     orders: string
     cost: string
     perTurn: string
@@ -91,6 +93,9 @@ export interface LocaleDictionary {
     routeUnavailable: string
     routeOrdersFinished: string
     splitHint: string
+    squadActionHint: string
+    splitNewSquad: string
+    splitRemaining: string
     cancel: string
     split: string
     endTurn: string

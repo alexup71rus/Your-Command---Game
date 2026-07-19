@@ -1,0 +1,84 @@
+import { describe, expect, it } from 'vitest'
+import { gameConfig } from '../config/game'
+import { createEmptyMap, type BuildingObject, type GameMap, type SquadObject } from './map'
+import { calculateVisibility, isCellVisible, isObjectVisible, visibleObjectAt } from './visibility'
+
+const squad = (ownerId: string): SquadObject => ({
+  type: 'squad',
+  ownerId,
+  units: { militia: 1, spearmen: 0, archers: 0, knights: 0 },
+})
+
+const building = (ownerId: string, kind: BuildingObject['kind']): BuildingObject => ({
+  type: 'building',
+  ownerId,
+  kind,
+  hitPoints: 10,
+  maxHitPoints: 10,
+})
+
+function mapWithTerrain(size = 40): GameMap {
+  return createEmptyMap(size, size).map((row) => row.map((cell) => ({ ...cell, elevation: 0.2, landform: 'plain' as const, vegetation: false })))
+}
+
+describe('visibility', () => {
+  it('reveals a circular radius of eight cells around owned buildings', () => {
+    const map = mapWithTerrain()
+    map[20][20].object = { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 }
+    const visibility = calculateVisibility(map, 'player')
+
+    expect(isCellVisible(visibility, { column: 28, row: 20 })).toBe(true)
+    expect(isCellVisible(visibility, { column: 29, row: 20 })).toBe(false)
+    expect(isCellVisible(visibility, { column: 28, row: 28 })).toBe(false)
+  })
+
+  it('extends squad sight from ten to twelve cells on traversable heights', () => {
+    const plainMap = mapWithTerrain()
+    plainMap[20][20].object = squad('player')
+    const plainVisibility = calculateVisibility(plainMap, 'player')
+    expect(isCellVisible(plainVisibility, { column: 30, row: 20 })).toBe(true)
+    expect(isCellVisible(plainVisibility, { column: 31, row: 20 })).toBe(false)
+
+    const hillMap = mapWithTerrain()
+    hillMap[20][20] = { ...hillMap[20][20], landform: 'hill', object: squad('player') }
+    const hillVisibility = calculateVisibility(hillMap, 'player')
+    expect(isCellVisible(hillVisibility, { column: 32, row: 20 })).toBe(true)
+    expect(isCellVisible(hillVisibility, { column: 33, row: 20 })).toBe(false)
+    expect(gameConfig.visibility.elevatedSquadRadius).toBeGreaterThan(gameConfig.visibility.squadRadius)
+  })
+
+  it('conceals only enemy squads and barracks outside sight', () => {
+    const map = mapWithTerrain()
+    map[4][4].object = { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 }
+    map[30][28].object = squad('enemy')
+    map[30][29].object = building('enemy', 'barracks')
+    map[30][30].object = building('enemy', 'farm')
+    const visibility = calculateVisibility(map, 'player')
+
+    expect(visibleObjectAt(map, visibility, 'player', { column: 28, row: 30 })).toBeUndefined()
+    expect(visibleObjectAt(map, visibility, 'player', { column: 29, row: 30 })).toBeUndefined()
+    expect(visibleObjectAt(map, visibility, 'player', { column: 30, row: 30 })).toMatchObject({ type: 'building', kind: 'farm' })
+  })
+
+  it('reveals an enemy barracks when any footprint cell enters sight', () => {
+    const map = mapWithTerrain()
+    map[20][20].object = squad('player')
+    const barracks = {
+      ...building('enemy', 'barracks'),
+      footprint: { originColumn: 31, originRow: 19, columns: 2, rows: 2 },
+    }
+    for (let row = 19; row <= 20; row += 1) {
+      for (let column = 31; column <= 32; column += 1) map[row][column].object = barracks
+    }
+    const visibility = calculateVisibility(map, 'player')
+
+    expect(isCellVisible(visibility, { column: 31, row: 19 })).toBe(false)
+    expect(isCellVisible(visibility, { column: 31, row: 20 })).toBe(false)
+    expect(isCellVisible(visibility, { column: 30, row: 20 })).toBe(true)
+    expect(isObjectVisible(map, visibility, 'player', { column: 31, row: 19 })).toBe(false)
+
+    map[20][21].object = squad('player')
+    const closerVisibility = calculateVisibility(map, 'player')
+    expect(isObjectVisible(map, closerVisibility, 'player', { column: 31, row: 19 })).toBe(true)
+  })
+})

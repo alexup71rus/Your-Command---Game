@@ -36,6 +36,19 @@ describe('movement pathfinding', () => {
     expect(findMovementPath(sealed, { column: 0, row: 0 }, { column: 2, row: 2 })).toBeNull()
   })
 
+  it('can plan through occupied cells explicitly treated as concealed', () => {
+    const map = createMap()
+    map[0][1] = { ...map[0][1], object: { type: 'squad', ownerId: 'npc', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+
+    expect(findMovementPath(map, { column: 0, row: 0 }, { column: 2, row: 0 }, {
+      canEnterOccupiedCell: (position) => position.column === 1 && position.row === 0,
+    })).toEqual([
+      { column: 0, row: 0 },
+      { column: 1, row: 0 },
+      { column: 2, row: 0 },
+    ])
+  })
+
   it('prefers a cheaper clear detour over a shorter route through dense forest', () => {
     const map = createMap()
     for (let column = 1; column <= 3; column += 1) map[2][column] = { ...map[2][column], vegetation: true }

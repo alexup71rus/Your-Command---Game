@@ -535,16 +535,16 @@ describe('match rules', () => {
     expect(result.state.scenario.cells[4][5].object).toMatchObject({ type: 'building', kind: 'wall', hitPoints: 46 })
   })
 
-  it('lets archers attack up to five clear cells away without moving', () => {
+  it('lets archers attack up to eight clear cells away without moving', () => {
     const scenario = createScenario()
     scenario.cells[0][0] = { ...scenario.cells[0][0], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 5, knights: 0 } } }
-    scenario.cells[0][5] = { ...scenario.cells[0][5], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
-    const result = moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 5, row: 0 })
+    scenario.cells[0][8] = { elevation: 0.2, landform: 'plain', vegetation: false, object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    const result = moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 8, row: 0 })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.ordersRemaining).toBe(7)
     expect(result.state.scenario.cells[0][0].object).toMatchObject({ type: 'squad', ownerId: 'player' })
-    expect(result.state.scenario.cells[0][5].object).toMatchObject({ type: 'building', hitPoints: 7 })
+    expect(result.state.scenario.cells[0][8].object).toMatchObject({ type: 'building', hitPoints: 7 })
   })
 
   it('accumulates damage and makes knights substantially harder to kill than militia', () => {
@@ -578,11 +578,11 @@ describe('match rules', () => {
     const scenario = createScenario()
     scenario.cells[0][0] = { ...scenario.cells[0][0], object: { type: 'squad', ownerId: 'player', units: { militia: 0, spearmen: 0, archers: 5, knights: 0 } } }
     scenario.cells[0][2] = { ...scenario.cells[0][2], vegetation: true }
-    scenario.cells[0][5] = { ...scenario.cells[0][5], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
-    expect(moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 5, row: 0 })).toMatchObject({ ok: false, reason: 'ranged-shot-blocked' })
+    scenario.cells[0][8] = { elevation: 0.2, landform: 'plain', vegetation: false, object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    expect(moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 8, row: 0 })).toMatchObject({ ok: false, reason: 'ranged-shot-blocked' })
     scenario.cells[0][2] = { ...scenario.cells[0][2], vegetation: false }
-    scenario.cells[0][6] = { ...scenario.cells[0][6], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
-    expect(moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 6, row: 0 })).toMatchObject({ ok: false, reason: 'out-of-range' })
+    scenario.cells[0][9] = { elevation: 0.2, landform: 'plain', vegetation: false, object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
+    expect(moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 9, row: 0 })).toMatchObject({ ok: false, reason: 'out-of-range' })
   })
 
   it('scales taxes with population and changes food demand and production', () => {

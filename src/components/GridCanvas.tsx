@@ -15,6 +15,7 @@ import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game
 import { maxSquadHealth, squadHealth } from '../game/match'
 import { squadMovementOrderCost } from '../game/movement'
 import { isCastleSiteValid, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
+import { isCellVisible, isObjectVisible, visibleObjectAt, type VisibilityMap } from '../game/visibility'
 
 const CELL_SIZE = gameConfig.map.cellSize
 
@@ -33,6 +34,8 @@ interface GridCanvasProps {
   movementPath?: CellPosition[] | null
   movementOrdersRemaining?: number
   unitAnimation?: { key: number; from: CellPosition; to: CellPosition } | null
+  visibility?: VisibilityMap | null
+  viewerId?: string
   actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; units: TroopComposition } | null
   isActionCellValid?: (position: CellPosition) => boolean
   cameraCommand?: CameraCommand | null
@@ -75,7 +78,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementOrdersRemaining, props.unitAnimation, props.actionPreview])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
   useEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
@@ -601,6 +604,7 @@ export function GridCanvas(props: GridCanvasProps) {
         for (let column = firstObjectColumn; column < lastColumn; column += 1) {
           const object = map[row][column].object
           if (!object) continue
+          if (current.viewerId && !isObjectVisible(map, current.visibility, current.viewerId, { column, row })) continue
           if (object.type === 'building' && object.footprint && (object.footprint.originColumn !== column || object.footprint.originRow !== row)) continue
           if (activeUnitAnimation && row === activeUnitAnimation.to.row && column === activeUnitAnimation.to.column && object.type === 'squad') continue
           const participant = current.participants?.find((candidate) => candidate.id === object.ownerId)
@@ -643,6 +647,33 @@ export function GridCanvas(props: GridCanvasProps) {
         }
       }
 
+      if (current.mode === 'playing' && current.visibility) {
+        context.save()
+        const fogEdgeCells: CellPosition[] = []
+        context.beginPath()
+        for (let row = firstRow; row < lastRow; row += 1) {
+          for (let column = firstColumn; column < lastColumn; column += 1) {
+            if (isCellVisible(current.visibility, { column, row })) continue
+            const touchesVisibleCell = isCellVisible(current.visibility, { column: column - 1, row })
+              || isCellVisible(current.visibility, { column: column + 1, row })
+              || isCellVisible(current.visibility, { column, row: row - 1 })
+              || isCellVisible(current.visibility, { column, row: row + 1 })
+            if (touchesVisibleCell) {
+              fogEdgeCells.push({ column, row })
+              continue
+            }
+            context.rect(mapOrigin.x + column * cellSize, mapOrigin.y + row * cellSize, Math.ceil(cellSize), Math.ceil(cellSize))
+          }
+        }
+        context.fillStyle = `rgba(5, 10, 7, ${gameConfig.visibility.fogAlpha})`
+        context.fill()
+        context.beginPath()
+        fogEdgeCells.forEach(({ column, row }) => context.rect(mapOrigin.x + column * cellSize, mapOrigin.y + row * cellSize, Math.ceil(cellSize), Math.ceil(cellSize)))
+        context.fillStyle = `rgba(5, 10, 7, ${gameConfig.visibility.fogEdgeAlpha})`
+        context.fill()
+        context.restore()
+      }
+
       if (current.movementSource) {
         const source = map[current.movementSource.row]?.[current.movementSource.column]?.object
         if (source?.type === 'squad') {
@@ -658,7 +689,9 @@ export function GridCanvas(props: GridCanvasProps) {
             const row = current.movementSource!.row + dy
             const cell = map[row]?.[column]
             if (!cell || cell.landform === 'peak') return
-            const target = cell.object
+            const target = current.viewerId
+              ? visibleObjectAt(map, current.visibility, current.viewerId, { column, row })
+              : cell.object
             let kind: 'move' | 'merge' | 'attack' | null = null
             if (!target && (current.movementOrdersRemaining ?? 0) >= squadMovementOrderCost(source, cell)) kind = 'move'
             else if (target && target.ownerId !== source.ownerId && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
@@ -692,7 +725,9 @@ export function GridCanvas(props: GridCanvasProps) {
                 const row = current.movementSource!.row + dy * distance
                 const cell = map[row]?.[column]
                 if (!cell || cell.landform === 'peak') break
-                const target = cell.object
+                const target = current.viewerId
+                  ? visibleObjectAt(map, current.visibility, current.viewerId, { column, row })
+                  : cell.object
                 if (cell.vegetation && !target) break
                 const x = mapOrigin.x + column * cellSize
                 const y = mapOrigin.y + row * cellSize
@@ -740,15 +775,18 @@ export function GridCanvas(props: GridCanvasProps) {
 
       if (current.selectedCell) {
         const selectedObject = map[current.selectedCell.row]?.[current.selectedCell.column]?.object
-        const footprint = selectedObject?.type === 'building' ? selectedObject.footprint : undefined
-        const selectedColumn = footprint?.originColumn ?? current.selectedCell.column
-        const selectedRow = footprint?.originRow ?? current.selectedCell.row
-        const selectedWidth = cellSize * (footprint?.columns ?? 1)
-        const selectedHeight = cellSize * (footprint?.rows ?? 1)
-        const x = mapOrigin.x + selectedColumn * cellSize
-        const y = mapOrigin.y + selectedRow * cellSize
-        context.strokeStyle = '#f0cf71'; context.lineWidth = Math.max(2, Math.min(3, camera.zoom * 2.2))
-        context.strokeRect(x + 2, y + 2, Math.max(0, selectedWidth - 4), Math.max(0, selectedHeight - 4))
+        const selectedObjectVisible = !selectedObject || !current.viewerId || isObjectVisible(map, current.visibility, current.viewerId, current.selectedCell)
+        if (selectedObjectVisible) {
+          const footprint = selectedObject?.type === 'building' ? selectedObject.footprint : undefined
+          const selectedColumn = footprint?.originColumn ?? current.selectedCell.column
+          const selectedRow = footprint?.originRow ?? current.selectedCell.row
+          const selectedWidth = cellSize * (footprint?.columns ?? 1)
+          const selectedHeight = cellSize * (footprint?.rows ?? 1)
+          const x = mapOrigin.x + selectedColumn * cellSize
+          const y = mapOrigin.y + selectedRow * cellSize
+          context.strokeStyle = '#f0cf71'; context.lineWidth = Math.max(2, Math.min(3, camera.zoom * 2.2))
+          context.strokeRect(x + 2, y + 2, Math.max(0, selectedWidth - 4), Math.max(0, selectedHeight - 4))
+        }
       }
 
       if (hoveredCell) {

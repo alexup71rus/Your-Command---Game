@@ -1,8 +1,14 @@
 import { gameConfig } from '../config/game'
-import type { MapCell, SquadObject } from './map'
+import type { MapCell, SquadObject, TroopKind } from './map'
 
 export function terrainMovementOrderMultiplier(cell: Pick<MapCell, 'vegetation'>) {
   return cell.vegetation ? gameConfig.turn.forestMovementOrderMultiplier : 1
+}
+
+export function troopMovementOrderCost(troop: TroopKind) {
+  return gameConfig.turn.movementOrderCost * (troop === 'knights'
+    ? gameConfig.turn.knightMovementOrderMultiplier
+    : 1)
 }
 
 export function squadMovementOrderCost(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildingKinds } from './rules'
+import { buildingKinds, troopKinds } from './rules'
 import { loadLocale } from './localization'
 
 describe('lazy locale loading', () => {
@@ -16,5 +16,13 @@ describe('lazy locale loading', () => {
       expect(en.game.buildingNames[kind]).not.toHaveLength(0)
       expect(en.game.buildingDescriptions[kind]).not.toHaveLength(0)
     })
+    troopKinds.forEach((kind) => {
+      expect(ru.game.troopNames[kind]).not.toHaveLength(0)
+      expect(ru.game.troopDescriptions[kind]).not.toHaveLength(0)
+      expect(en.game.troopNames[kind]).not.toHaveLength(0)
+      expect(en.game.troopDescriptions[kind]).not.toHaveLength(0)
+    })
+    expect(JSON.stringify(ru)).not.toContain('undefined')
+    expect(JSON.stringify(en)).not.toContain('undefined')
   })
 })
