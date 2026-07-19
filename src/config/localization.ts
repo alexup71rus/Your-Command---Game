@@ -70,6 +70,7 @@ export interface LocaleDictionary {
     terrainForest: string
     hitPoints: string
     squadSize: string
+    squadHealth: string
     orders: string
     perTurn: string
     build: string
@@ -81,6 +82,8 @@ export interface LocaleDictionary {
     buildHint: string
     recruitHint: string
     moveHint: string
+    knightMoveHint: string
+    archerRangeHint: string
     splitHint: string
     cancel: string
     split: string
@@ -90,11 +93,28 @@ export interface LocaleDictionary {
     production: string
     foodDemand: string
     populationCapacity: string
+    economyTitle: string
+    economyDescription: string
+    taxes: string
+    taxRates: Record<'none' | 'moderate' | 'extortionate', string>
+    taxIncome: string
+    upkeep: string
+    grainDemand: string
+    nextTurn: string
+    populationChange: string
+    stable: string
+    deficit: string
+    marketTitle: string
+    marketDescription: string
+    buy: string
+    sell: string
     victoryTitle: string
     victoryDescription: string
     continue: string
     previousItems: string
     nextItems: string
+    previousTroops: string
+    nextTroops: string
     failures: Record<CommandFailure, string>
   }
   interface: {

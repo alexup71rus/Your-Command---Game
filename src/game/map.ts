@@ -3,8 +3,8 @@ import { gameConfig } from '../config/game'
 export type Landform = 'plain' | 'hill' | 'peak'
 
 export type ResourceId = 'wood' | 'stone' | 'iron' | 'grain' | 'meat' | 'gold'
-export type BuildingKind = 'farm' | 'lumberMill' | 'quarry' | 'house' | 'barracks' | 'church' | 'wall' | 'tower' | 'barbican'
-export type TroopKind = 'militia' | 'spearmen' | 'archers'
+export type BuildingKind = 'farm' | 'lumberMill' | 'quarry' | 'house' | 'barracks' | 'church' | 'market' | 'wall' | 'tower' | 'barbican'
+export type TroopKind = 'militia' | 'spearmen' | 'archers' | 'knights'
 export type TroopComposition = Record<TroopKind, number>
 
 export interface CastleObject {
@@ -26,6 +26,7 @@ export interface SquadObject {
   type: 'squad'
   ownerId: string
   units: TroopComposition
+  health?: number
 }
 
 export type MapObject = CastleObject | BuildingObject | SquadObject

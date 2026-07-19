@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { gameConfig } from '../config/game'
 
-export type SoundEffect = 'map' | 'tab' | 'context' | 'action' | 'dismiss' | 'enable'
+export type SoundEffect = 'map' | 'tab' | 'context' | 'action' | 'attack' | 'dismiss' | 'enable'
 
 const clampVolume = (volume: number) => Math.max(0, Math.min(100, Math.round(volume)))
 
@@ -36,7 +36,7 @@ export function useSoundEffects() {
   )
   const audioContextRef = useRef<AudioContext | null>(null)
 
-  const playTone = useCallback((frequency: number, duration: number, level: number, delay = 0) => {
+  const playTone = useCallback((frequency: number, duration: number, level: number, delay = 0, type: OscillatorType = 'triangle') => {
     const AudioContextClass = window.AudioContext
     if (!AudioContextClass) return
 
@@ -47,7 +47,7 @@ export function useSoundEffects() {
     const start = audioContext.currentTime + delay
     const oscillator = audioContext.createOscillator()
     const gain = audioContext.createGain()
-    oscillator.type = 'triangle'
+    oscillator.type = type
     oscillator.frequency.setValueAtTime(frequency, start)
     oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.82, start + duration)
     const audibleLevel = Math.min(0.22, level * gameConfig.audio.gainMultiplier * volumeRef.current / 100)
@@ -67,6 +67,7 @@ export function useSoundEffects() {
       case 'tab': playTone(430, 0.1, 0.044); playTone(645, 0.12, 0.03, 0.025); break
       case 'context': playTone(260, 0.13, 0.05); playTone(520, 0.17, 0.034, 0.035); break
       case 'action': playTone(350, 0.09, 0.045); break
+      case 'attack': playTone(118, 0.16, 0.07, 0, 'square'); playTone(72, 0.22, 0.055, 0.025, 'sawtooth'); break
       case 'dismiss': playTone(170, 0.08, 0.035); break
       case 'enable': playTone(330, 0.1, 0.05); playTone(495, 0.14, 0.04, 0.045); break
     }

@@ -12,9 +12,10 @@ import { StartMenu } from './components/StartMenu'
 import { UtilityControls } from './components/UtilityControls'
 import { gameConfig } from './config/game'
 import type { TabId } from './config/localization'
+import type { TaxRate } from './config/rules'
 import { overlayAfterEscape, type GamePhase, type Overlay } from './game/flow'
 import type { PendingGameAction } from './game/interaction'
-import type { BuildingKind, TroopComposition, TroopKind } from './game/map'
+import type { BuildingKind, ResourceId, TroopComposition, TroopKind } from './game/map'
 import {
   build,
   buildingPlacementFailure,
@@ -23,13 +24,16 @@ import {
   demolish,
   endTurn,
   isSamePosition,
+  isRangedAttack,
   moveOrAttack,
   objectAt,
   recruit,
   recruitmentFailure,
+  setTaxRate,
   splitFailure,
   splitSquad,
   squadSize,
+  trade,
   type CommandResult,
   type MatchState,
 } from './game/match'
@@ -58,6 +62,7 @@ export function App() {
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null)
   const [castleDraft, setCastleDraft] = useState<CellPosition | null>(null)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
+  const [unitAnimation, setUnitAnimation] = useState<{ key: number; from: CellPosition; to: CellPosition } | null>(null)
   const [territoriesHeld, setTerritoriesHeld] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('buildings')
   const [selectedCell, setSelectedCell] = useState<CellPosition | null>(null)
@@ -70,6 +75,7 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null)
   const burstId = useRef(0)
   const focusId = useRef(0)
+  const unitAnimationId = useRef(0)
   const lastBurstVariant = useRef<ClickBurstVariant | null>(null)
   const { locale, setLocale, text } = useLocalization()
   const { visible: navigationHintVisible, markLearned } = useNavigationHint()
@@ -126,6 +132,7 @@ export function App() {
       setCameraCommand(focus
         ? { kind: 'cell', column: focus.column, row: focus.row, zoom: gameConfig.camera.gameStartZoom, key: ++focusId.current }
         : { kind: 'overview', key: ++focusId.current })
+      setUnitAnimation(null)
       playSound('action')
     } catch {
       setSavedGamesFeedback(text?.savedGames.loadFailed ?? null)
@@ -172,6 +179,7 @@ export function App() {
     setOpponentTurn(false)
     setOverlay(null)
     setCameraCommand({ kind: 'overview', key: ++focusId.current })
+    setUnitAnimation(null)
     setPhase('founding')
   }, [])
 
@@ -208,6 +216,7 @@ export function App() {
     setSelectedRegionId(null)
     setCastleDraft(null)
     setCameraCommand(null)
+    setUnitAnimation(null)
     setTerritoriesHeld(false)
     setContextMenu(null)
     setActiveTab('buildings')
@@ -227,7 +236,7 @@ export function App() {
     else setCameraCommand({ kind: 'overview', key: ++focusId.current })
   }, [focusRegion])
 
-  const applyCommand = useCallback((result: CommandResult, nextSelection?: CellPosition) => {
+  const applyCommand = useCallback((result: CommandResult, nextSelection?: CellPosition, sound: SoundEffect = 'action') => {
     if (!result.ok) {
       if (text) setCommandFeedback(text.game.failures[result.reason])
       playSound('dismiss')
@@ -238,15 +247,25 @@ export function App() {
     if (nextSelection) setSelectedCell(nextSelection)
     setPendingAction(null)
     setCommandFeedback(null)
-    playSound('action')
+    playSound(sound)
     return true
   }, [playSound, text])
 
   const handleMapClick = useCallback((request: MapClickRequest) => {
     if (phase === 'playing' && opponentTurn) return
-    createBurst(request.clientX, request.clientY, 'map')
-    playSound('map')
     const position = { column: request.column, row: request.row }
+    const selectedForGesture = phase === 'playing' && match && selectedCell ? objectAt(match, selectedCell) : null
+    const targetForGesture = phase === 'playing' && match ? objectAt(match, position) : null
+    const attackGesture = Boolean(selectedCell
+      && selectedForGesture?.type === 'squad'
+      && selectedForGesture.ownerId === match?.playerId
+      && targetForGesture
+      && targetForGesture.ownerId !== match?.playerId
+      && (Math.abs(selectedCell.column - position.column) + Math.abs(selectedCell.row - position.row) === 1 || (match && isRangedAttack(match, selectedCell, position))))
+    if (!attackGesture) {
+      createBurst(request.clientX, request.clientY, 'map')
+      playSound('map')
+    }
     if (phase === 'playing' && match) {
       if (pendingAction?.kind === 'build') {
         applyCommand(build(match, pendingAction.building, position), position)
@@ -267,17 +286,33 @@ export function App() {
           setCommandFeedback(null)
           return
         }
+        const target = objectAt(match, position)
+        const attacking = Boolean(target && target.ownerId !== match.playerId)
         const result = moveOrAttack(match, selectedCell, position)
         if (result.ok || result.reason !== 'not-adjacent') {
-          applyCommand(result, position)
+          const sourceAfterAttack = result.ok && attacking ? objectAt(result.state, selectedCell) : null
+          const nextSelection = sourceAfterAttack?.type === 'squad' && sourceAfterAttack.ownerId === match.playerId ? selectedCell : position
+          if (result.ok) {
+            const movedSquad = objectAt(result.state, position)
+            const sourceAfter = objectAt(result.state, selectedCell)
+            if (!sourceAfter && movedSquad?.type === 'squad' && movedSquad.ownerId === match.playerId && (result.state.lastEvent?.kind === 'moved' || result.state.lastEvent?.kind === 'destroyed')) {
+              setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: position })
+            }
+          }
+          if (result.ok && attacking) createBurst(request.clientX, request.clientY, 'combat')
+          applyCommand(result, nextSelection, attacking ? 'attack' : 'action')
           return
         }
         const clickedObject = objectAt(match, position)
         if (clickedObject?.type === 'squad' && clickedObject.ownerId === match.playerId) {
           setSelectedCell(position)
           setCommandFeedback(null)
-        } else if (text) {
-          setCommandFeedback(text.game.failures['not-adjacent'])
+        } else if (clickedObject) {
+          setSelectedCell(position)
+          setCommandFeedback(null)
+        } else {
+          setSelectedCell(null)
+          setCommandFeedback(null)
         }
         return
       }
@@ -292,7 +327,7 @@ export function App() {
       return
     }
     setCastleDraft(position)
-  }, [applyCommand, createBurst, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId, text])
+  }, [applyCommand, createBurst, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId])
 
   const confirmFounding = useCallback(() => {
     if (!scenario || !selectedRegionId || !castleDraft || !isCastleSiteValid(scenario, selectedRegionId, castleDraft)) return
@@ -318,6 +353,16 @@ export function App() {
     setPendingAction({ kind: 'recruit', troop, quantity })
     setCommandFeedback(null)
   }, [opponentTurn])
+
+  const changeTaxRate = useCallback((rate: TaxRate) => {
+    if (!match || opponentTurn) return
+    applyCommand(setTaxRate(match, rate), selectedCell ?? undefined)
+  }, [applyCommand, match, opponentTurn, selectedCell])
+
+  const tradeAtMarket = useCallback((position: CellPosition, resource: Exclude<ResourceId, 'gold'>, direction: 'buy' | 'sell', quantity: number) => {
+    if (!match || opponentTurn) return
+    applyCommand(trade(match, position, resource, direction, quantity), position)
+  }, [applyCommand, match, opponentTurn])
 
   const startSplit = useCallback((source: CellPosition) => {
     if (!match || opponentTurn) return
@@ -456,12 +501,12 @@ export function App() {
 
   return (
     <main className={`game-shell phase-${phase}`} onPointerDownCapture={handleInterfacePointerDown}>
-      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} showTerritories={phase === 'founding' || territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? selectedCell : null} movementSource={movementSource} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} ariaLabel={text.interface.mapAria} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
+      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} showTerritories={phase === 'founding' || territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? selectedCell : null} movementSource={movementSource} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} ariaLabel={text.interface.mapAria} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
       {phase === 'playing' && match && <>
         <GameHud match={match} text={text} opponentTurn={opponentTurn} onEndTurn={finishTurn} />
-        <GameCommandDock match={match} selectedCell={selectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onTabChange={(tab) => { setActiveTab(tab); setPendingAction(null); setCommandFeedback(null) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onSplitChange={changeSplit} onCancelAction={() => setPendingAction(null)} />
+        <GameCommandDock match={match} selectedCell={selectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onTabChange={(tab) => { setActiveTab(tab); setSelectedCell(null); setPendingAction(null); setCommandFeedback(null) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onSplitChange={changeSplit} onCancelAction={() => setPendingAction(null)} onSetTaxRate={changeTaxRate} onTrade={tradeAtMarket} />
         {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
       </>}
 

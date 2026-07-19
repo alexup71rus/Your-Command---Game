@@ -28,7 +28,11 @@ export const gameConfig = {
     maxRegionPerimeterRatio: 8,
   },
   turn: {
-    maxOrders: 4,
+    maxOrders: 8,
+    movementOrderCost: 1,
+    squadReorganizationOrderCost: 2,
+    demolishOrderCost: 2,
+    archerRange: 5,
     squadCapacity: 10,
     castleHitPoints: 100,
     basePopulationCapacity: 20,
@@ -49,6 +53,7 @@ export const gameConfig = {
     gameStartZoom: 1.05,
     wheelSensitivity: 0.0015,
     dragThreshold: 5,
+    unitMoveAnimationMs: 260,
   },
   navigationHint: {
     storageKey: 'castle-turns:navigation-hint-seen',

@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-export type ClickBurstKind = 'map' | 'interface' | 'context' | 'danger'
+export type ClickBurstKind = 'map' | 'interface' | 'context' | 'danger' | 'combat'
 export type ClickBurstVariant = 0 | 1 | 2 | 3 | 4
 
 export interface ClickBurst {
