@@ -1,6 +1,7 @@
 import {
   aiBuildingZoneByKind,
   aiPlannerConfig,
+  aiSpatialConfig,
   aiStrategicConfig,
 } from '../../../config/ai'
 import { gameConfig } from '../../../config/game'
@@ -10,6 +11,7 @@ import {
   buildingFootprintPositions,
   buildingPlacementFailure,
   buildingResourceCostFor,
+  buildingSiteFailure,
   ownedBuildingCount,
   tradeQuoteFor,
   type MatchState,
@@ -46,6 +48,43 @@ import {
 import type { BuildingGoal } from './types'
 
 const foodResources = gameConfig.economy.foodResources
+
+function seededSiteRank(seed: number, kind: BuildingKind, position: CellPosition) {
+  const value = `${kind}:${position.column}:${position.row}`
+  let hash = seed >>> 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 16777619) >>> 0
+  }
+  return hash
+}
+
+function remainingConstructionNeed(
+  state: MatchState,
+  profile: AiProfileRules,
+  memory: AiMemory,
+  resource: (typeof resourceIds)[number],
+) {
+  return profile.allowedBuildings.reduce((total, kind) => {
+    const missing = Math.max(0, plannedBuildingLimit(memory, kind)
+      - ownedBuildingCount(state, state.activeParticipantId, kind))
+    return total + missing * (buildingRules[kind].resourceCost[resource] ?? 0)
+  }, 0)
+}
+
+function desiredProducerCount(
+  state: MatchState,
+  profile: AiProfileRules,
+  memory: AiMemory,
+  producer: 'lumberMill' | 'quarry',
+  resource: 'wood' | 'stone',
+) {
+  const limit = plannedBuildingLimit(memory, producer)
+  if (limit <= 0) return 0
+  const perTurn = Math.max(1, buildingRules[producer].production[resource] ?? 0)
+  const demandPerTurn = remainingConstructionNeed(state, profile, memory, resource)
+    / aiStrategicConfig.constructionPlanningHorizonTurns
+  return Math.min(limit, Math.max(1, Math.ceil(demandPerTurn / perTurn)))
+}
 
 function plannedResourceNeed(profile: AiProfileRules, kind: BuildingKind) {
   const cost = buildingRules[kind].resourceCost
@@ -176,6 +215,8 @@ export function desiredBuildingGoals(
   // A profile's food-quarter size is a total spatial budget, not a mandate to
   // starve when one intended food source is absent from the map.
   const adaptiveLimit = (kind: BuildingKind) => adaptiveBuildingLimitFor(state, memory, kind)
+  const desiredLumberMills = desiredProducerCount(state, profile, memory, 'lumberMill', 'wood')
+  const desiredQuarries = desiredProducerCount(state, profile, memory, 'quarry', 'stone')
   const add = (kind: BuildingKind, utility: number, ...factors: string[]) => {
     const requiredWorkers = buildingRules[kind].workersRequired ?? 0
     const essentialInCrisis = (phase === 'survival' || phase === 'recovery' || economicEmergency)
@@ -183,9 +224,14 @@ export function desiredBuildingGoals(
     // Requiring two *additional* idle workers from every expansion building can
     // deadlock a compact settlement: its last free worker is exactly what must
     // start the food/service building that allows the next citizens to appear.
-    const enablesPopulationGrowth = (aiBuildingZoneByKind[kind] === 'food' || kind === 'kitchen')
+    const enablesFoodGrowth = aiBuildingZoneByKind[kind] === 'food'
       && snapshot.workforceFree >= requiredWorkers
       && snapshot.housingCapacity > domain.population
+    const enablesServiceGrowth = kind === 'kitchen'
+      && snapshot.workforceFree >= requiredWorkers
+      && snapshot.foodServiceCapacity <= domain.population
+      && snapshot.residentialCapacity >= domain.population
+    const enablesPopulationGrowth = enablesFoodGrowth || enablesServiceGrowth
     const keepsWorkerReserve = requiredWorkers === 0 || snapshot.workforceFree >= requiredWorkers + aiStrategicConfig.workerReserve
       || essentialInCrisis || enablesPopulationGrowth
     if (profile.allowedBuildings.includes(kind)
@@ -216,9 +262,12 @@ export function desiredBuildingGoals(
   }
   const hasLumberPotential = analysis.cells.some((row) => row.some((cell) => cell.inRegion && cell.passable
     && cell.adjacentForest >= (buildingRules.lumberMill.minimumAdjacentForestCells ?? 0)))
-  if (hasLumberPotential && (count('lumberMill') === 0
-    || (domain.resources.wood < goalConfig.lowWoodThreshold && snapshot.resourceFlow.wood <= 0
-      && count('lumberMill') < goalConfig.maximumLumberMills))) add('lumberMill', goalConfig.utility.lumberMill, 'wood-recovery')
+  if (hasLumberPotential && count('lumberMill') < Math.min(goalConfig.maximumLumberMills, desiredLumberMills)
+    && (count('lumberMill') === 0 || snapshot.resourceFlow.wood < remainingConstructionNeed(state, profile, memory, 'wood')
+      / aiStrategicConfig.constructionPlanningHorizonTurns
+      || domain.resources.wood < goalConfig.lowWoodThreshold)) {
+    add('lumberMill', goalConfig.utility.lumberMill, count('lumberMill') === 0 ? 'wood-recovery' : 'construction-throughput')
+  }
   const housingSlack = snapshot.residentialCapacity - domain.population
   const serviceSlack = snapshot.foodServiceCapacity - domain.population
   const growthFoodReady = snapshot.forecastFed && snapshot.foodRunway >= aiPlannerConfig.foodRunwayTurns
@@ -236,12 +285,13 @@ export function desiredBuildingGoals(
     && snapshot.foodServiceCapacity < snapshot.residentialCapacity
     && count('kitchen') < plannedBuildingLimit(memory, 'kitchen')) add('kitchen', goalConfig.utility.kitchen, 'food-service')
 
-  const futureStoneNeed = profile.allowedBuildings
-    .filter((kind) => count(kind) === 0)
-    .slice(0, aiStrategicConfig.resourcePlanning.futureBuildingWindow)
-    .reduce((sum, kind) => sum + (buildingRules[kind].resourceCost.stone ?? 0), 0)
-  if (count('quarry') === 0 && domain.resources.stone < Math.max(aiStrategicConfig.resourcePlanning.minimumStoneTarget,
-    futureStoneNeed * aiStrategicConfig.resourcePlanning.futureStoneShare)) add('quarry', goalConfig.utility.quarry, 'planned-stone')
+  const futureStoneNeed = remainingConstructionNeed(state, profile, memory, 'stone')
+  const stoneTarget = Math.max(aiStrategicConfig.resourcePlanning.minimumStoneTarget,
+    futureStoneNeed * aiStrategicConfig.resourcePlanning.futureStoneShare)
+  if (count('quarry') < desiredQuarries && (domain.resources.stone < stoneTarget
+    || snapshot.resourceFlow.stone < futureStoneNeed / aiStrategicConfig.constructionPlanningHorizonTurns)) {
+    add('quarry', goalConfig.utility.quarry, count('quarry') === 0 ? 'planned-stone' : 'construction-throughput')
+  }
   const hasBarracks = count('barracks') > 0
   const desiredArmySize = minimumFieldArmySize(profile)
   const needsRecruitmentTrade = hasBarracks && snapshot.armySize < desiredArmySize
@@ -495,13 +545,20 @@ export function findStrategicBuildPosition(
       if (!analysis.cells[row]?.[column]?.inRegion) continue
       const cell = state.scenario.cells[row]?.[column]
       if (!cell || cell.object || cell.landform === 'peak') continue
+      if (buildingSiteFailure(state, kind, position) !== null) continue
       const score = buildingPositionScore(state, analysis, memory, kind, position, context)
       if (Number.isFinite(score)) candidates.push({ position, score })
     }
     candidates.sort((first, second) => {
       const firstTier = coverage(first.position) >= aiStrategicConfig.placement.preferredZoneCoverage ? 0 : distanceToZone(first.position) <= (zone?.overflowRadius ?? 0) ? 1 : 2
       const secondTier = coverage(second.position) >= aiStrategicConfig.placement.preferredZoneCoverage ? 0 : distanceToZone(second.position) <= (zone?.overflowRadius ?? 0) ? 1 : 2
-      return firstTier - secondTier || second.score - first.score || first.position.row - second.position.row || first.position.column - second.position.column
+      const scoreDifference = second.score - first.score
+      if (firstTier !== secondTier) return firstTier - secondTier
+      if (Math.abs(scoreDifference) > aiSpatialConfig.settlementPlan.scoreTieEpsilon) return scoreDifference
+      return seededSiteRank(state.scenario.seed, kind, first.position)
+        - seededSiteRank(state.scenario.seed, kind, second.position)
+        || first.position.row - second.position.row
+        || first.position.column - second.position.column
     })
     const shortlist = candidates.slice(0, aiStrategicConfig.buildingPlacementShortlist)
     for (const candidate of shortlist) {

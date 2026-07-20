@@ -1,94 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { economyBuildingKinds } from '../../config/rules'
-import { createManualHeightGrid, generateMap } from '../generator'
-import { createMatch, type MatchState } from '../match'
-import { mapPresets, type PresetId } from '../presets'
-import { createMapScenario, foundMatch, type AiProfileId } from '../scenario'
-import { createAiScenario } from './testing/scenarioFixtures'
-import { scenarioTranscript, runAiScenario } from './testing/scenarioHarness'
+import type { BuildingKind } from '../map'
+import { createMatch, objectAt } from '../match'
+import type { AiProfileId } from '../scenario'
+import type { AiCommand } from './model'
+import {
+  createEconomicScenario,
+  createFortressConstructionState,
+  type EconomicTerrain,
+} from './testing/scenarioFixtures'
+import { runAiScenario, type ScenarioRun } from './testing/scenarioHarness'
 
 interface EconomyCase {
-  presetId: PresetId
   profileId: AiProfileId
-  regime: string
+  terrain: EconomicTerrain
+  description: string
 }
 
 const cases: EconomyCase[] = [
-  { presetId: 'greenMarches', profileId: 'radomir', regime: 'open mixed terrain' },
-  { presetId: 'woodedBorder', profileId: 'velislava', regime: 'forest-constrained building space' },
-  { presetId: 'highlandPasses', profileId: 'svyatobor', regime: 'highland-constrained building space' },
+  { profileId: 'radomir', terrain: 'open', description: 'open plain' },
+  { profileId: 'velislava', terrain: 'woodland', description: 'forest with authored clearings' },
+  { profileId: 'svyatobor', terrain: 'highland', description: 'narrow highland basin' },
 ]
 
-function createGeneratedEconomyCase(testCase: EconomyCase) {
-  const preset = mapPresets.find((candidate) => candidate.id === testCase.presetId)
-  if (!preset) throw new Error(`Unknown preset ${testCase.presetId}`)
-  const settings = { ...preset.settings, mapSize: 50 }
-  const generated = generateMap(settings, createManualHeightGrid())
-  const result = createMapScenario(generated, 2, settings.seed, {
-    id: `economy-${testCase.presetId}-${testCase.profileId}`,
-    name: testCase.regime,
-  })
-  if (!result.ok) throw new Error(`Could not create ${testCase.presetId}: ${result.reason}`)
-  const humanRegion = result.scenario.regions[0]
-  const founded = foundMatch(
-    result.scenario,
-    humanRegion.id,
-    humanRegion.validCastleCells[0],
-    [testCase.profileId],
-  )
-  return createMatch(founded)
-}
-
-function terrainOpportunityLedger(state: MatchState, profileId: AiProfileId) {
-  const ownerId = `ai-${profileId}`
-  const regionId = state.scenario.participants.find((participant) => participant.id === ownerId)?.regionId
-  if (!regionId) throw new Error(`Missing region for ${ownerId}`)
-  let passable = 0
-  let clearPlain = 0
-  let clearHill = 0
-  let forestEdges = 0
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    if (state.scenario.territories[rowIndex][column] !== regionId || cell.landform === 'peak') return
-    passable += 1
-    if (!cell.vegetation && !cell.object && cell.landform === 'plain') clearPlain += 1
-    if (!cell.vegetation && !cell.object && cell.landform === 'hill') clearHill += 1
-    if (!cell.vegetation && !cell.object) {
-      const adjacentForest = [
-        state.scenario.cells[rowIndex - 1]?.[column],
-        state.scenario.cells[rowIndex + 1]?.[column],
-        state.scenario.cells[rowIndex]?.[column - 1],
-        state.scenario.cells[rowIndex]?.[column + 1],
-      ].filter((neighbor) => neighbor?.vegetation).length
-      if (adjacentForest >= 2) forestEdges += 1
-    }
-  }))
-  return { passable, clearPlain, clearHill, forestEdges }
-}
-
-function economyFailureSummary(
-  testCase: EconomyCase,
-  opportunities: ReturnType<typeof terrainOpportunityLedger>,
-  run: ReturnType<typeof runAiScenario>,
-) {
-  return JSON.stringify({
-    testCase,
-    opportunities,
-    turns: run.turns.map((turn) => ({
-      turn: turn.turn,
-      commands: turn.executed.map((command) => command.type === 'build'
-        ? `${command.type}:${command.building}`
-        : command.type),
-      failures: turn.failures,
-      fed: turn.report.food.fed,
-      upkeepPaid: turn.report.upkeepPaid,
-      population: turn.report.populationAfter,
-      buildings: turn.buildingCounts,
-    })),
-  })
-}
-
-const forbiddenDevelopmentCommands = new Set([
-  'recruit',
+const tacticalCommandTypes = new Set<AiCommand['type']>([
   'move-or-attack',
   'split',
   'garrison',
@@ -96,52 +30,211 @@ const forbiddenDevelopmentCommands = new Set([
   'tower-attack',
 ])
 
-describe('AI economy with combat waves explicitly disabled', () => {
-  it.each(cases)('$profileId recovers and develops for 10 turns on $regime', (testCase) => {
-    const initialState = createGeneratedEconomyCase(testCase)
-    const opportunities = terrainOpportunityLedger(initialState, testCase.profileId)
-    const first = runAiScenario(initialState, testCase.profileId, 10, 'economy-only')
-    const summary = economyFailureSummary(testCase, opportunities, first)
+const economyOnlyForbiddenCommandTypes = new Set<AiCommand['type']>([
+  ...tacticalCommandTypes,
+  'recruit',
+])
 
-    expect(first.mode).toBe('economy-only')
-    expect(first.turns, summary).toHaveLength(10)
-    expect(first.turns.flatMap((turn) => turn.failures), summary).toEqual([])
-    expect(first.turns.every((turn) => turn.planned.length === turn.executed.length), summary).toBe(true)
-    expect(first.turns.every((turn) => turn.executed.every((command) => {
-      if (forbiddenDevelopmentCommands.has(command.type)) return false
-      if (command.type !== 'build') return true
-      return command.building !== 'barracks' && economyBuildingKinds.includes(command.building)
-    })), summary).toBe(true)
-    expect(first.turns.every((turn) => turn.report.upkeepPaid), summary).toBe(true)
+function buildEvents(run: ScenarioRun) {
+  return run.turns.flatMap((turn) => turn.executed.flatMap((command) => (
+    command.type === 'build' ? [{ turn: turn.turn, kind: command.building, position: command.position }] : []
+  )))
+}
 
-    const firstFoodTurn = first.turns.findIndex((turn) => (
-      turn.buildingCounts.farm
-      + turn.buildingCounts.orchard
-      + turn.buildingCounts.huntingLodge
-    ) > 0)
-    expect(firstFoodTurn, summary).toBeGreaterThanOrEqual(0)
-    expect(firstFoodTurn, summary).toBeLessThan(8)
-    expect(first.turns.slice(firstFoodTurn).every((turn) => turn.report.food.fed), summary).toBe(true)
-    expect(first.turns.at(-1)?.report.populationAfter, summary).toBeGreaterThanOrEqual(5)
-    expect(first.turns.some((turn) => turn.executed.some((command) => command.type === 'build')), summary).toBe(true)
-    expect(opportunities.passable, summary).toBeGreaterThan(0)
-    expect(opportunities.clearPlain + opportunities.clearHill + opportunities.forestEdges, summary).toBeGreaterThan(0)
-  }, 20_000)
+function tradeEvents(run: ScenarioRun) {
+  return run.turns.flatMap((turn) => turn.executed.flatMap((command) => (
+    command.type === 'trade' ? [{ turn: turn.turn, ...command }] : []
+  )))
+}
 
-  it('replays the same economy-only fixture byte-for-byte', () => {
-    const first = runAiScenario(createMatch(createAiScenario('radomir')), 'radomir', 8, 'economy-only')
-    const replay = runAiScenario(createMatch(createAiScenario('radomir')), 'radomir', 8, 'economy-only')
-    expect(scenarioTranscript(replay)).toEqual(scenarioTranscript(first))
+function behaviorSummary(testCase: EconomyCase | string, run: ScenarioRun) {
+  const final = run.turns.at(-1)
+  const populations = run.turns.map((turn) => turn.report.populationAfter)
+  return JSON.stringify({
+    testCase,
+    mode: run.mode,
+    builds: buildEvents(run).map((event) => `${event.turn}:${event.kind}`),
+    unhealthyTurns: run.turns.filter((turn) => !turn.report.food.fed || !turn.report.upkeepPaid)
+      .map((turn) => ({ turn: turn.turn, fed: turn.report.food.fed, upkeepPaid: turn.report.upkeepPaid })),
+    failures: run.turns.flatMap((turn) => turn.failures.map((failure) => ({ turn: turn.turn, ...failure }))),
+    partialTurns: run.turns.filter((turn) => turn.partial).map((turn) => turn.turn),
+    tacticalCommands: run.turns.flatMap((turn) => turn.executed.filter((command) => (
+      tacticalCommandTypes.has(command.type)
+    )).map((command) => ({ turn: turn.turn, command }))),
+    population: {
+      first: populations[0],
+      peak: populations.length > 0 ? Math.max(...populations) : undefined,
+      last: populations.at(-1),
+    },
+    finalBuildings: final?.buildingCounts,
   })
+}
 
-  it('establishes food production before the first starvation deadline', () => {
-    const testCase = cases[0]
-    const initialState = createGeneratedEconomyCase(testCase)
-    const opportunities = terrainOpportunityLedger(initialState, testCase.profileId)
-    const run = runAiScenario(initialState, testCase.profileId, 6, 'economy-only')
-    const summary = economyFailureSummary(testCase, opportunities, run)
-    expect(run.turns.every((turn) => turn.report.food.fed), summary).toBe(true)
-    expect(run.turns.some((turn) => turn.buildingCounts.orchard
-      + turn.buildingCounts.huntingLodge + turn.buildingCounts.farm > 0), summary).toBe(true)
+function expectHealthyDeterministicRun(testCase: EconomyCase | string, run: ScenarioRun) {
+  const summary = behaviorSummary(testCase, run)
+  expect(run.turns.flatMap((turn) => turn.failures), summary).toEqual([])
+  expect(run.turns.every((turn) => turn.planned.length === turn.executed.length), summary).toBe(true)
+  expect(run.turns.every((turn) => !turn.partial), summary).toBe(true)
+  expect(run.turns.every((turn) => turn.report.food.fed), summary).toBe(true)
+  expect(run.turns.every((turn) => turn.report.upkeepPaid), summary).toBe(true)
+  expect(run.turns.every((turn) => turn.executed.every((command) => (
+    !tacticalCommandTypes.has(command.type)
+  ))), summary).toBe(true)
+}
+
+function firstBuildTurn(events: ReturnType<typeof buildEvents>, kind: BuildingKind) {
+  return events.find((event) => event.kind === kind)?.turn ?? Number.POSITIVE_INFINITY
+}
+
+function longestStreak<T>(items: T[], predicate: (item: T) => boolean) {
+  let longest = 0
+  let current = 0
+  items.forEach((item) => {
+    current = predicate(item) ? current + 1 : 0
+    longest = Math.max(longest, current)
   })
+  return longest
+}
+
+describe('deterministic AI economy with combat waves disabled', () => {
+  it.each(cases)('$profileId establishes food before starvation on $description', (testCase) => {
+    const run = runAiScenario(
+      createMatch(createEconomicScenario(testCase.profileId, testCase.terrain)),
+      testCase.profileId,
+      { turns: 6, mode: 'economy-only' },
+    )
+    const summary = behaviorSummary(testCase, run)
+    const firstFoodTurn = run.turns.find((turn) => (
+      turn.buildingCounts.farm + turn.buildingCounts.orchard + turn.buildingCounts.huntingLodge > 0
+    ))?.turn
+
+    expectHealthyDeterministicRun(testCase, run)
+    expect(run.mode).toBe('economy-only')
+    expect(run.turns.every((turn) => turn.executed.every((command) => (
+      !economyOnlyForbiddenCommandTypes.has(command.type)
+    ))), summary).toBe(true)
+    expect(firstFoodTurn, summary).toBeLessThanOrEqual(2)
+    expect(run.turns.at(-1)?.report.populationAfter, summary).toBeGreaterThanOrEqual(5)
+  }, 30_000)
+
+  it.each(cases)('$profileId develops a rich settlement on $description', (testCase) => {
+    const run = runAiScenario(
+      createMatch(createEconomicScenario(testCase.profileId, testCase.terrain)),
+      testCase.profileId,
+      { turns: 30, mode: 'development-only' },
+    )
+    const summary = behaviorSummary(testCase, run)
+    const events = buildEvents(run)
+    const trades = tradeEvents(run)
+    const finalBuildings = run.turns.at(-1)?.buildingCounts
+    if (!finalBuildings) throw new Error('Missing final building ledger')
+    const distinctBuildingKinds = Object.values(finalBuildings).filter((count) => count > 0).length
+    const totalBuildings = Object.values(finalBuildings).reduce((sum, count) => sum + count, 0)
+    const populationPeak = Math.max(...run.turns.map((turn) => turn.report.populationAfter))
+    const firstConstructionTurn = events[0]?.turn ?? Number.POSITIVE_INFINITY
+    const lastConstructionTurn = events.at(-1)?.turn ?? Number.NEGATIVE_INFINITY
+    const hasDeliberateConstructionPause = run.turns.some((turn) => (
+      turn.turn > firstConstructionTurn
+        && turn.turn < lastConstructionTurn
+        && !turn.executed.some((command) => command.type === 'build')
+    ))
+
+    expectHealthyDeterministicRun(testCase, run)
+    expect(run.mode).toBe('development-only')
+    expect(distinctBuildingKinds, summary).toBeGreaterThanOrEqual(6)
+    expect(totalBuildings, summary).toBeGreaterThanOrEqual(10)
+    expect(populationPeak, summary).toBeGreaterThanOrEqual(12)
+    expect(finalBuildings.kitchen, summary).toBeGreaterThanOrEqual(1)
+    expect(finalBuildings.house, summary).toBeGreaterThanOrEqual(3)
+    expect(finalBuildings.barracks, summary).toBeGreaterThanOrEqual(1)
+    expect(finalBuildings.market, summary).toBeGreaterThanOrEqual(1)
+    expect(hasDeliberateConstructionPause, summary).toBe(true)
+
+    if (testCase.profileId === 'radomir') {
+      expect(finalBuildings.lumberMill, summary).toBeGreaterThanOrEqual(2)
+      expect(finalBuildings.orchard, summary).toBeGreaterThanOrEqual(3)
+      expect(run.turns.at(-1)?.report.populationAfter, summary).toBeGreaterThanOrEqual(12)
+    } else if (testCase.profileId === 'velislava') {
+      expect(finalBuildings.lumberMill, summary).toBeGreaterThanOrEqual(2)
+      expect(firstBuildTurn(events, 'huntingLodge'), summary).toBeLessThanOrEqual(2)
+      expect(firstBuildTurn(events, 'huntingLodge'), summary).toBeLessThan(firstBuildTurn(events, 'mill'))
+      expect(finalBuildings.mill, summary).toBeGreaterThanOrEqual(1)
+      expect(finalBuildings.farm, summary).toBeGreaterThanOrEqual(2)
+      expect(populationPeak, summary).toBeGreaterThanOrEqual(14)
+    } else {
+      expect(firstBuildTurn(events, 'quarry'), summary).toBeLessThan(firstBuildTurn(events, 'mine'))
+      expect(firstBuildTurn(events, 'mine'), summary).toBeLessThan(firstBuildTurn(events, 'smelter'))
+      expect(finalBuildings.quarry, summary).toBeGreaterThanOrEqual(2)
+      expect(finalBuildings.mine, summary).toBeGreaterThanOrEqual(1)
+      expect(finalBuildings.smelter, summary).toBeGreaterThanOrEqual(1)
+      expect(run.state.domains['ai-svyatobor'].resources.iron, summary).toBeGreaterThanOrEqual(20)
+      expect(populationPeak, summary).toBeGreaterThanOrEqual(18)
+      expect(trades.some((trade) => trade.direction === 'sell'
+        && (trade.resource === 'stone' || trade.resource === 'ore')), summary).toBe(true)
+      expect(trades.some((trade) => trade.direction === 'buy' && trade.resource === 'wood'), summary).toBe(true)
+    }
+  }, 60_000)
+
+  it('varies equivalent building sites by seed without weakening the economy', () => {
+    const runs = [91, 137, 223].map((seed) => {
+      const scenario = createEconomicScenario('radomir', 'open')
+      scenario.id = `${scenario.id}-seed-${seed}`
+      scenario.seed = seed
+      return runAiScenario(createMatch(scenario), 'radomir', {
+        turns: 10,
+        mode: 'development-only',
+      })
+    })
+    runs.forEach((run, index) => {
+      const summary = behaviorSummary(`seed ${[91, 137, 223][index]}`, run)
+      expectHealthyDeterministicRun(`seed ${[91, 137, 223][index]}`, run)
+      expect(Object.values(run.turns.at(-1)?.buildingCounts ?? {})
+        .reduce((sum, count) => sum + count, 0), summary).toBeGreaterThanOrEqual(8)
+      expect(run.turns.at(-1)?.report.populationAfter, summary).toBeGreaterThanOrEqual(9)
+    })
+    const sitePlans = runs.map((run) => buildEvents(run).map((event) => (
+      `${event.kind}@${event.position.column}:${event.position.row}`
+    )).join('|'))
+
+    expect(new Set(sitePlans).size).toBeGreaterThan(1)
+  }, 60_000)
+
+  it('saves for several turns, then completes its planned fortification', () => {
+    const fixture = createFortressConstructionState()
+    const run = runAiScenario(fixture.state, fixture.profileId, {
+      turns: 25,
+      mode: 'development-only',
+      cachedAnalysis: fixture.analysis,
+    })
+    const summary = behaviorSummary('mature settlement fortification', run)
+    const events = buildEvents(run)
+    const gateIndex = events.findIndex((event) => event.kind === 'barbican')
+    const wallIndexes = events.flatMap((event, index) => event.kind === 'wall' ? [index] : [])
+    const towerEvents = events.filter((event) => event.kind === 'tower')
+    const gateTurn = events[gateIndex]?.turn
+    const beforeGate = run.turns.filter((turn) => gateTurn !== undefined && turn.turn < gateTurn)
+
+    expectHealthyDeterministicRun('mature settlement fortification', run)
+    expect(gateIndex, summary).toBeGreaterThanOrEqual(0)
+    expect(wallIndexes, summary).toHaveLength(fixture.line.walls.length)
+    expect(towerEvents, summary).toHaveLength(fixture.line.towers.length)
+    expect(Math.min(...wallIndexes), summary).toBeGreaterThan(gateIndex)
+    expect(events.findIndex((event) => event.kind === 'tower'), summary).toBeGreaterThan(Math.max(...wallIndexes))
+    expect(longestStreak(beforeGate, (turn) => (
+      !turn.executed.some((command) => command.type === 'build')
+    )), summary).toBeGreaterThanOrEqual(3)
+    expect(objectAt(run.state, fixture.line.gate), summary).toMatchObject({
+      type: 'building', kind: 'barbican', ownerId: fixture.ownerId,
+    })
+    fixture.line.walls.forEach((position) => {
+      expect(objectAt(run.state, position), summary).toMatchObject({
+        type: 'building', kind: 'wall', ownerId: fixture.ownerId,
+      })
+    })
+    fixture.line.towers.forEach((position) => {
+      expect(objectAt(run.state, position), summary).toMatchObject({
+        type: 'building', kind: 'tower', ownerId: fixture.ownerId,
+      })
+    })
+  }, 60_000)
 })

@@ -528,10 +528,13 @@ function hasPotentialFarmSiteForMill(state: MatchState, millPosition: CellPositi
   return false
 }
 
-export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, position: CellPosition): CommandFailure | null {
+/**
+ * Validates the authored map position independently from the current order and
+ * resource budget. Planning code uses this to compare real build sites without
+ * spending its search budget on occupied, unsupported, or invalid footprints.
+ */
+export function buildingSiteFailure(state: MatchState, kind: BuildingKind, position: CellPosition): CommandFailure | null {
   const rule = buildingRules[kind]
-  const guard = buildingCommandGuard(state, kind)
-  if (guard) return guard
   const positions = buildingFootprintPositions(kind, position)
   const cells = positions.map((candidate) => cellAt(state, candidate))
   if (cells.some((cell) => !cell || cell.landform === 'peak')) return 'invalid-terrain'
@@ -560,6 +563,14 @@ export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, 
   if (placement === 'open' && cells.some((cell) => cell?.vegetation)) return 'invalid-terrain'
   if (kind === 'mill' && !hasPotentialFarmSiteForMill(state, position)) return 'requires-farm-site'
   if (rule.requiresMillSupport && !supportingMillFor(state, state.activeParticipantId, position, true)) return 'requires-support'
+  return null
+}
+
+export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, position: CellPosition): CommandFailure | null {
+  const guard = buildingCommandGuard(state, kind)
+  if (guard) return guard
+  const siteFailure = buildingSiteFailure(state, kind, position)
+  if (siteFailure) return siteFailure
   if (!hasResources(activeDomain(state).resources, buildingResourceCostFor(state, state.activeParticipantId, kind))) return 'not-enough-resources'
   return null
 }

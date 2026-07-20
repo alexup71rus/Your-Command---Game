@@ -75,6 +75,75 @@ import type { StrategicCandidate } from './types'
 
 const foodResources = gameConfig.economy.foodResources
 
+function reachableBuildPositionFor(
+  state: MatchState,
+  analysis: AiWorldAnalysis,
+  memory: AiMemory,
+  kind: BuildingKind,
+  countNode: () => boolean,
+) {
+  const ownerId = state.activeParticipantId
+  const domain = state.domains[ownerId]
+  const cost = buildingResourceCostFor(state, ownerId, kind)
+  const fundedResources = { ...domain.resources }
+  resourceIds.forEach((resource) => {
+    fundedResources[resource] = Math.max(fundedResources[resource], cost[resource] ?? 0)
+  })
+  const fundedState: MatchState = {
+    ...state,
+    ordersRemaining: Math.max(state.ordersRemaining, buildingRules[kind].actionCost),
+    domains: {
+      ...state.domains,
+      [ownerId]: { ...domain, resources: fundedResources },
+    },
+  }
+  let checks = 0
+  const placementCountNode = () => {
+    if (checks >= aiPlannerConfig.goalValidationNodeBudget) return false
+    checks += 1
+    return countNode()
+  }
+  return findStrategicBuildPosition(fundedState, analysis, memory, kind, placementCountNode)
+}
+
+function fundedConstructionGoalFor(
+  state: MatchState,
+  profile: AiProfileRules,
+  memory: AiMemory,
+  phase: AiStrategicPhase,
+  analysis: AiWorldAnalysis,
+  countNode: () => boolean,
+) {
+  const ownerId = state.activeParticipantId
+  const domain = state.domains[ownerId]
+  const goals = desiredBuildingGoals(state, profile, analysis, memory, phase, countNode)
+  for (const goal of goals) {
+    const cost = buildingResourceCostFor(state, ownerId, goal.kind)
+    const shortages = tradeableResources.flatMap((resource) => {
+      const quantity = Math.max(0, (cost[resource] ?? 0) - domain.resources[resource])
+      return quantity > 0 ? [{ resource, quantity }] : []
+    })
+    const purchaseGold = shortages.reduce((sum, shortage) => (
+      sum + tradeQuoteFor(domain, shortage.resource, 'buy', shortage.quantity).total
+    ), 0)
+    const position = reachableBuildPositionFor(state, analysis, memory, goal.kind, countNode)
+    if (!position) continue
+    shortages.sort((first, second) => (
+      tradeQuoteFor(domain, second.resource, 'buy', second.quantity).total
+        - tradeQuoteFor(domain, first.resource, 'buy', first.quantity).total
+      || first.resource.localeCompare(second.resource)
+    ))
+    return {
+      goal,
+      shortage: shortages[0],
+      position,
+      cost,
+      requiredGold: purchaseGold + (cost.gold ?? 0),
+    }
+  }
+  return null
+}
+
 function recruitmentPositions(state: MatchState, troop: TroopKind, memory?: AiMemory) {
   return aiObjectEntries(state.scenario, state.activeParticipantId)
     .filter((entry) => (troop === 'militia' && entry.object.type === 'castle') || (entry.object.type === 'building' && entry.object.kind === 'barracks'))
@@ -104,7 +173,10 @@ export function recruitmentCandidate(state: MatchState, profile: AiProfileRules,
     : null
   const minimumCivilians = phase === 'defense'
     ? Math.max(aiStrategicConfig.minimumCivilianReserve, Math.ceil(workforce.employed * aiStrategicConfig.defenseWorkerReserveShare))
-    : Math.max(aiStrategicConfig.minimumCivilianReserve, workforce.employed + 1)
+    : Math.max(
+        aiStrategicConfig.minimumCivilianReserve,
+        workforce.employed + aiStrategicConfig.recruitment.civilianGrowthReserve,
+      )
   const available = Math.max(0, domain.population - minimumCivilians)
   if (available < 1 || !turnEconomyForecastFor(state, ownerId)?.food.fed) return null
   const totals = troopTotals(state, ownerId)
@@ -217,7 +289,10 @@ export function marketCandidate(
   const workforce = workforceFor(state, state.activeParticipantId)
   const civilianReserve = phase === 'defense'
     ? Math.max(aiStrategicConfig.minimumCivilianReserve, Math.ceil(workforce.employed * aiStrategicConfig.defenseWorkerReserveShare))
-    : Math.max(aiStrategicConfig.minimumCivilianReserve, workforce.employed + 1)
+    : Math.max(
+        aiStrategicConfig.minimumCivilianReserve,
+        workforce.employed + aiStrategicConfig.recruitment.civilianGrowthReserve,
+      )
   const hasRecruitableCivilian = domain.population > civilianReserve
   const defensiveShortfall = phase === 'defense'
     && snapshot.armyPower < Math.max(config.minimumDefensePower, forceTargetFor(
@@ -268,6 +343,51 @@ export function marketCandidate(
       || domain.resources[first] - domain.resources[second] || first.localeCompare(second))[0]
     if (domain.resources.gold >= marketPrices[food].buy * aiStrategicConfig.emergencyFoodBatch) {
       return { command: { type: 'trade', market: market.position, resource: food, direction: 'buy', quantity: aiStrategicConfig.emergencyFoodBatch }, utility: config.emergencyFoodUtility, goal: 'trade', factors: ['emergency-food'] }
+    }
+  }
+  if (memory && analysis) {
+    const funded = fundedConstructionGoalFor(state, profile, memory, phase, analysis, countNode)
+    if (funded?.shortage && domain.resources.gold >= funded.requiredGold
+      && domain.marketActivity.bought[funded.shortage.resource] === 0) {
+      return {
+        command: {
+          type: 'trade',
+          market: market.position,
+          resource: funded.shortage.resource,
+          direction: 'buy',
+          quantity: funded.shortage.quantity,
+        },
+        utility: funded.goal.utility + aiStrategicConfig.market.constructionUtility,
+        goal: 'trade',
+        factors: ['fund-reachable-project', `building:${funded.goal.kind}`],
+      }
+    }
+    if (funded && domain.resources.gold < funded.requiredGold) {
+      const sellable = tradeableResources
+        .map((resource) => ({
+          resource,
+          surplus: domain.resources[resource] - Math.max(
+            profile.strategicReserve[resource] ?? 0,
+            funded.cost[resource] ?? 0,
+          ),
+        }))
+        .filter((entry) => entry.surplus >= aiStrategicConfig.market.minimumSaleSurplus
+          && domain.marketActivity.sold[entry.resource] === 0)
+        .sort((first, second) => second.surplus - first.surplus || first.resource.localeCompare(second.resource))[0]
+      if (sellable) {
+        return {
+          command: {
+            type: 'trade',
+            market: market.position,
+            resource: sellable.resource,
+            direction: 'sell',
+            quantity: Math.min(aiStrategicConfig.market.saleBatch, Math.floor(sellable.surplus)),
+          },
+          utility: funded.goal.utility + aiStrategicConfig.market.constructionUtility,
+          goal: 'trade',
+          factors: ['capitalize-reachable-project', `building:${funded.goal.kind}`],
+        }
+      }
     }
   }
   const fortificationStep = memory && (phase === 'expansion' || phase === 'mobilization' || phase === 'regroup' || phase === 'defense')
@@ -323,7 +443,8 @@ export function marketCandidate(
       }
     }
   }
-  if (profile.allowedBuildings.includes('smelter') && domain.resources.iron < config.industrialIronTarget
+  if (profile.allowedBuildings.includes('smelter') && !profile.allowedBuildings.includes('mine')
+    && domain.resources.iron < config.industrialIronTarget
     && domain.resources.gold >= config.industrialIronGoldFloor
     && ownedBuildingCount(state, state.activeParticipantId, 'smelter') === 0) {
     return { command: { type: 'trade', market: market.position, resource: 'iron', direction: 'buy', quantity: config.industrialIronBatch }, utility: config.industrialIronUtility, goal: 'trade', factors: ['industry-fallback'] }
@@ -500,6 +621,21 @@ export function strategicCandidates(
   const buildingGoals = desiredBuildingGoals(state, profile, analysis, memory, phase, countNode)
   for (const goal of buildingGoals.slice(0, aiStrategicConfig.maximumBuildingGoalsPerSearch)) {
     if (!countNode()) break
+    const cost = buildingResourceCostFor(state, state.activeParticipantId, goal.kind)
+    if (!canAfford(state.domains[state.activeParticipantId].resources, cost)) {
+      const reachable = reachableBuildPositionFor(state, analysis, memory, goal.kind, countNode)
+      diagnostics?.push({
+        goal: phase,
+        score: goal.utility,
+        factors: [...goal.factors, `building:${goal.kind}`],
+        rejectedReason: reachable ? 'not-enough-resources' : 'no-strategic-build-position',
+      })
+      // A legal higher-priority project is an intentional saving target. Do
+      // not spend its inputs on a cheaper discretionary building while the
+      // market and end-of-turn production are closing the shortfall.
+      if (reachable) break
+      continue
+    }
     let placementChecks = 0
     const placementCountNode = () => {
       if (placementChecks >= aiPlannerConfig.goalValidationNodeBudget) return false

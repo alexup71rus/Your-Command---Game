@@ -1,3 +1,4 @@
+import { aiBuildingKindsByZone, aiProfiles } from '../../../config/ai'
 import { buildingRules } from '../../../config/rules'
 import type {
   BuildingKind,
@@ -6,8 +7,18 @@ import type {
   SquadObject,
   TroopComposition,
 } from '../../map'
-import { buildingFootprintPositions, createMatch, endTurn, type MatchState } from '../../match'
+import {
+  buildingFootprintPositions,
+  createMatch,
+  endTurn,
+  ownedBuildingCount,
+  type MatchState,
+} from '../../match'
 import type { AiProfileId, CellPosition, MapScenario } from '../../scenario'
+import { analyzeAiWorld, createSettlementPlan } from '../analysis'
+import { createAiMemory } from '../model'
+
+export type EconomicTerrain = 'open' | 'woodland' | 'highland'
 
 export const militia = (amount = 1): TroopComposition => ({
   militia: amount,
@@ -73,6 +84,116 @@ export function createAiScenario(profileId: AiProfileId = 'radomir'): MapScenari
       { id: `ai-${profileId}`, kind: 'ai', profileId, regionId: 'region-1', color: '#6f9c83' },
     ],
   }
+}
+
+/**
+ * Authored economic maps with explicit constraints. These are deliberately not
+ * generated presets: every clearing, forest edge, hill site, and blocked cell
+ * is stable test data and therefore produces an explainable regression.
+ */
+export function createEconomicScenario(
+  profileId: AiProfileId,
+  terrain: EconomicTerrain,
+): MapScenario {
+  const scenario = createAiScenario(profileId)
+  scenario.id = `ai-economy-${terrain}-${profileId}`
+  scenario.name = `Authored ${terrain} economy`
+  if (terrain === 'open') return scenario
+
+  scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
+    if (scenario.territories[rowIndex][column] !== 'region-1') return
+    const object = cell.object
+    if (terrain === 'woodland') {
+      const settlementClearing = column >= 18 && rowIndex >= 8 && rowIndex <= 17
+      const productionClearing = column >= 14 && column <= 17 && rowIndex >= 3 && rowIndex <= 7
+      const road = rowIndex === 12
+      scenario.cells[rowIndex][column] = {
+        ...cell,
+        landform: 'plain',
+        elevation: 0.2,
+        vegetation: !(settlementClearing || productionClearing || road),
+        object,
+      }
+      return
+    }
+
+    const settlementBasin = column >= 18 && rowIndex >= 8 && rowIndex <= 17
+    const foodShelf = column >= 15 && column <= 18 && rowIndex >= 8 && rowIndex <= 10
+    const highlandIndustry = column >= 14 && column <= 17 && rowIndex >= 3 && rowIndex <= 7
+    const road = rowIndex === 12 || (column === 17 && rowIndex >= 7 && rowIndex <= 12)
+    const passable = settlementBasin || foodShelf || highlandIndustry || road
+    const hill = highlandIndustry
+    scenario.cells[rowIndex][column] = {
+      ...cell,
+      landform: passable ? hill ? 'hill' : 'plain' : 'peak',
+      elevation: passable ? hill ? 0.58 : 0.22 : 0.92,
+      vegetation: false,
+      object,
+    }
+  }))
+  return scenario
+}
+
+/**
+ * A mature settlement with a functioning production chain and field troops,
+ * but too little stone to start its planned fortification immediately. It is
+ * intentionally authored so a behavior test can observe saving and the full
+ * construction order without waiting for the opening economy to replay first.
+ */
+export function createFortressConstructionState() {
+  const profileId: AiProfileId = 'svyatobor'
+  const ownerId = `ai-${profileId}`
+  const state = createMatch(createEconomicScenario(profileId, 'open'))
+  const buildings: Array<[BuildingKind, number, number]> = [
+    ['orchard', 20, 6], ['orchard', 22, 6], ['mill', 20, 17],
+    ['farm', 18, 18], ['farm', 21, 18],
+    ['lumberMill', 19, 3], ['lumberMill', 23, 4],
+    ['quarry', 14, 3], ['quarry', 16, 3],
+    ['mine', 14, 7], ['mine', 17, 5], ['smelter', 18, 8],
+    ['kitchen', 22, 9], ['kitchen', 22, 10],
+    ['house', 23, 8], ['house', 23, 9], ['house', 23, 10],
+    ['house', 23, 11], ['house', 23, 12],
+    ['barracks', 18, 14], ['barracks', 21, 14], ['market', 23, 13],
+  ]
+  buildings.forEach(([kind, column, row]) => {
+    placeTestBuilding(state, ownerId, kind, { column, row })
+  })
+  placeTestSquad(state, ownerId, { column: 20, row: 13 }, {
+    militia: 2, spearmen: 2, archers: 0, knights: 0,
+  })
+  state.domains[ownerId] = {
+    ...state.domains[ownerId],
+    population: 18,
+    taxRate: 'none',
+    resources: {
+      wood: 25, stone: 0, ore: 10, iron: 2,
+      flour: 40, meat: 0, fruit: 30, gold: 100,
+    },
+  }
+  const analysis = analyzeAiWorld(state.scenario, ownerId)
+  if (!analysis) throw new Error('Could not analyze the fortress construction fixture')
+  const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles[profileId])
+  const nonDefensiveZones = ['housing', 'food', 'industry', 'military'] as const
+  nonDefensiveZones.forEach((zoneKind) => {
+    const zone = settlementPlan.zones[zoneKind]
+    const kinds = aiBuildingKindsByZone[zoneKind]
+    const ownedOrigins = kinds.reduce((sum, kind) => sum + ownedBuildingCount(state, ownerId, kind), 0)
+    zone.maxOrigins = Math.max(zone.maxOrigins, ownedOrigins)
+    zone.maxBuildings = Object.fromEntries(kinds.map((kind) => [
+      kind,
+      ownedBuildingCount(state, ownerId, kind),
+    ]))
+  })
+  state.aiMemory[ownerId] = {
+    ...createAiMemory(),
+    settlementPlan,
+    targetOwnerId: 'player',
+    phase: 'mobilization',
+    stableTurns: 10,
+  }
+  const line = settlementPlan.fortification?.lines[0]
+  if (!line || line.towers.length !== 2) throw new Error('Fixture requires a gate, wall line, and two towers')
+  return { state, analysis, line, ownerId, profileId }
 }
 
 export function startAiTurn(profileId: AiProfileId = 'radomir') {

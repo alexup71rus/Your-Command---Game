@@ -11,7 +11,14 @@ import {
 import type { AiProfileId } from '../../scenario'
 import { analyzeAiWorld, type AiWorldAnalysis } from '../analysis'
 import { executeAiCommand, rememberAiCommandFailure } from '../commands'
-import { createAiMemory, type AiCommand, type AiMemory, type AiStrategicPhase, type AiWaveKind } from '../model'
+import {
+  createAiMemory,
+  type AiCommand,
+  type AiMemory,
+  type AiPlanTraceEntry,
+  type AiStrategicPhase,
+  type AiWaveKind,
+} from '../model'
 import { planAiTurn, type AiPlanningMode } from '../planner'
 import {
   assignSquadRoles,
@@ -34,6 +41,9 @@ export interface ScenarioTurn {
   planned: AiCommand[]
   executed: AiCommand[]
   failures: ScenarioCommandFailure[]
+  trace: AiPlanTraceEntry[]
+  exploredNodes: number
+  partial: boolean
   report: TurnReport
   buildingCounts: Record<BuildingKind, number>
 }
@@ -42,6 +52,13 @@ export interface ScenarioRun {
   mode: DevelopmentScenarioMode
   state: MatchState
   turns: ScenarioTurn[]
+}
+
+export interface DevelopmentScenarioOptions {
+  turns: number
+  mode?: DevelopmentScenarioMode
+  cachedAnalysis?: AiWorldAnalysis | null
+  nodeBudget?: number
 }
 
 export interface FrozenTacticalStep {
@@ -97,24 +114,28 @@ function assertScenarioState(state: MatchState) {
 export function runAiScenario(
   initialState: MatchState,
   profileId: AiProfileId,
-  requestedTurns: number,
-  mode: DevelopmentScenarioMode = 'full',
-  cachedAnalysis?: AiWorldAnalysis | null,
+  options: DevelopmentScenarioOptions,
 ): ScenarioRun {
   assertScenarioState(initialState)
   const participantId = `ai-${profileId}`
+  const mode = options.mode ?? 'full'
   let state = advanceToParticipant(initialState, participantId)
-  const analysis = cachedAnalysis === undefined
+  const analysis = options.cachedAnalysis === undefined
     ? analyzeAiWorld(state.scenario, participantId)
-    : cachedAnalysis
+    : options.cachedAnalysis
   const turns: ScenarioTurn[] = []
 
-  for (let index = 0; index < requestedTurns && state.status === 'playing'; index += 1) {
+  for (let index = 0; index < options.turns && state.status === 'playing'; index += 1) {
     const planned = planAiTurn(
       state,
       state.aiMemory[participantId] ?? createAiMemory(),
       profileId,
-      { cachedAnalysis: analysis, mode, enforceTimeBudget: false, nodeBudget: 4_000 },
+      {
+        cachedAnalysis: analysis,
+        mode,
+        enforceTimeBudget: false,
+        nodeBudget: options.nodeBudget ?? aiPlannerConfig.nodeBudget,
+      },
     )
     const executed: AiCommand[] = []
     const failures: ScenarioCommandFailure[] = []
@@ -149,6 +170,9 @@ export function runAiScenario(
       planned: planned.commands,
       executed,
       failures,
+      trace: planned.trace,
+      exploredNodes: planned.exploredNodes,
+      partial: planned.partial,
       report,
       buildingCounts: buildingCountsFor(state, participantId),
     })
@@ -214,23 +238,4 @@ export function runFrozenTactics(
     })
   }
   return { state, memory: currentMemory, steps, failures }
-}
-
-export function scenarioTranscript(run: ScenarioRun) {
-  return run.turns.map((turn) => ({
-    turn: turn.turn,
-    phase: turn.phase,
-    wave: turn.wave,
-    planned: turn.planned,
-    executed: turn.executed,
-    failures: turn.failures,
-    report: {
-      production: turn.report.production,
-      food: turn.report.food,
-      upkeepPaid: turn.report.upkeepPaid,
-      populationAfter: turn.report.populationAfter,
-      resourcesAfter: turn.report.resourcesAfter,
-    },
-    buildingCounts: turn.buildingCounts,
-  }))
 }
