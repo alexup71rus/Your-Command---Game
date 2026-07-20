@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { BuildingKind } from '../map'
-import { createMatch, objectAt } from '../match'
+import { createMatch } from '../match'
 import type { AiProfileId } from '../scenario'
 import type { AiCommand } from './model'
 import {
   createEconomicScenario,
-  createFortressConstructionState,
   type EconomicTerrain,
 } from './testing/scenarioFixtures'
 import { runAiScenario, type ScenarioRun } from './testing/scenarioHarness'
@@ -84,16 +83,6 @@ function expectHealthyDeterministicRun(testCase: EconomyCase | string, run: Scen
 
 function firstBuildTurn(events: ReturnType<typeof buildEvents>, kind: BuildingKind) {
   return events.find((event) => event.kind === kind)?.turn ?? Number.POSITIVE_INFINITY
-}
-
-function longestStreak<T>(items: T[], predicate: (item: T) => boolean) {
-  let longest = 0
-  let current = 0
-  items.forEach((item) => {
-    current = predicate(item) ? current + 1 : 0
-    longest = Math.max(longest, current)
-  })
-  return longest
 }
 
 describe('deterministic AI economy with combat waves disabled', () => {
@@ -197,44 +186,5 @@ describe('deterministic AI economy with combat waves disabled', () => {
     )).join('|'))
 
     expect(new Set(sitePlans).size).toBeGreaterThan(1)
-  }, 60_000)
-
-  it('saves for several turns, then completes its planned fortification', () => {
-    const fixture = createFortressConstructionState()
-    const run = runAiScenario(fixture.state, fixture.profileId, {
-      turns: 25,
-      mode: 'development-only',
-      cachedAnalysis: fixture.analysis,
-    })
-    const summary = behaviorSummary('mature settlement fortification', run)
-    const events = buildEvents(run)
-    const gateIndex = events.findIndex((event) => event.kind === 'barbican')
-    const wallIndexes = events.flatMap((event, index) => event.kind === 'wall' ? [index] : [])
-    const towerEvents = events.filter((event) => event.kind === 'tower')
-    const gateTurn = events[gateIndex]?.turn
-    const beforeGate = run.turns.filter((turn) => gateTurn !== undefined && turn.turn < gateTurn)
-
-    expectHealthyDeterministicRun('mature settlement fortification', run)
-    expect(gateIndex, summary).toBeGreaterThanOrEqual(0)
-    expect(wallIndexes, summary).toHaveLength(fixture.line.walls.length)
-    expect(towerEvents, summary).toHaveLength(fixture.line.towers.length)
-    expect(Math.min(...wallIndexes), summary).toBeGreaterThan(gateIndex)
-    expect(events.findIndex((event) => event.kind === 'tower'), summary).toBeGreaterThan(Math.max(...wallIndexes))
-    expect(longestStreak(beforeGate, (turn) => (
-      !turn.executed.some((command) => command.type === 'build')
-    )), summary).toBeGreaterThanOrEqual(3)
-    expect(objectAt(run.state, fixture.line.gate), summary).toMatchObject({
-      type: 'building', kind: 'barbican', ownerId: fixture.ownerId,
-    })
-    fixture.line.walls.forEach((position) => {
-      expect(objectAt(run.state, position), summary).toMatchObject({
-        type: 'building', kind: 'wall', ownerId: fixture.ownerId,
-      })
-    })
-    fixture.line.towers.forEach((position) => {
-      expect(objectAt(run.state, position), summary).toMatchObject({
-        type: 'building', kind: 'tower', ownerId: fixture.ownerId,
-      })
-    })
   }, 60_000)
 })

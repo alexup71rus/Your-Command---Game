@@ -147,14 +147,21 @@ function ownedBuildingAt(state: MatchState, position: CellPosition, kind?: Build
     && (!kind || object.kind === kind)
 }
 
-export function nextFortificationStep(state: MatchState, memory: AiMemory): BuildingKind | null {
+export function nextFortificationStep(
+  state: MatchState,
+  memory: AiMemory,
+  allowStandaloneOutpost = false,
+): BuildingKind | null {
   const plan = memory.settlementPlan?.fortification
-  if (!plan) return null
-  for (const line of plan.lines) {
-    if (!ownedBuildingAt(state, line.gate, 'barbican')) return 'barbican'
-    if (line.walls.some((position) => !ownedBuildingAt(state, position, 'wall'))) return 'wall'
-    if (line.towers.some((position) => !ownedBuildingAt(state, position, 'tower'))) return 'tower'
+  if (plan) {
+    for (const line of plan.lines) {
+      if (!ownedBuildingAt(state, line.gate, 'barbican')) return 'barbican'
+      if (line.walls.some((position) => !ownedBuildingAt(state, position, 'wall'))) return 'wall'
+      if (line.towers.some((position) => !ownedBuildingAt(state, position, 'tower'))) return 'tower'
+    }
   }
+  const outpost = memory.settlementPlan?.reservedSites.outpostTower
+  if (outpost && (plan || allowStandaloneOutpost) && !ownedBuildingAt(state, outpost, 'tower')) return 'tower'
   return null
 }
 
@@ -173,7 +180,8 @@ function fortificationStarted(state: MatchState, memory: AiMemory) {
   const plan = memory.settlementPlan?.fortification
   return Boolean(plan && plan.lines.some((line) => (
     [line.gate, ...line.walls, ...line.towers].some((position) => ownedBuildingAt(state, position))
-  )))
+  ))) || Boolean(memory.settlementPlan?.reservedSites.outpostTower
+    && ownedBuildingAt(state, memory.settlementPlan.reservedSites.outpostTower))
 }
 
 function canFundMinimumFortification(state: MatchState, memory: AiMemory) {
@@ -336,7 +344,7 @@ export function desiredBuildingGoals(
   }
 
   const threat = homeThreatFor(state, ownerId, memory)
-  const fortificationStep = nextFortificationStep(state, memory)
+  const fortificationStep = nextFortificationStep(state, memory, phase === 'defense')
   const startedFortification = fortificationStarted(state, memory)
   const mayContinueFortification = startedFortification || phase === 'defense' || canFundMinimumFortification(state, memory)
   if (!economicEmergency && fortificationStep && mayContinueFortification
@@ -350,7 +358,7 @@ export function desiredBuildingGoals(
     } else if (fortificationStep === 'wall') {
       add('wall', (phase === 'defense' ? goalConfig.utility.defenseWall : goalConfig.utility.wall) + continuity,
         'fortification-plan', 'connected-curtain')
-    } else if (profile.allowedBuildings.includes('tower') && count('tower') < goalConfig.towerLimit
+    } else if (profile.allowedBuildings.includes('tower') && count('tower') < adaptiveLimit('tower')
       && (phase === 'defense' || threat.power > 0 || snapshot.armySize >= goalConfig.towerArmySize)) {
       add('tower', goalConfig.utility.tower + continuity, 'fortification-plan', 'line-endpoint')
     }
@@ -462,20 +470,24 @@ function buildingPositionScore(
 
 function plannedFortificationPosition(state: MatchState, memory: AiMemory, kind: BuildingKind) {
   const plan = memory.settlementPlan?.fortification
-  if (!plan || !['barbican', 'wall', 'tower'].includes(kind)) return null
-  for (const line of plan.lines) {
-    if (kind === 'barbican' && !ownedBuildingAt(state, line.gate, 'barbican')) return line.gate
-    if (kind === 'wall') {
-      if (!ownedBuildingAt(state, line.gate, 'barbican')) return null
-      const wall = line.walls.find((position) => !ownedBuildingAt(state, position, 'wall'))
-      if (wall) return wall
-    }
-    if (kind === 'tower') {
-      if (line.walls.some((position) => !ownedBuildingAt(state, position, 'wall'))) return null
-      const tower = line.towers.find((position) => !ownedBuildingAt(state, position, 'tower'))
-      if (tower) return tower
+  if (!['barbican', 'wall', 'tower'].includes(kind)) return null
+  if (plan) {
+    for (const line of plan.lines) {
+      if (kind === 'barbican' && !ownedBuildingAt(state, line.gate, 'barbican')) return line.gate
+      if (kind === 'wall') {
+        if (!ownedBuildingAt(state, line.gate, 'barbican')) return null
+        const wall = line.walls.find((position) => !ownedBuildingAt(state, position, 'wall'))
+        if (wall) return wall
+      }
+      if (kind === 'tower') {
+        if (line.walls.some((position) => !ownedBuildingAt(state, position, 'wall'))) return null
+        const tower = line.towers.find((position) => !ownedBuildingAt(state, position, 'tower'))
+        if (tower) return tower
+      }
     }
   }
+  const outpost = memory.settlementPlan?.reservedSites.outpostTower
+  if (kind === 'tower' && outpost && !ownedBuildingAt(state, outpost, 'tower')) return outpost
   return null
 }
 
@@ -499,7 +511,7 @@ export function findStrategicBuildPosition(
   }
   const accessSources = ownedEntries.filter((entry) => entry.object.type === 'castle'
     || (entry.object.type === 'building' && entry.object.kind === 'barracks'))
-  if (aiBuildingZoneByKind[kind] === 'defense' && memory.settlementPlan?.fortification) {
+  if (aiBuildingZoneByKind[kind] === 'defense' && memory.settlementPlan) {
     const planned = plannedFortificationPosition(state, memory, kind)
     if (!planned || isTemporarilyBlocked(memory, planned, state.turn)
       || !preservesAccess(state, kind, planned, memory, accessSources)) return null

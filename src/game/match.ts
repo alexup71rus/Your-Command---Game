@@ -951,7 +951,12 @@ function isValidGarrison(garrison: TowerGarrison | undefined) {
     && garrison.health <= garrison.archers * troopRules.archers.durability)
 }
 
-export function garrisonFailure(state: MatchState, from: CellPosition, towerPosition: CellPosition): CommandFailure | null {
+export function garrisonFailure(
+  state: MatchState,
+  from: CellPosition,
+  towerPosition: CellPosition,
+  requestedArchers?: number,
+): CommandFailure | null {
   const guard = commandGuard(state, towerRule.transferOrderCost)
   if (guard) return guard
   if (!isAdjacent(from, towerPosition)) return 'not-adjacent'
@@ -962,17 +967,26 @@ export function garrisonFailure(state: MatchState, from: CellPosition, towerPosi
   if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.activeParticipantId) return 'not-owned'
   if (tower.garrison && !isValidGarrison(tower.garrison)) return 'invalid-garrison'
   if ((tower.garrison?.archers ?? 0) >= towerRule.capacity) return 'squad-full'
+  if (requestedArchers !== undefined && (!Number.isSafeInteger(requestedArchers) || requestedArchers < 1
+    || requestedArchers > squad.units.archers
+    || requestedArchers > towerRule.capacity - (tower.garrison?.archers ?? 0))) return 'invalid-squad'
   return null
 }
 
-export function garrisonTower(state: MatchState, from: CellPosition, towerPosition: CellPosition): CommandResult {
-  const failure = garrisonFailure(state, from, towerPosition)
+export function garrisonTower(
+  state: MatchState,
+  from: CellPosition,
+  towerPosition: CellPosition,
+  requestedArchers?: number,
+): CommandResult {
+  const failure = garrisonFailure(state, from, towerPosition, requestedArchers)
   if (failure) return { ok: false, state, reason: failure }
   const fromCell = cellAt(state, from)
   const towerCell = cellAt(state, towerPosition)
   const squad = fromCell.object as SquadObject
   const tower = towerCell.object as BuildingObject
-  const transferred = Math.min(squad.units.archers, towerRule.capacity - (tower.garrison?.archers ?? 0))
+  const transferred = requestedArchers
+    ?? Math.min(squad.units.archers, towerRule.capacity - (tower.garrison?.archers ?? 0))
   const transferredMaximumHealth = transferred * troopRules.archers.durability
   const sourceMaximumHealth = maxSquadHealth(squad)
   const transferredHealth = sourceMaximumHealth > 0 ? squadHealth(squad) * transferredMaximumHealth / sourceMaximumHealth : 0

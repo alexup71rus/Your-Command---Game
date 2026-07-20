@@ -1,7 +1,7 @@
 import { gameConfig } from '../../config/game'
 import { aiPlannerConfig, aiTacticalConfig } from '../../config/ai'
 import { buildingRules, troopKinds, troopRules } from '../../config/rules'
-import type { BuildingObject, GameMap, MapObject, SquadObject, TroopComposition, TroopKind } from '../map'
+import type { BuildingKind, BuildingObject, GameMap, MapObject, SquadObject, TroopComposition, TroopKind } from '../map'
 import {
   buildingFootprintPositions,
   moveOrAttackFailure,
@@ -315,6 +315,10 @@ function mergeCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
   if (memory.lastArmyReorganizationTurn > 0
     && state.turn - memory.lastArmyReorganizationTurn < aiPlannerConfig.armyReorganizationCooldownTurns) return []
   const squads = squadEntries(state, state.activeParticipantId)
+  const needsTowerGarrison = aiObjectEntries(state.scenario, state.activeParticipantId).some((entry) => (
+    entry.object.type === 'building' && entry.object.kind === 'tower'
+      && (entry.object.garrison?.archers ?? 0) < aiTacticalConfig.tower.minimumPeacetimeArchers
+  ))
   const candidates: TacticalCandidate[] = []
   for (let firstIndex = 0; firstIndex < squads.length; firstIndex += 1) {
     for (let secondIndex = firstIndex + 1; secondIndex < squads.length; secondIndex += 1) {
@@ -329,6 +333,7 @@ function mergeCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
         + Number(healthShare(second.object) < formation.fragileHealthShare)
       const firstRole = memory.squadRoles[positionKey(first.position)]
       const secondRole = memory.squadRoles[positionKey(second.position)]
+      if (needsTowerGarrison && (firstRole === 'ranged' || secondRole === 'ranged')) continue
       const rolesDiffer = firstRole !== secondRole
       const separatesHomeReserve = (firstRole === 'reserve') !== (secondRole === 'reserve')
       if (separatesHomeReserve && phase !== 'defense' && phase !== 'regroup') continue
@@ -445,6 +450,48 @@ function nearbyFriendlyCount(squads: ReturnType<typeof squadEntries>, position: 
   ), 0)
 }
 
+interface DefensiveAsset {
+  position: CellPosition
+  value: number
+  kind: BuildingKind | 'castle'
+}
+
+function defensiveAssetsFor(state: MatchState, ownerId: string): DefensiveAsset[] {
+  const values = aiTacticalConfig.defense.assetValues
+  return aiObjectEntries(state.scenario, ownerId).flatMap((entry) => {
+    const kind = entry.object.type === 'castle'
+      ? 'castle' as const
+      : entry.object.type === 'building' ? entry.object.kind : null
+    const value = kind ? values[kind] : undefined
+    return kind && value ? [{ position: entry.position, value, kind }] : []
+  })
+}
+
+function propertyGuardAnchorsFor(state: MatchState, profile: AiProfileRules, ownerId: string) {
+  if (profile.doctrine.propertyGuardShare <= 0) return []
+  const castle = castlePositionFor(state.scenario, ownerId)
+  if (!castle) return []
+  return defensiveAssetsFor(state, ownerId)
+    .filter((asset) => asset.kind !== 'castle' && asset.kind !== 'wall'
+      && asset.kind !== 'barbican' && asset.kind !== 'tower'
+      && positionDistance(asset.position, castle) >= aiTacticalConfig.defense.remoteGuardMinimumCastleDistance)
+    .map((asset) => ({
+      ...asset,
+      score: asset.value
+        + positionDistance(asset.position, castle) * aiTacticalConfig.defense.propertyExposureWeight,
+    }))
+    .sort((first, second) => second.score - first.score
+      || first.position.row - second.position.row || first.position.column - second.position.column)
+    .slice(0, aiTacticalConfig.defense.maximumPropertyAnchors)
+    .map((asset) => asset.position)
+}
+
+function threatPriority(position: CellPosition, assets: DefensiveAsset[]) {
+  return Math.max(...assets.map((asset) => (
+    asset.value - positionDistance(position, asset.position) * aiTacticalConfig.defense.threatDistancePenalty
+  )), 0)
+}
+
 function routeScore(
   state: MatchState,
   profile: AiProfileRules,
@@ -493,41 +540,38 @@ function movementCandidates(
   const participant = state.scenario.participants.find((candidate) => candidate.id === ownerId)
   const targetCastle = targetOwnerId ? castlePositionFor(state.scenario, targetOwnerId) : null
   const threat = homeThreatFor(state, ownerId, memory)
+  const defensiveAssets = defensiveAssetsFor(state, ownerId)
   const threateningSquads = aiObjectEntries(state.scenario)
     .flatMap((entry) => entry.object.type === 'squad' && entry.object.ownerId !== ownerId ? [{ ...entry, object: entry.object }] : [])
-    .sort((first, second) => {
-      const castle = castlePositionFor(state.scenario, ownerId)
-      return castle ? positionDistance(first.position, castle) - positionDistance(second.position, castle) : 0
-    })
+    .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
+      || first.position.row - second.position.row || first.position.column - second.position.column)
   const rememberedThreats = memory.contacts
     .filter((contact) => contact.kind === 'squad' && contact.ownerId !== ownerId)
-    .sort((first, second) => {
-      const castle = castlePositionFor(state.scenario, ownerId)
-      return castle ? positionDistance(first.position, castle) - positionDistance(second.position, castle) : 0
-    })
+    .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
+      || first.position.row - second.position.row || first.position.column - second.position.column)
   const squads = squadEntries(state, ownerId)
     .sort((first, second) => first.position.row - second.position.row || first.position.column - second.position.column)
   const candidates: TacticalCandidate[] = []
   const ownCastle = castlePositionFor(state.scenario, ownerId)
   const stagingAnchors = stagingAnchorsFor(state, ownerId, memory)
   const homeAnchor = memory.settlementPlan?.reservedSites.military ?? ownCastle
-  const defensiveAnchors = [
-    ...(memory.settlementPlan?.fortification?.lines.flatMap((line) => [line.gate, ...line.towers]) ?? []),
+  const fortressAnchors = [
     ...aiObjectEntries(state.scenario, ownerId).flatMap((entry) => (
-      entry.object.type === 'building' && ['barracks', 'mill', 'kitchen', 'smelter'].includes(entry.object.kind)
+      entry.object.type === 'building' && ['tower', 'barbican', 'barracks'].includes(entry.object.kind)
         ? [entry.position] : []
     )),
     ...(ownCastle ? [ownCastle] : []),
   ].filter((position, index, all) => all.findIndex((candidate) => samePosition(candidate, position)) === index)
-  const ownedTowers = aiObjectEntries(state.scenario, ownerId).filter((entry) => (
-    entry.object.type === 'building' && entry.object.kind === 'tower'
+  const propertyAnchors = propertyGuardAnchorsFor(state, profile, ownerId)
+  const defensiveAnchors = [...propertyAnchors, ...fortressAnchors]
+    .filter((position, index, all) => all.findIndex((candidate) => samePosition(candidate, position)) === index)
+  const ownedTowers = aiObjectEntries(state.scenario, ownerId)
+    .flatMap((entry) => entry.object.type === 'building' && entry.object.kind === 'tower'
+      ? [{ ...entry, object: entry.object as BuildingObject }]
+      : [])
+  const towersNeedingGarrison = ownedTowers.filter((entry) => (
+    (entry.object.garrison?.archers ?? 0) < aiTacticalConfig.tower.minimumPeacetimeArchers
   ))
-  const standingGarrisonArchers = ownedTowers.reduce((sum, entry) => (
-    sum + (entry.object.type === 'building' ? entry.object.garrison?.archers ?? 0 : 0)
-  ), 0)
-  const emptyTower = standingGarrisonArchers < aiTacticalConfig.tower.minimumPeacetimeArchers
-    ? ownedTowers.find((entry) => entry.object.type === 'building' && !entry.object.garrison?.archers)?.position
-    : undefined
   const threatTargets = [...threateningSquads.map((entry) => entry.position), ...rememberedThreats.map((entry) => entry.position)]
     .filter((position, index, all) => all.findIndex((candidate) => positionKey(candidate) === positionKey(position)) === index)
   const reachableStagingAnchor = (from: CellPosition) => stagingAnchors
@@ -576,6 +620,17 @@ function movementCandidates(
   for (const [squadIndex, squad] of squads.entries()) {
     if (!countNode()) break
     const role = memory.squadRoles[positionKey(squad.position)] ?? 'assault'
+    const rangedIndex = squads.slice(0, squadIndex).filter((entry) => (
+      memory.squadRoles[positionKey(entry.position)] === 'ranged'
+    )).length
+    const guardIndex = squads.slice(0, squadIndex).filter((entry) => {
+      const entryRole = memory.squadRoles[positionKey(entry.position)]
+      return entryRole === 'reserve' || entryRole === 'ranged'
+    }).length
+    const towerNeedingGarrison = role === 'ranged' && towersNeedingGarrison.length > 0
+      ? towersNeedingGarrison[rangedIndex % towersNeedingGarrison.length]?.position
+      : undefined
+    const guardAnchor = defensiveAnchors[guardIndex % Math.max(1, defensiveAnchors.length)] ?? homeAnchor
     const fielded = isFielded(squad.position)
     const waitingForSupport = phase === 'assault'
       && role !== 'reserve'
@@ -597,32 +652,26 @@ function movementCandidates(
       }
       continue
     }
-    const strategicTarget = phase === 'defense' && threat.threatened
-      ? threatTargets[squadIndex % Math.max(1, threatTargets.length)] ?? homeAnchor
-      : phase === 'mobilization'
-        ? role === 'ranged' && emptyTower
-          ? emptyTower
-          : role === 'reserve'
-            ? defensiveAnchors[squadIndex % Math.max(1, defensiveAnchors.length)] ?? homeAnchor
-            : reachableStagingAnchor(squad.position) ?? homeAnchor
-      : phase === 'regroup'
-          ? role === 'reserve' || role === 'ranged'
-            ? defensiveAnchors[squadIndex % Math.max(1, defensiveAnchors.length)] ?? homeAnchor
-            : homeAnchor
-          : phase === 'assault'
-            ? role === 'reserve'
-              ? homeAnchor
-              : waitingForSupport
-                ? reachableStagingAnchor(squad.position) ?? homeAnchor
-                : raidObjective?.origin ?? targetCastle
-            : role === 'reserve' || (role === 'ranged' && emptyTower)
-              ? (role === 'ranged' ? emptyTower : null)
-                ?? defensiveAnchors[squadIndex % Math.max(1, defensiveAnchors.length)] ?? homeAnchor
-              : homeAnchor
+    let strategicTarget: CellPosition | null | undefined
+    if (role === 'ranged' && towerNeedingGarrison) strategicTarget = towerNeedingGarrison
+    else if (phase === 'defense') {
+      strategicTarget = threat.threatened && role !== 'reserve'
+        ? threatTargets[squadIndex % Math.max(1, threatTargets.length)] ?? homeAnchor
+        : guardAnchor
+    } else if (phase === 'mobilization') {
+      strategicTarget = role === 'reserve' ? guardAnchor : reachableStagingAnchor(squad.position) ?? homeAnchor
+    } else if (phase === 'regroup') {
+      strategicTarget = role === 'reserve' || role === 'ranged' ? guardAnchor : homeAnchor
+    } else if (phase === 'assault') {
+      strategicTarget = role === 'reserve'
+        ? guardAnchor
+        : waitingForSupport ? reachableStagingAnchor(squad.position) ?? homeAnchor : raidObjective?.origin ?? targetCastle
+    } else strategicTarget = role === 'reserve' ? guardAnchor : homeAnchor
     if (!strategicTarget) continue
-    if ((phase === 'survival' || phase === 'expansion' || phase === 'recovery' || phase === 'regroup')
+    if (!towerNeedingGarrison
+      && (phase === 'survival' || phase === 'expansion' || phase === 'recovery' || phase === 'regroup')
       && positionDistance(squad.position, strategicTarget) <= aiTacticalConfig.route.peacefulHoldRadius) continue
-    if (phase === 'mobilization'
+    if (!towerNeedingGarrison && phase === 'mobilization'
       && positionDistance(squad.position, strategicTarget) <= aiTacticalConfig.route.mobilizationHoldRadius) continue
     if (phase === 'assault' && role === 'reserve'
       && positionDistance(squad.position, strategicTarget) <= aiTacticalConfig.route.reserveHoldRadius) continue
@@ -820,13 +869,13 @@ function towerCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
     .flatMap((entry) => entry.object.type === 'building' && entry.object.kind === 'tower'
       ? [{ ...entry, object: entry.object as BuildingObject }]
       : [])
-  const totalGarrisonArchers = towers.reduce((sum, tower) => sum + (tower.object.garrison?.archers ?? 0), 0)
   const fieldPower = squadEntries(state, ownerId).reduce((sum, squad) => (
     sum + troopCompositionPower(squad.object.units, squadHealth(squad.object))
   ), 0)
   const candidates: TacticalCandidate[] = []
   for (const tower of towers) {
-    if (tower.object.garrison?.archers) {
+    const garrisonArchers = tower.object.garrison?.archers ?? 0
+    if (garrisonArchers > 0) {
       let hasShot = false
       for (const enemy of enemies) {
         if (!countNode()) return candidates
@@ -851,15 +900,20 @@ function towerCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
             || first.row - second.row || first.column - second.column)
         if (exits[0]) candidates.push({ command: { type: 'ungarrison', tower: tower.position, to: exits[0] }, score: aiTacticalConfig.tower.releaseUtility, factors: ['release-idle-garrison'] })
       }
-    } else if (phase === 'defense' || ((phase === 'expansion' || phase === 'mobilization' || phase === 'regroup')
-      && totalGarrisonArchers < aiTacticalConfig.tower.minimumPeacetimeArchers)) {
+    }
+    const desiredGarrison = phase === 'defense'
+      ? buildingRules.tower.garrison?.capacity ?? aiTacticalConfig.tower.minimumPeacetimeArchers
+      : aiTacticalConfig.tower.minimumPeacetimeArchers
+    if (garrisonArchers < desiredGarrison
+      && (phase === 'defense' || phase === 'expansion' || phase === 'mobilization' || phase === 'regroup')) {
       for (const direction of clockwiseCardinalDirections) {
         const from = { column: tower.position.column + direction.column, row: tower.position.row + direction.row }
         const squad = objectAt(state, from)
         if (squad?.type === 'squad' && squad.ownerId === ownerId && squad.units.archers > 0) {
           const defensive = phase === 'defense'
+          const quantity = Math.min(squad.units.archers, desiredGarrison - garrisonArchers)
           candidates.push({
-            command: { type: 'garrison', from, tower: tower.position },
+            command: { type: 'garrison', from, tower: tower.position, quantity },
             score: defensive ? aiTacticalConfig.tower.defenseGarrisonUtility : aiTacticalConfig.tower.peacetimeGarrisonUtility,
             factors: [defensive ? 'defensive-garrison' : 'standing-garrison'],
           })
@@ -882,10 +936,15 @@ export function assignSquadRoles(
     .sort((first, second) => first.position.row - second.position.row || first.position.column - second.position.column)
   const totalPower = squads.reduce((sum, squad) => sum + troopCompositionPower(squad.object.units), 0)
   const defenseBand = profile.doctrine.forceTargets.defense
+  const reserveShare = phase === 'defense'
+    ? profile.doctrine.defenseForceShare
+    : profile.doctrine.propertyGuardShare
   const reserveTarget = Math.min(
     defenseBand.maximum,
     totalPower,
-    Math.max(defenseBand.minimum, totalPower * profile.doctrine.defenseForceShare),
+    reserveShare > 0
+      ? Math.max(phase === 'defense' ? defenseBand.minimum : 0, totalPower * reserveShare)
+      : 0,
   )
   let reservedPower = 0
   const roles: Record<string, AiSquadRole> = {}
@@ -903,7 +962,7 @@ export function assignSquadRoles(
     else if (threatened && sortedByHome.indexOf(squad) < Math.ceil(squads.length / 2)) role = 'defender'
     else if (squads.length > 1 && reservedPower < reserveTarget
       && squadPower <= totalPower * Math.max(aiTacticalConfig.formation.minimumReserveSquadShare,
-        profile.doctrine.defenseForceShare * aiTacticalConfig.formation.reserveSquadShareMultiplier)) { role = 'reserve'; reservedPower += squadPower }
+        reserveShare * aiTacticalConfig.formation.reserveSquadShareMultiplier)) { role = 'reserve'; reservedPower += squadPower }
     else if (size <= aiTacticalConfig.formation.scoutMaximumSize
       && profile.doctrine.maneuverBias > aiTacticalConfig.formation.scoutManeuverThreshold
       && (phase === 'assault' || squads.length >= aiTacticalConfig.formation.scoutMinimumGroups)) role = 'scout'

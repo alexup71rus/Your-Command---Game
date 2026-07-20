@@ -391,7 +391,7 @@ export function marketCandidate(
     }
   }
   const fortificationStep = memory && (phase === 'expansion' || phase === 'mobilization' || phase === 'regroup' || phase === 'defense')
-    ? nextFortificationStep(state, memory)
+    ? nextFortificationStep(state, memory, phase === 'defense')
     : null
   if (fortificationStep) {
     const cost = buildingResourceCostFor(state, state.activeParticipantId, fortificationStep)

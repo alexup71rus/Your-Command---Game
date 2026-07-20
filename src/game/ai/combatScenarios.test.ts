@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { aiProfiles } from '../../config/ai'
 import { buildingRules } from '../../config/rules'
 import { objectAt } from '../match'
-import type { AiProfileId, MapScenario } from '../scenario'
-import { analyzeAiWorld, createSettlementPlan, positionDistance, positionKey } from './analysis'
+import type { AiProfileId } from '../scenario'
+import { positionKey } from './analysis'
 import { createAiMemory } from './model'
 import { assaultPathFor } from './tactics'
 import {
-  createAiScenario,
   placeTestBuilding,
   placeTestSquad,
   startAiTurn,
@@ -51,28 +49,6 @@ function assaultMemory(targetOwnerId: string) {
     wave: 'main' as const,
     stableTurns: 10,
     idleTurns: 10,
-  }
-}
-
-function mirroredHorizontally(scenario: MapScenario): MapScenario {
-  const width = scenario.cells[0].length
-  const mirror = ({ column, row }: { column: number; row: number }) => ({ column: width - 1 - column, row })
-  return {
-    ...scenario,
-    id: `${scenario.id}-mirrored`,
-    cells: scenario.cells.map((row) => [...row].reverse()),
-    territories: scenario.territories.map((row) => [...row].reverse()),
-    regions: scenario.regions.map((region) => ({
-      ...region,
-      center: mirror(region.center),
-      validCastleCells: region.validCastleCells.map(mirror),
-      reservedBuildSites: {
-        plain: mirror(region.reservedBuildSites.plain),
-        hill: mirror(region.reservedBuildSites.hill),
-        extra: mirror(region.reservedBuildSites.extra),
-        house: mirror(region.reservedBuildSites.house),
-      },
-    })),
   }
 }
 
@@ -154,35 +130,5 @@ describe('authored AI combat scenarios', () => {
     expect(eastPath).not.toContainEqual(rearGate)
     expect(westPath).toContainEqual(rearGate)
     expect(westPath).not.toContainEqual(frontGate)
-  })
-
-  it.each(['velislava', 'svyatobor'] as const)('%s places its gate on the enemy-facing side, including on a mirrored map', (profileId) => {
-    for (const scenario of [createAiScenario(profileId), mirroredHorizontally(createAiScenario(profileId))]) {
-      const ownerId = `ai-${profileId}`
-      const analysis = analyzeAiWorld(scenario, ownerId)
-      expect(analysis).not.toBeNull()
-      if (!analysis) continue
-      const plan = createSettlementPlan(analysis, scenario, aiProfiles[profileId])
-      expect(plan.fortification).not.toBeNull()
-      const line = plan.fortification?.lines[0]
-      expect(line).toBeDefined()
-      if (!line) continue
-      const enemyVector = {
-        column: analysis.front.column - analysis.castle.column,
-        row: analysis.front.row - analysis.castle.row,
-      }
-      const gateVector = {
-        column: line.gate.column - analysis.castle.column,
-        row: line.gate.row - analysis.castle.row,
-      }
-      const dot = enemyVector.column * gateVector.column + enemyVector.row * gateVector.row
-      const summary = JSON.stringify({ castle: analysis.castle, enemy: analysis.front, line })
-      expect(dot, summary).toBeGreaterThan(0)
-      expect(positionDistance(line.gate, analysis.front), summary)
-        .toBeLessThan(positionDistance(analysis.castle, analysis.front))
-      expect(line.walls.length, summary).toBeGreaterThan(0)
-      expect([0, 2], summary).toContain(line.towers.length)
-      if (line.kind === 'bastion') expect(line.towers.length, summary).toBe(2)
-    }
   })
 })

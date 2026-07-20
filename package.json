@@ -19,8 +19,8 @@
     "prepare": "node scripts/setup-hooks.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "test:ai": "vitest run src/game/ai/combatScenarios.test.ts src/game/ai/economyScenarios.test.ts src/game/ai/planner.test.ts",
-    "test:stable": "vitest run --exclude src/game/ai/combatScenarios.test.ts --exclude src/game/ai/economyScenarios.test.ts"
+    "test:ai": "vitest run src/game/ai/combatScenarios.test.ts src/game/ai/defenseScenarios.test.ts src/game/ai/economyScenarios.test.ts src/game/ai/planner.test.ts",
+    "test:stable": "vitest run --exclude src/game/ai/combatScenarios.test.ts --exclude src/game/ai/defenseScenarios.test.ts --exclude src/game/ai/economyScenarios.test.ts"
   },
   "dependencies": {
     "react": "^19.1.1",

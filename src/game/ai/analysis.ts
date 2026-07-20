@@ -377,11 +377,20 @@ function fortificationLineFor(
         column: gate.column + perpendicular.column * offset * side,
         row: gate.row + perpendicular.row * offset * side,
       }
-      return isOpen(position) ? [position] : []
+      if (isOpen(position)) return [position]
+      // At a mountain or regional edge the last curtain cell is the useful
+      // tower position: it keeps the natural anchor, covers the pass, and does
+      // not waste a tower behind an impassable peak.
+      return isNaturalAnchor(position) && sideWalls[side].length > 1
+        ? [sideWalls[side].at(-1)!]
+        : []
     }).slice(0, towerLimit)
-    const friendlyRouteLength = routeLength(new Set([...walls, ...towers].map(positionKey)))
+    const towerKeys = new Set(towers.map(positionKey))
+    const curtainWalls = walls.filter((position) => !towerKeys.has(positionKey(position)))
+    if (curtainWalls.length < config.minimumWalls) continue
+    const friendlyRouteLength = routeLength(new Set([...curtainWalls, ...towers].map(positionKey)))
     if (!Number.isFinite(friendlyRouteLength)) continue
-    const fortifiedRouteLength = routeLength(new Set([gate, ...walls, ...towers].map(positionKey)))
+    const fortifiedRouteLength = routeLength(new Set([gate, ...curtainWalls, ...towers].map(positionKey)))
     const pathDelay = Number.isFinite(fortifiedRouteLength)
       ? Math.max(0, fortifiedRouteLength - baselineRouteLength)
       : Number.POSITIVE_INFINITY
@@ -391,11 +400,11 @@ function fortificationLineFor(
       : 0
     const score = (cell?.chokeScore ?? 0) * config.chokeWeight
       + naturalAnchors * config.naturalAnchorBonus
-      + walls.length * config.wallCountBonus
+      + curtainWalls.length * config.wallCountBonus
       + (Number.isFinite(pathDelay) ? pathDelay * config.pathDelayWeight : config.sealedApproachBonus)
       - Math.abs(index - desiredIndex) * config.preferredDistanceWeight
       - weakLinePenalty
-    candidates.push({ gate, walls, towers, naturalAnchors, score })
+    candidates.push({ gate, walls: curtainWalls, towers, naturalAnchors, score })
   }
   candidates.sort((first, second) => second.score - first.score
     || first.gate.row - second.gate.row || first.gate.column - second.gate.column)
@@ -411,7 +420,8 @@ function fortificationPlanFor(
   profile: AiProfileRules,
 ): AiSettlementPlan['fortification'] {
   const totalWallLimit = profile.settlement.buildingLimits.wall ?? 0
-  const totalTowerLimit = profile.settlement.buildingLimits.tower ?? 0
+  const totalTowerLimit = Math.max(0,
+    (profile.settlement.buildingLimits.tower ?? 0) - profile.settlement.remoteTowerLimit)
   const lineLimit = Math.min(
     profile.settlement.buildingLimits.barbican ?? 0,
     Math.floor(totalWallLimit / aiSpatialConfig.settlementPlan.fortification.minimumWalls),
@@ -457,6 +467,36 @@ function fortificationPlanFor(
   return lines.length > 0 ? { lines } : null
 }
 
+function defensiveOutpostFor(
+  analysis: AiWorldAnalysis,
+  scenario: MapScenario,
+  profile: AiProfileRules,
+  protectedSites: CellPosition[],
+  reserved: Set<string>,
+) {
+  if (profile.settlement.remoteTowerLimit <= 0 || !profile.allowedBuildings.includes('tower')
+    || protectedSites.length === 0) return undefined
+  const config = aiSpatialConfig.settlementPlan.fortification
+  return analysis.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
+    const position = { column, row: rowIndex }
+    const mapCell = scenario.cells[rowIndex]?.[column]
+    if (!cell.inRegion || !cell.passable || !Number.isFinite(cell.distanceToCastle)
+      || !mapCell || mapCell.object || mapCell.vegetation
+      || reserved.has(positionKey(position))
+      || cell.distanceToCastle < config.outpostMinimumCastleDistance) return []
+    const assetDistance = Math.min(...protectedSites.map((site) => positionDistance(position, site)))
+    if (assetDistance < 1 || assetDistance > config.outpostMaximumAssetDistance) return []
+    return [{
+      position,
+      score: cell.hillOpportunity * config.outpostHillBonus
+        + cell.lineOfFireScore * config.outpostLineOfFireWeight
+        - assetDistance * config.outpostAssetDistanceWeight
+        + cell.distanceToCastle * config.outpostRemotenessWeight,
+    }]
+  })).sort((first, second) => second.score - first.score
+    || first.position.row - second.position.row || first.position.column - second.position.column)[0]?.position
+}
+
 export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapScenario, profile: AiProfileRules): AiSettlementPlan {
   const layout = chooseAllowed(analysis.layoutScores, profile.allowedLayouts, profile.allowedLayouts, scenario.seed + analysis.regionId.length)
   const opening = chooseAllowed(analysis.openingScores, profile.preferredOpenings, profile.preferredOpenings,
@@ -486,6 +526,15 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     ?? bestSiteNear(analysis, (position, cell) => ordinary(position, cell) && clear(position), preferredDistance.military)
   const primaryFortification = fortification?.lines[0]
   const gate = primaryFortification?.gate
+  const protectedOutpostSites = [industry, forestIndustry, food, forestFood]
+    .filter((position): position is CellPosition => Boolean(position))
+  const outpostTower = defensiveOutpostFor(
+    analysis,
+    scenario,
+    profile,
+    protectedOutpostSites,
+    new Set([...corridorSet, ...fortificationSet]),
+  )
   const passableCount = analysis.cells.flat().filter((cell) => cell.inRegion && cell.passable).length
   const regionScale = Math.max(aiSpatialConfig.regionScale.minimum,
     Math.min(aiSpatialConfig.regionScale.maximum, Math.sqrt(passableCount / aiSpatialConfig.regionScale.referenceCells)))
@@ -511,7 +560,7 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     food: unique([food, forestFood]),
     industry: unique([industry, forestIndustry]),
     military: unique([military]),
-    defense: unique([gate, military]),
+    defense: unique([gate, outpostTower, military]),
   }
   const zoneArea = Object.fromEntries((Object.keys(aiSpatialConfig.baseZoneArea) as AiSettlementZoneKind[]).map((kind) => [
     kind,
@@ -530,9 +579,9 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     const limit = profile.settlement.buildingLimits[kind]
     return limit === undefined ? [] : [[kind, limit]]
   })) as Partial<Record<BuildingKind, number>>
-  const fortificationOrigins = fortification?.lines.reduce((sum, line) => (
+  const fortificationOrigins = (fortification?.lines.reduce((sum, line) => (
     sum + 1 + line.walls.length + line.towers.length
-  ), 0) ?? 0
+  ), 0) ?? 0) + Number(Boolean(outpostTower))
   const zones: AiSettlementPlan['zones'] = {
     housing: { centers: centers.housing, cells: cells.housing, maxOrigins: originLimit('housing'), maxBuildings: limitsFor([...aiBuildingKindsByZone.housing]), overflowRadius: profile.settlement.overflowRadius.housing },
     food: { centers: centers.food, cells: cells.food, maxOrigins: originLimit('food'), maxBuildings: limitsFor([...aiBuildingKindsByZone.food]), overflowRadius: profile.settlement.overflowRadius.food },
@@ -553,6 +602,7 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
       gate,
       leftTower: primaryFortification?.towers[0],
       rightTower: primaryFortification?.towers[1],
+      outpostTower,
     },
     fortification,
     zones,

@@ -13,7 +13,7 @@ export type AiWaveKind = 'none' | 'probe' | 'main' | 'support' | 'regroup' | 'si
 export type AiSquadRole = 'defender' | 'assault' | 'screen' | 'ranged' | 'scout' | 'reserve'
 export type AiContactKind = 'squad' | 'barracks'
 export type AiSettlementZoneKind = 'housing' | 'food' | 'industry' | 'military' | 'defense'
-export type AiReservedSiteKind = 'housing' | 'food' | 'military' | 'industry' | 'gate' | 'leftTower' | 'rightTower'
+export type AiReservedSiteKind = 'housing' | 'food' | 'military' | 'industry' | 'gate' | 'leftTower' | 'rightTower' | 'outpostTower'
 
 export const aiLayoutKinds: readonly AiLayoutKind[] = ['courtyard', 'frontier', 'strongpoint']
 export const aiFortificationKinds: readonly AiFortificationKind[] = ['curtain', 'terrain-gate', 'bastion']
@@ -22,7 +22,7 @@ export const aiStrategicPhases: readonly AiStrategicPhase[] = ['recovery', 'surv
 export const aiWaveKinds: readonly AiWaveKind[] = ['none', 'probe', 'main', 'support', 'regroup', 'siege']
 export const aiSquadRoleKinds: readonly AiSquadRole[] = ['defender', 'assault', 'screen', 'ranged', 'scout', 'reserve']
 export const aiSettlementZoneKinds: readonly AiSettlementZoneKind[] = ['housing', 'food', 'industry', 'military', 'defense']
-export const aiReservedSiteKinds: readonly AiReservedSiteKind[] = ['housing', 'food', 'military', 'industry', 'gate', 'leftTower', 'rightTower']
+export const aiReservedSiteKinds: readonly AiReservedSiteKind[] = ['housing', 'food', 'military', 'industry', 'gate', 'leftTower', 'rightTower', 'outpostTower']
 
 export interface AiContact {
   ownerId: string
@@ -106,7 +106,7 @@ export type AiCommand =
   | { type: 'move-or-attack'; from: CellPosition; to: CellPosition }
   | { type: 'split'; from: CellPosition; to: CellPosition; units: TroopComposition }
   | { type: 'dismiss'; from: CellPosition; units: TroopComposition }
-  | { type: 'garrison'; from: CellPosition; tower: CellPosition }
+  | { type: 'garrison'; from: CellPosition; tower: CellPosition; quantity?: number }
   | { type: 'ungarrison'; tower: CellPosition; to: CellPosition }
   | { type: 'tower-attack'; tower: CellPosition; to: CellPosition }
   | { type: 'demolish'; position: CellPosition }
@@ -140,6 +140,7 @@ export interface AiDoctrine {
   defensiveTroops: TroopKind[]
   targetComposition: Partial<Record<TroopKind, number>>
   defenseForceShare: number
+  propertyGuardShare: number
   raidForceShare: number
   retreatHealthShare: number
   targetStickiness: number
@@ -160,6 +161,7 @@ export interface AiDoctrine {
 
 export interface AiSettlementDoctrine {
   areaScale: number
+  remoteTowerLimit: number
   zoneOriginTargets: Record<AiSettlementZoneKind, number>
   buildingLimits: Partial<Record<BuildingKind, number>>
   overflowRadius: Record<AiSettlementZoneKind, number>

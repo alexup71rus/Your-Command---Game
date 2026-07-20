@@ -135,15 +135,43 @@ export function createEconomicScenario(
 }
 
 /**
+ * An authored mountain pass. The AI settlement sits between two ridges, so a
+ * useful curtain must close the pass instead of drawing a decorative line in
+ * open ground. Highland cells beyond the ridge remain reachable for a remote
+ * tower and extraction buildings.
+ */
+export function createDefensiveTerrainScenario(profileId: AiProfileId): MapScenario {
+  const scenario = createAiScenario(profileId)
+  scenario.id = `ai-defense-pass-${profileId}`
+  scenario.name = 'Authored mountain-pass defense'
+  for (const row of [8, 16]) {
+    for (let column = 12; column <= 19; column += 1) {
+      scenario.cells[row][column] = {
+        ...scenario.cells[row][column],
+        elevation: 0.94,
+        landform: 'peak',
+        vegetation: false,
+        object: undefined,
+      }
+    }
+  }
+  return scenario
+}
+
+/**
  * A mature settlement with a functioning production chain and field troops,
  * but too little stone to start its planned fortification immediately. It is
  * intentionally authored so a behavior test can observe saving and the full
  * construction order without waiting for the opening economy to replay first.
  */
-export function createFortressConstructionState() {
-  const profileId: AiProfileId = 'svyatobor'
+export function createFortressConstructionState(
+  profileId: Extract<AiProfileId, 'velislava' | 'svyatobor'> = 'svyatobor',
+  terrain: 'open' | 'mountain-pass' = 'open',
+) {
   const ownerId = `ai-${profileId}`
-  const state = createMatch(createEconomicScenario(profileId, 'open'))
+  const state = createMatch(terrain === 'mountain-pass'
+    ? createDefensiveTerrainScenario(profileId)
+    : createEconomicScenario(profileId, 'open'))
   const buildings: Array<[BuildingKind, number, number]> = [
     ['orchard', 20, 6], ['orchard', 22, 6], ['mill', 20, 17],
     ['farm', 18, 18], ['farm', 21, 18],
@@ -156,10 +184,17 @@ export function createFortressConstructionState() {
     ['barracks', 18, 14], ['barracks', 21, 14], ['market', 23, 13],
   ]
   buildings.forEach(([kind, column, row]) => {
-    placeTestBuilding(state, ownerId, kind, { column, row })
+    const positions = buildingFootprintPositions(kind, { column, row })
+    if (aiProfiles[profileId].allowedBuildings.includes(kind)
+      && positions.every((position) => {
+        const cell = state.scenario.cells[position.row]?.[position.column]
+        return cell && cell.landform !== 'peak' && !cell.object
+      })) {
+      placeTestBuilding(state, ownerId, kind, { column, row })
+    }
   })
   placeTestSquad(state, ownerId, { column: 20, row: 13 }, {
-    militia: 2, spearmen: 2, archers: 0, knights: 0,
+    militia: 2, spearmen: 2, archers: profileId === 'svyatobor' ? 2 : 0, knights: 0,
   })
   state.domains[ownerId] = {
     ...state.domains[ownerId],
@@ -192,8 +227,18 @@ export function createFortressConstructionState() {
     stableTurns: 10,
   }
   const line = settlementPlan.fortification?.lines[0]
-  if (!line || line.towers.length !== 2) throw new Error('Fixture requires a gate, wall line, and two towers')
-  return { state, analysis, line, ownerId, profileId }
+  if (!line) throw new Error('Fixture requires a planned gate and wall line')
+  if (profileId === 'svyatobor' && line.towers.length !== 2) {
+    throw new Error('Svyatobor fixture requires two castle-line towers')
+  }
+  return {
+    state,
+    analysis,
+    line,
+    outpost: settlementPlan.reservedSites.outpostTower,
+    ownerId,
+    profileId,
+  }
 }
 
 export function startAiTurn(profileId: AiProfileId = 'radomir') {

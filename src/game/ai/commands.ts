@@ -25,7 +25,7 @@ export function executeAiCommand(state: MatchState, command: AiCommand): Command
     case 'move-or-attack': return moveOrAttack(state, command.from, command.to)
     case 'split': return splitSquad(state, command.from, command.to, command.units)
     case 'dismiss': return dismissSquad(state, command.from, command.units)
-    case 'garrison': return garrisonTower(state, command.from, command.tower)
+    case 'garrison': return garrisonTower(state, command.from, command.tower, command.quantity)
     case 'ungarrison': return ungarrisonTower(state, command.tower, command.to)
     case 'tower-attack': return towerAttack(state, command.tower, command.to)
     case 'demolish': return demolish(state, command.position)

@@ -164,13 +164,19 @@ export function homeThreatFor(state: MatchState, ownerId: string, memory?: AiMem
   const castle = castlePositionFor(state.scenario, ownerId)
   const participant = state.scenario.participants.find((candidate) => candidate.id === ownerId)
   if (!castle || !participant) return { threatened: false, power: 0, nearest: Number.POSITIVE_INFINITY }
+  const protectedAssets = aiObjectEntries(state.scenario, ownerId)
+    .flatMap((entry) => entry.object.type === 'castle' || entry.object.type === 'building' ? [entry.position] : [])
+  const distanceToProtectedAsset = (position: CellPosition) => Math.min(
+    ...protectedAssets.map((asset) => positionDistance(position, asset)),
+    positionDistance(position, castle),
+  )
   const visibleThreats = visibleEnemySquads(state, ownerId).map((entry) => ({
-    distance: positionDistance(entry.position, castle),
+    distance: distanceToProtectedAsset(entry.position),
     inside: state.scenario.territories[entry.position.row]?.[entry.position.column] === participant.regionId,
     power: troopCompositionPower(entry.object.units, squadHealth(entry.object)),
   }))
   const rememberedThreats = rememberedSquadThreats(state, memory).map((contact) => ({
-    distance: positionDistance(contact.position, castle),
+    distance: distanceToProtectedAsset(contact.position),
     inside: state.scenario.territories[contact.position.row]?.[contact.position.column] === participant.regionId,
     power: contact.power,
   }))
