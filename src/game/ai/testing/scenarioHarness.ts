@@ -1,8 +1,10 @@
 import { aiPlannerConfig, aiProfiles } from '../../../config/ai'
+import { gameConfig } from '../../../config/game'
 import { buildingKinds } from '../../../config/rules'
 import type { BuildingKind } from '../../map'
 import {
   endTurn,
+  objectAt,
   ownedBuildingCount,
   type CommandFailure,
   type MatchState,
@@ -62,7 +64,10 @@ export interface DevelopmentScenarioOptions {
 }
 
 export interface FrozenTacticalStep {
+  round: number
   command: AiCommand
+  score: number
+  factors: string[]
   event: MatchState['lastEvent']
   ordersRemaining: number
 }
@@ -72,6 +77,7 @@ export interface FrozenTacticalRun {
   memory: AiMemory
   steps: FrozenTacticalStep[]
   failures: ScenarioCommandFailure[]
+  exploredNodes: number
 }
 
 export function buildingCountsFor(state: MatchState, ownerId: string) {
@@ -190,6 +196,23 @@ export function runFrozenTactics(
   phase: AiStrategicPhase,
   maximumCommands: number = aiPlannerConfig.maximumCommands,
 ): FrozenTacticalRun {
+  return runFrozenTacticalRounds(initialState, profileId, memory, phase, 1, maximumCommands)
+}
+
+/**
+ * Repeats authored tactical turns while freezing production, upkeep and every
+ * opponent. This is intentionally not a match simulation: it lets siege tests
+ * observe several legal attack/movement turns without an unrelated economy or
+ * a second AI changing the fixture between decisions.
+ */
+export function runFrozenTacticalRounds(
+  initialState: MatchState,
+  profileId: AiProfileId,
+  memory: AiMemory,
+  phase: AiStrategicPhase,
+  rounds: number,
+  maximumCommandsPerRound: number = aiPlannerConfig.maximumCommands,
+): FrozenTacticalRun {
   assertScenarioState(initialState)
   let state = advanceToParticipant(initialState, `ai-${profileId}`)
   let currentMemory = {
@@ -199,43 +222,63 @@ export function runFrozenTactics(
   }
   const steps: FrozenTacticalStep[] = []
   const failures: ScenarioCommandFailure[] = []
-  const traversedEdges = new Set<string>()
   let exploredNodes = 0
+  let roundExploredNodes = 0
   const countNode = () => {
-    if (exploredNodes >= aiPlannerConfig.nodeBudget) return false
+    if (roundExploredNodes >= aiPlannerConfig.nodeBudget) return false
+    roundExploredNodes += 1
     exploredNodes += 1
     return true
   }
 
-  while (state.ordersRemaining > 0 && steps.length < maximumCommands && countNode()) {
-    currentMemory = {
-      ...currentMemory,
-      squadRoles: assignSquadRoles(state, aiProfiles[profileId], currentMemory.squadRoles, phase),
+  for (let round = 1; round <= rounds && state.status === 'playing' && failures.length === 0; round += 1) {
+    if (round > 1) {
+      state = { ...state, turn: state.turn + 1, ordersRemaining: gameConfig.turn.maxOrders }
+      roundExploredNodes = 0
     }
-    const candidate = selectTacticalCandidate(
-      tacticalCandidates(state, aiProfiles[profileId], currentMemory, phase, countNode),
-      {
-        phase,
-        idleTurns: currentMemory.idleTurns,
-        previousCommands: steps.map((step) => step.command),
-        traversedEdges,
-      },
-    )
-    if (!candidate) break
-    const result = executeAiCommand(state, candidate.command)
-    if (!result.ok) {
-      failures.push({ command: candidate.command, reason: result.reason })
-      break
+    const roundSteps: FrozenTacticalStep[] = []
+    const traversedEdges = new Set<string>()
+    while (state.ordersRemaining > 0 && roundSteps.length < maximumCommandsPerRound && countNode()) {
+      currentMemory = {
+        ...currentMemory,
+        squadRoles: assignSquadRoles(state, aiProfiles[profileId], currentMemory.squadRoles, phase),
+      }
+      const candidate = selectTacticalCandidate(
+        tacticalCandidates(state, aiProfiles[profileId], currentMemory, phase, countNode),
+        {
+          phase,
+          idleTurns: currentMemory.idleTurns,
+          previousCommands: roundSteps.map((step) => step.command),
+          traversedEdges,
+        },
+      )
+      if (!candidate) break
+      const mergesFriendlySquads = candidate.command.type === 'move-or-attack'
+        && objectAt(state, candidate.command.to)?.type === 'squad'
+        && objectAt(state, candidate.command.to)?.ownerId === state.activeParticipantId
+      const result = executeAiCommand(state, candidate.command)
+      if (!result.ok) {
+        failures.push({ command: candidate.command, reason: result.reason })
+        break
+      }
+      state = result.state
+      if (candidate.command.type === 'move-or-attack') {
+        traversedEdges.add(tacticalMovementEdgeKey(candidate.command.from, candidate.command.to))
+      }
+      if (candidate.command.type === 'split' || mergesFriendlySquads) {
+        currentMemory = { ...currentMemory, lastArmyReorganizationTurn: state.turn }
+      }
+      const step = {
+        round,
+        command: candidate.command,
+        score: candidate.score,
+        factors: candidate.factors,
+        event: state.lastEvent,
+        ordersRemaining: state.ordersRemaining,
+      }
+      steps.push(step)
+      roundSteps.push(step)
     }
-    state = result.state
-    if (candidate.command.type === 'move-or-attack') {
-      traversedEdges.add(tacticalMovementEdgeKey(candidate.command.from, candidate.command.to))
-    }
-    steps.push({
-      command: candidate.command,
-      event: state.lastEvent,
-      ordersRemaining: state.ordersRemaining,
-    })
   }
-  return { state, memory: currentMemory, steps, failures }
+  return { state, memory: currentMemory, steps, failures, exploredNodes }
 }

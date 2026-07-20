@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { buildingRules } from '../../config/rules'
-import { objectAt } from '../match'
+import { objectAt, squadSize } from '../match'
 import type { AiProfileId } from '../scenario'
-import { positionKey } from './analysis'
+import { aiObjectEntries, positionKey } from './analysis'
 import { createAiMemory } from './model'
-import { assaultPathFor } from './tactics'
 import {
+  militia,
   placeTestBuilding,
   placeTestSquad,
   startAiTurn,
 } from './testing/scenarioFixtures'
-import { runFrozenTactics } from './testing/scenarioHarness'
+import { runFrozenTacticalRounds, runFrozenTactics } from './testing/scenarioHarness'
 
 const profiles: AiProfileId[] = ['radomir', 'velislava', 'svyatobor']
 const spearmen = (amount: number) => ({ militia: 0, spearmen: amount, archers: 0, knights: 0 })
@@ -52,25 +52,29 @@ function assaultMemory(targetOwnerId: string) {
   }
 }
 
-describe('authored AI combat scenarios', () => {
-  it('prices the forest detour below breaching a healthy wall', () => {
-    const { state, ownerId, squad, blocker } = prepareTwoLaneAssault('radomir', 'wall')
-    const object = objectAt(state, squad)
-    expect(object?.type).toBe('squad')
-    if (object?.type !== 'squad') return
-    const path = assaultPathFor(state, state.scenario.cells, object, squad, { column: 3, row: 11 }, 'player')
-    expect(path).not.toBeNull()
-    expect(path).not.toContainEqual(blocker)
-    expect(path?.some((position) => state.scenario.cells[position.row][position.column].vegetation)).toBe(true)
-    expect(object.ownerId).toBe(ownerId)
-  })
+function relocatePlayerCastle(state: ReturnType<typeof startAiTurn>, position: { column: number; row: number }) {
+  state.scenario.cells.forEach((row) => row.forEach((cell) => {
+    if (cell.object?.type === 'castle' && cell.object.ownerId === 'player') cell.object = undefined
+  }))
+  state.scenario.cells[position.row][position.column] = {
+    ...state.scenario.cells[position.row][position.column],
+    landform: 'plain',
+    vegetation: false,
+    object: { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 },
+  }
+}
 
+function runSummary(run: ReturnType<typeof runFrozenTactics>) {
+  return JSON.stringify({ steps: run.steps, failures: run.failures, exploredNodes: run.exploredNodes })
+}
+
+describe('authored AI combat scenarios', () => {
   it.each(profiles)('%s takes the forest detour without chipping the healthy wall', (profileId) => {
     const { state, blocker } = prepareTwoLaneAssault(profileId, 'wall')
     const initialWall = objectAt(state, blocker)
     const run = runFrozenTactics(state, profileId, assaultMemory('player'), 'assault', 8)
     const destinations = run.steps.flatMap(({ command }) => command.type === 'move-or-attack' ? [command.to] : [])
-    const summary = JSON.stringify({ steps: run.steps, failures: run.failures })
+    const summary = runSummary(run)
 
     expect(run.failures, summary).toEqual([])
     expect(destinations.length, summary).toBeGreaterThan(0)
@@ -91,22 +95,25 @@ describe('authored AI combat scenarios', () => {
     const run = runFrozenTactics(state, profileId, assaultMemory('player'), 'assault', 8)
     const attacksGate = run.steps.some(({ command }) => command.type === 'move-or-attack'
       && command.to.column === blocker.column && command.to.row === blocker.row)
-    const summary = JSON.stringify({ steps: run.steps, failures: run.failures })
+    const summary = runSummary(run)
 
     expect(run.failures, summary).toEqual([])
     expect(attacksGate, summary).toBe(true)
     expect(objectAt(run.state, blocker), summary).not.toMatchObject({ type: 'building', kind: 'barbican', ownerId: 'player' })
   })
 
-  it('uses the attacker-facing barbican and ignores the identical rear gate', () => {
+  it.each([
+    { side: 'east', attackerColumn: 18, frontGateColumn: 14, rearGateColumn: 10 },
+    { side: 'west', attackerColumn: 6, frontGateColumn: 10, rearGateColumn: 14 },
+  ])('breaches the $side-facing barbican, crosses the curtain, and leaves the rear gate intact', ({
+    attackerColumn, frontGateColumn, rearGateColumn,
+  }) => {
     const state = startAiTurn('svyatobor')
     const ownerId = state.activeParticipantId
-    state.scenario.cells[12][3].object = undefined
-    state.scenario.cells[12][12].object = {
-      type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100,
-    }
-    const frontGate = { column: 14, row: 12 }
-    const rearGate = { column: 10, row: 12 }
+    state.turn = 20
+    relocatePlayerCastle(state, { column: 12, row: 12 })
+    const frontGate = { column: frontGateColumn, row: 12 }
+    const rearGate = { column: rearGateColumn, row: 12 }
     for (const column of [10, 14]) {
       for (let row = 10; row <= 14; row += 1) {
         placeTestBuilding(state, 'player', row === 12 ? 'barbican' : row === 10 || row === 14 ? 'tower' : 'wall', { column, row })
@@ -116,19 +123,217 @@ describe('authored AI combat scenarios', () => {
       placeTestBuilding(state, 'player', 'wall', { column, row: 10 })
       placeTestBuilding(state, 'player', 'wall', { column, row: 14 })
     }
-    const squad = {
-      type: 'squad' as const,
-      ownerId,
-      units: spearmen(5),
-      health: 6.75,
-    }
-    const castle = { column: 12, row: 12 }
-    const eastPath = assaultPathFor(state, state.scenario.cells, squad, { column: 18, row: 12 }, castle, 'player')
-    const westPath = assaultPathFor(state, state.scenario.cells, squad, { column: 6, row: 12 }, castle, 'player')
+    placeTestSquad(state, ownerId, { column: attackerColumn, row: 12 }, spearmen(8), { health: 10.8 })
+    const run = runFrozenTactics(state, 'svyatobor', assaultMemory('player'), 'assault', 8)
+    const summary = runSummary(run)
+    const firstStructureStrike = run.steps.find((step) => step.event?.kind === 'attacked'
+      || step.event?.kind === 'destroyed')
 
-    expect(eastPath).toContainEqual(frontGate)
-    expect(eastPath).not.toContainEqual(rearGate)
-    expect(westPath).toContainEqual(rearGate)
-    expect(westPath).not.toContainEqual(frontGate)
+    expect(run.failures, summary).toEqual([])
+    expect(firstStructureStrike?.command, summary).toMatchObject({ type: 'move-or-attack', to: frontGate })
+    expect(objectAt(run.state, frontGate), summary).not.toMatchObject({ type: 'building', ownerId: 'player' })
+    expect(objectAt(run.state, rearGate), summary).toMatchObject({
+      type: 'building', kind: 'barbican', ownerId: 'player', hitPoints: buildingRules.barbican.hitPoints,
+    })
+    expect(run.steps.some((step) => step.command.type === 'move-or-attack'
+      && step.command.from.column === frontGate.column && step.command.from.row === frontGate.row), summary).toBe(true)
+  })
+
+  it('uses a covered detour instead of marching through a garrisoned tower kill-zone', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    state.turn = 20
+    relocatePlayerCastle(state, { column: 3, row: 10 })
+    for (let column = 1; column <= 13; column += 1) {
+      state.scenario.cells[9][column] = { ...state.scenario.cells[9][column], landform: 'peak', vegetation: false, object: undefined }
+      state.scenario.cells[12][column] = { ...state.scenario.cells[12][column], landform: 'peak', vegetation: false, object: undefined }
+    }
+    for (let row = 0; row < state.scenario.cells.length; row += 1) {
+      state.scenario.cells[row][13] = { ...state.scenario.cells[row][13], landform: 'peak', vegetation: false, object: undefined }
+    }
+    state.scenario.territories.forEach((row) => {
+      for (let column = 0; column <= 12; column += 1) row[column] = 'region-0'
+    })
+    for (let column = 7; column <= 9; column += 1) state.scenario.cells[10][column].vegetation = true
+    const tower = { column: 2, row: 11 }
+    placeTestBuilding(state, 'player', 'tower', tower, { garrison: { archers: 5, health: 5 } })
+    placeTestSquad(state, ownerId, { column: 12, row: 11 }, spearmen(5), { health: 6.75 })
+
+    const run = runFrozenTactics(state, 'svyatobor', assaultMemory('player'), 'assault', 7)
+    const summary = runSummary(run)
+    const destinations = run.steps.flatMap((step) => step.command.type === 'move-or-attack' ? [step.command.to] : [])
+
+    expect(run.failures, summary).toEqual([])
+    expect(destinations.some((position) => position.row === 10), summary).toBe(true)
+    expect(destinations.some((position) => state.scenario.cells[position.row][position.column].vegetation), summary).toBe(true)
+    expect(objectAt(run.state, tower), summary).toMatchObject({
+      type: 'building', kind: 'tower', hitPoints: buildingRules.tower.hitPoints,
+    })
+  })
+
+  it('destroys a garrisoned tower when it is the only viable breach, then advances through its cell', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    state.turn = 20
+    relocatePlayerCastle(state, { column: 3, row: 11 })
+    for (let column = 1; column <= 13; column += 1) {
+      state.scenario.cells[10][column] = { ...state.scenario.cells[10][column], landform: 'peak', vegetation: false, object: undefined }
+      state.scenario.cells[12][column] = { ...state.scenario.cells[12][column], landform: 'peak', vegetation: false, object: undefined }
+    }
+    for (let row = 0; row < state.scenario.cells.length; row += 1) {
+      state.scenario.cells[row][13] = { ...state.scenario.cells[row][13], landform: 'peak', vegetation: false, object: undefined }
+    }
+    state.scenario.territories.forEach((row) => {
+      for (let column = 0; column <= 12; column += 1) row[column] = 'region-0'
+    })
+    const tower = { column: 7, row: 11 }
+    placeTestBuilding(state, 'player', 'tower', tower, { garrison: { archers: 5, health: 5 } })
+    placeTestSquad(state, ownerId, { column: 12, row: 11 }, spearmen(8), { health: 10.8 })
+
+    const run = runFrozenTacticalRounds(state, 'svyatobor', assaultMemory('player'), 'assault', 2, 8)
+    const summary = runSummary(run)
+    const attackedPositions = run.steps.flatMap((step) => (
+      step.event?.kind === 'attacked' || step.event?.kind === 'destroyed' ? [step.event.position] : []
+    ))
+
+    expect(run.failures, summary).toEqual([])
+    expect(attackedPositions[0], summary).toEqual(tower)
+    expect(objectAt(run.state, tower), summary).not.toMatchObject({ type: 'building', ownerId: 'player' })
+    expect(run.steps.some((step) => step.command.type === 'move-or-attack'
+      && step.command.from.column === tower.column && step.command.from.row === tower.row), summary).toBe(true)
+    expect(objectAt(run.state, { column: 3, row: 11 }), summary).toMatchObject({ type: 'castle', ownerId: 'player' })
+  })
+
+  it('sends a cheap probe to destroy exposed food production but refuses the raid under a strong response', () => {
+    const prepareRaid = (protectedTarget: boolean) => {
+      const state = startAiTurn('velislava')
+      const ownerId = state.activeParticipantId
+      state.turn = 20
+      const raiders = { column: 13, row: 16 }
+      const orchard = { column: 9, row: 16 }
+      for (let column = 0; column <= raiders.column; column += 1) state.scenario.territories[raiders.row][column] = 'region-0'
+      placeTestSquad(state, ownerId, raiders, spearmen(3), { health: 4.05 })
+      placeTestBuilding(state, 'player', 'orchard', orchard)
+      if (protectedTarget) {
+        placeTestSquad(state, 'player', { column: 9, row: 15 }, {
+          militia: 8, spearmen: 4, archers: 2, knights: 0,
+        }, { health: 15.4 })
+      }
+      return { state, orchard }
+    }
+    const exposed = prepareRaid(false)
+    const exposedRun = runFrozenTactics(exposed.state, 'velislava', {
+      ...assaultMemory('player'), wave: 'probe',
+    }, 'assault', 8)
+    const protectedRaid = prepareRaid(true)
+    const protectedRun = runFrozenTactics(protectedRaid.state, 'velislava', {
+      ...assaultMemory('player'), wave: 'probe',
+    }, 'assault', 8)
+    const summary = JSON.stringify({ exposed: exposedRun.steps, protected: protectedRun.steps })
+
+    expect(exposedRun.failures, summary).toEqual([])
+    expect(protectedRun.failures, summary).toEqual([])
+    expect(exposedRun.steps.some((step) => step.factors.includes('raid-target')), summary).toBe(true)
+    expect(objectAt(exposedRun.state, exposed.orchard), summary).not.toMatchObject({ type: 'building', kind: 'orchard' })
+    expect(protectedRun.steps.some((step) => step.factors.some((factor) => factor.startsWith('raid:'))), summary).toBe(false)
+    expect(objectAt(protectedRun.state, protectedRaid.orchard), summary).toMatchObject({
+      type: 'building', kind: 'orchard', hitPoints: buildingRules.orchard.hitPoints,
+    })
+  })
+
+  it('finishes a vulnerable field squad before resuming the march on the castle', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const attacker = { column: 13, row: 12 }
+    const weak = { column: 12, row: 12 }
+    placeTestSquad(state, ownerId, attacker, spearmen(3), { health: 4.05 })
+    placeTestSquad(state, 'player', weak, militia(2), { health: 0.6 })
+
+    const run = runFrozenTactics(state, 'svyatobor', assaultMemory('player'), 'assault', 1)
+    const summary = runSummary(run)
+
+    expect(run.steps[0]?.command, summary).toEqual({ type: 'move-or-attack', from: attacker, to: weak })
+    expect(run.steps[0]?.factors.some((factor) => factor.startsWith('finisher:')), summary).toBe(true)
+    expect(objectAt(run.state, weak), summary).toMatchObject({ type: 'squad', ownerId })
+  })
+
+  it('uses seeded tactical variety for a cheap building on the march instead of replaying one fixed choice', () => {
+    const runs = Array.from({ length: 16 }, (_, index) => {
+      const state = startAiTurn('velislava')
+      state.scenario.seed = 200 + index
+      state.turn = 20
+      state.scenario.territories[10][12] = 'region-0'
+      state.scenario.territories[11][12] = 'region-0'
+      const ownerId = state.activeParticipantId
+      const attacker = { column: 12, row: 11 }
+      const house = { column: 12, row: 10 }
+      placeTestSquad(state, ownerId, attacker, spearmen(5), { health: 6.75 })
+      placeTestBuilding(state, 'player', 'house', house, { hitPoints: 1 })
+      return runFrozenTactics(state, 'velislava', assaultMemory('player'), 'assault', 1)
+    })
+    const firstCommands = runs.map((run) => run.steps[0]?.command)
+    const strikes = firstCommands.filter((command) => command?.type === 'move-or-attack'
+      && command.to.column === 12 && command.to.row === 10)
+
+    runs.forEach((run) => {
+      expect(run.failures, runSummary(run)).toEqual([])
+      expect(run.steps, runSummary(run)).toHaveLength(1)
+    })
+    expect(strikes.length).toBeGreaterThan(0)
+    expect(strikes.length).toBeLessThan(firstCommands.length)
+
+    const replay = Array.from({ length: 2 }, () => {
+      const state = startAiTurn('velislava')
+      state.scenario.seed = 203
+      state.turn = 20
+      state.scenario.territories[10][12] = 'region-0'
+      state.scenario.territories[11][12] = 'region-0'
+      placeTestSquad(state, state.activeParticipantId, { column: 12, row: 11 }, spearmen(5), { health: 6.75 })
+      placeTestBuilding(state, 'player', 'house', { column: 12, row: 10 }, { hitPoints: 1 })
+      return runFrozenTactics(state, 'velislava', assaultMemory('player'), 'assault', 1).steps[0]?.command
+    })
+    expect(replay[1]).toEqual(replay[0])
+  })
+
+  it('splits a balanced formation only when two genuinely different assault routes are available', () => {
+    const prepare = (dividedMap: boolean, strongDefender: boolean) => {
+      const state = startAiTurn('velislava')
+      const ownerId = state.activeParticipantId
+      const source = { column: 18, row: 12 }
+      placeTestSquad(state, ownerId, source, {
+        militia: 2, spearmen: 4, archers: 4, knights: 0,
+      }, { health: 11.4 })
+      if (dividedMap) {
+        for (let row = 4; row <= 19; row += 1) {
+          state.scenario.cells[row][10] = {
+            ...state.scenario.cells[row][10], landform: 'peak', vegetation: false, object: undefined,
+          }
+        }
+      }
+      if (strongDefender) placeTestSquad(state, 'player', { column: 7, row: 10 }, militia(12), { health: 12 })
+      return { state, source }
+    }
+    const divided = prepare(true, false)
+    const splitRun = runFrozenTactics(divided.state, 'velislava', assaultMemory('player'), 'assault', 1)
+    const concentrated = prepare(false, true)
+    const concentratedRun = runFrozenTactics(concentrated.state, 'velislava', assaultMemory('player'), 'assault', 1)
+    const summary = JSON.stringify({ split: splitRun.steps, concentrated: concentratedRun.steps })
+    const split = splitRun.steps[0]?.command
+
+    expect(splitRun.failures, summary).toEqual([])
+    expect(concentratedRun.failures, summary).toEqual([])
+    expect(split?.type, summary).toBe('split')
+    expect(aiObjectEntries(splitRun.state.scenario, splitRun.state.activeParticipantId)
+      .filter((entry) => entry.object.type === 'squad'), summary).toHaveLength(2)
+    if (split?.type === 'split') {
+      const detached = objectAt(splitRun.state, split.to)
+      const remaining = objectAt(splitRun.state, split.from)
+      expect(detached?.type === 'squad' ? squadSize(detached) : 0).toBeGreaterThan(0)
+      expect(remaining?.type === 'squad' ? squadSize(remaining) : 0).toBeGreaterThan(0)
+      expect(detached?.type === 'squad' ? detached.units.archers : 0).toBeGreaterThan(0)
+      expect(remaining?.type === 'squad' ? remaining.units.archers : 0).toBeGreaterThan(0)
+    }
+    expect(concentratedRun.steps, summary).toHaveLength(1)
+    expect(concentratedRun.steps[0].command.type, summary).not.toBe('split')
   })
 })

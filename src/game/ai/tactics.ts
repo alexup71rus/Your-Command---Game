@@ -1,6 +1,6 @@
 import { gameConfig } from '../../config/game'
 import { aiPlannerConfig, aiTacticalConfig } from '../../config/ai'
-import { buildingRules, troopKinds, troopRules } from '../../config/rules'
+import { buildingRules, combatRules, troopKinds, troopRules } from '../../config/rules'
 import type { BuildingKind, BuildingObject, GameMap, MapObject, SquadObject, TroopComposition, TroopKind } from '../map'
 import {
   buildingFootprintPositions,
@@ -8,6 +8,7 @@ import {
   objectAt,
   squadHealth,
   squadSize,
+  splitFailure,
   towerAttackFailure,
   totalArmySize,
   ungarrisonFailure,
@@ -49,7 +50,12 @@ export function selectTacticalCandidate(
 ) {
   const eligible = candidates.filter((candidate) => {
     if (options.commandAllowed && !options.commandAllowed(candidate.command)) return false
-    if (options.previousCommands.some((command) => JSON.stringify(command) === JSON.stringify(candidate.command))) return false
+    const repeatsCommand = options.previousCommands.some((command) => JSON.stringify(command) === JSON.stringify(candidate.command))
+    // A repeated move is usually an oscillation, but a repeated attack is how a
+    // formation actually completes a breach or finishes a surviving squad.
+    // Candidate factors come from authoritative speculative execution, so a
+    // fresh positive damage result is safe to repeat while the target changes.
+    if (repeatsCommand && !candidate.factors.some((factor) => factor.startsWith('damage:'))) return false
     if (candidate.command.type !== 'move-or-attack') return true
     return !options.traversedEdges.has(tacticalMovementEdgeKey(candidate.command.to, candidate.command.from))
   })
@@ -184,20 +190,72 @@ function baseMeleeDamage(squad: SquadObject) {
   return troopKinds.reduce((sum, troop) => sum + squad.units[troop] * troopRules[troop].damage, 0)
 }
 
-function assaultCellCost(state: MatchState, squad: SquadObject, targetOwnerId: string | null) {
+function towerHasLineOfFire(map: GameMap, tower: CellPosition, target: CellPosition) {
+  const columnDistance = Math.abs(target.column - tower.column)
+  const rowDistance = Math.abs(target.row - tower.row)
+  const distance = columnDistance + rowDistance
+  const range = buildingRules.tower.garrison?.attackRange ?? 0
+  if ((columnDistance !== 0 && rowDistance !== 0) || distance < 1 || distance > range) return false
+  const columnStep = Math.sign(target.column - tower.column)
+  const rowStep = Math.sign(target.row - tower.row)
+  for (let step = 1; step < distance; step += 1) {
+    const cell = map[tower.row + rowStep * step]?.[tower.column + columnStep * step]
+    if (!cell || cell.landform === 'peak' || cell.vegetation || cell.object) return false
+  }
+  return true
+}
+
+interface TowerThreat {
+  position: CellPosition
+  archers: number
+}
+
+function towerThreatsFor(state: MatchState, ownerId: string): TowerThreat[] {
+  return aiObjectEntries(state.scenario).flatMap((entry) => (
+    entry.object.ownerId !== ownerId && entry.object.type === 'building'
+      && entry.object.kind === 'tower' && entry.object.garrison?.archers
+      ? [{ position: entry.position, archers: entry.object.garrison.archers }]
+      : []
+  ))
+}
+
+function towerExposureAt(state: MatchState, position: CellPosition, threats: TowerThreat[]) {
+  const cover = state.scenario.cells[position.row]?.[position.column]?.vegetation
+    ? combatRules.ranged.forestCoverMultiplier
+    : 1
+  return threats.reduce((sum, tower) => {
+    if (samePosition(tower.position, position)
+      || !towerHasLineOfFire(state.scenario.cells, tower.position, position)) return sum
+    return sum + tower.archers
+      * aiTacticalConfig.siege.towerExposureOrderCostPerArcher * cover
+  }, 0)
+}
+
+function towerExposureAlong(state: MatchState, path: CellPosition[], threats: TowerThreat[]) {
+  return path.slice(1, aiTacticalConfig.siege.towerExposureLookahead + 1)
+    .reduce((sum, position) => sum + towerExposureAt(state, position, threats), 0)
+}
+
+function assaultCellCost(
+  state: MatchState,
+  squad: SquadObject,
+  targetOwnerId: string | null,
+  towerThreats: TowerThreat[],
+) {
   return (position: CellPosition) => {
     const cell = state.scenario.cells[position.row]?.[position.column]
     if (!cell) return Number.POSITIVE_INFINITY
     const terrainCost = squadMovementOrderCost(squad, cell)
     const object = cell.object
+    const exposureCost = towerExposureAt(state, position, towerThreats)
     if (!targetOwnerId || !object || object.ownerId !== targetOwnerId
-      || (object.type !== 'building' && object.type !== 'castle')) return terrainCost
+      || (object.type !== 'building' && object.type !== 'castle')) return terrainCost + exposureCost
     const incomingDamageMultiplier = object.type === 'building'
       ? buildingRules[object.kind].incomingDamageMultiplier ?? 1
       : 1
     const effectiveDamage = Math.max(1, baseMeleeDamage(squad) * incomingDamageMultiplier)
     const breachOrders = Math.ceil(object.hitPoints / effectiveDamage)
-    return terrainCost + breachOrders * aiTacticalConfig.siege.breachOrderWeight
+    return terrainCost + exposureCost + breachOrders * aiTacticalConfig.siege.breachOrderWeight
   }
 }
 
@@ -207,15 +265,16 @@ function assaultCellCost(state: MatchState, squad: SquadObject, targetOwnerId: s
  * number of attacks needed to open a structure, so the AI does not blindly
  * prefer either a long detour or the nearest wall.
  */
-export function assaultPathFor(
+function assaultPathWithThreats(
   state: MatchState,
   navigationMap: GameMap,
   squad: SquadObject,
   from: CellPosition,
   to: CellPosition,
   targetOwnerId: string | null,
+  towerThreats: TowerThreat[],
 ) {
-  const cellCost = assaultCellCost(state, squad, targetOwnerId)
+  const cellCost = assaultCellCost(state, squad, targetOwnerId, towerThreats)
   return findMovementPath(navigationMap, from, to, {
     ownerId: squad.ownerId,
     canEnterOccupiedCell: (position) => {
@@ -227,26 +286,113 @@ export function assaultPathFor(
   })
 }
 
-function assaultPathCost(state: MatchState, squad: SquadObject, path: CellPosition[], targetOwnerId: string | null) {
-  const cellCost = assaultCellCost(state, squad, targetOwnerId)
+export function assaultPathFor(
+  state: MatchState,
+  navigationMap: GameMap,
+  squad: SquadObject,
+  from: CellPosition,
+  to: CellPosition,
+  targetOwnerId: string | null,
+) {
+  return assaultPathWithThreats(
+    state,
+    navigationMap,
+    squad,
+    from,
+    to,
+    targetOwnerId,
+    towerThreatsFor(state, squad.ownerId),
+  )
+}
+
+function assaultPathCost(
+  state: MatchState,
+  squad: SquadObject,
+  path: CellPosition[],
+  targetOwnerId: string | null,
+  towerThreats: TowerThreat[],
+) {
+  const cellCost = assaultCellCost(state, squad, targetOwnerId, towerThreats)
   return path.slice(1).reduce((sum, position) => sum + cellCost(position), 0)
 }
 
-function routeBlockerFor(state: MatchState, squad: { position: CellPosition; object: SquadObject }, targetOwnerId: string | null) {
+interface AssaultRouteIntent {
+  path: CellPosition[]
+  blocker: CellPosition | null
+}
+
+function assaultRouteIntentFor(state: MatchState, squad: { position: CellPosition; object: SquadObject }, targetOwnerId: string | null): AssaultRouteIntent | null {
   const target = targetOwnerId ? castlePositionFor(state.scenario, targetOwnerId) : null
   if (!target) return null
+  const towerThreats = towerThreatsFor(state, squad.object.ownerId)
   const paths = [...approachDestinations(state, target, 'assault'), target]
     .flatMap((destination) => {
-      const path = assaultPathFor(state, state.scenario.cells, squad.object, squad.position, destination, targetOwnerId)
-      return path ? [{ path, cost: assaultPathCost(state, squad.object, path, targetOwnerId) }] : []
+      const path = assaultPathWithThreats(state, state.scenario.cells, squad.object, squad.position, destination, targetOwnerId, towerThreats)
+      return path ? [{ path, cost: assaultPathCost(state, squad.object, path, targetOwnerId, towerThreats) }] : []
     })
     .sort((first, second) => first.cost - second.cost || first.path.length - second.path.length)
   const path = paths[0]?.path
   if (!path) return null
-  return path.slice(1).find((position) => {
+  const blocker = path.slice(1).find((position) => {
     const object = objectAt(state, position)
     return object?.type === 'building' && object.ownerId === targetOwnerId
   }) ?? null
+  return { path, blocker }
+}
+
+function deterministicOpportunityRoll(state: MatchState, profile: AiProfileRules, from: CellPosition, target: CellPosition) {
+  let hash = (state.scenario.seed ^ state.turn) >>> 0
+  for (const character of profile.id) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0
+  for (const value of [from.column, from.row, target.column, target.row]) {
+    hash ^= value + 0x9e3779b9 + (hash << 6) + (hash >>> 2)
+    hash >>>= 0
+  }
+  return hash / 0xffffffff
+}
+
+function localOpportunityThreat(state: MatchState, ownerId: string, target: CellPosition) {
+  return aiObjectEntries(state.scenario).reduce((sum, entry) => {
+    if (entry.object.ownerId === ownerId
+      || positionDistance(entry.position, target) > aiTacticalConfig.raid.opportunityThreatRadius) return sum
+    if (entry.object.type === 'squad') {
+      return sum + troopCompositionPower(entry.object.units, squadHealth(entry.object))
+    }
+    if (entry.object.type === 'building' && entry.object.kind === 'tower' && entry.object.garrison?.archers) {
+      return sum + troopCompositionPower({
+        militia: 0,
+        spearmen: 0,
+        archers: entry.object.garrison.archers,
+        knights: 0,
+      }, entry.object.garrison.health)
+    }
+    return sum
+  }, 0)
+}
+
+function isOpportunisticStructureAttack(
+  state: MatchState,
+  profile: AiProfileRules,
+  squad: { position: CellPosition; object: SquadObject },
+  target: { position: CellPosition; object: MapObject },
+  intent: AssaultRouteIntent | null,
+  damage: number,
+) {
+  if (target.object.type !== 'building' || !aiTacticalConfig.raid.targetValues[target.object.kind]
+    || !intent || damage <= 0) return false
+  const nearRoute = intent.path.some((position) => (
+    positionDistance(position, target.position) <= aiTacticalConfig.raid.opportunityPathRadius
+  ))
+  if (!nearRoute) return false
+  const attackOrders = Math.ceil(target.object.hitPoints / damage)
+  if (attackOrders > aiTacticalConfig.raid.opportunityMaximumOrders) return false
+  const ownPower = troopCompositionPower(squad.object.units, squadHealth(squad.object))
+  if (localOpportunityThreat(state, squad.object.ownerId, target.position)
+    > ownPower * aiTacticalConfig.raid.opportunityMaximumThreatRatio) return false
+  const chance = Math.min(
+    aiTacticalConfig.raid.opportunityMaximumChance,
+    aiTacticalConfig.raid.opportunityChance * profile.doctrine.raidBias,
+  )
+  return deterministicOpportunityRoll(state, profile, squad.position, target.position) < chance
 }
 
 function attackTargetsFor(state: MatchState, ownerId: string) {
@@ -271,7 +417,7 @@ function attackCandidates(
   const enemies = attackTargetsFor(state, ownerId)
   const candidates: TacticalCandidate[] = []
   for (const squad of squads) {
-    const routeBlocker = phase === 'assault' ? routeBlockerFor(state, squad, targetOwnerId) : null
+    const routeIntent = phase === 'assault' ? assaultRouteIntentFor(state, squad, targetOwnerId) : null
     const raidObjective = raidObjectives[positionKey(squad.position)]
     for (const enemy of enemies) {
       if (!countNode()) return candidates
@@ -279,22 +425,35 @@ function attackCandidates(
       if (moveOrAttackFailure(state, squad.position, enemy.position) !== null) continue
       const evaluation = evaluateCommand(state, command, phase, targetOwnerId)
       if (!evaluation) continue
+      const targetAfter = objectAt(evaluation.state, enemy.position)
+      const remainingTargetHealth = targetAfter?.ownerId === enemy.object.ownerId
+        ? objectHealth(targetAfter)
+        : 0
+      const damage = Math.max(0, objectHealth(enemy.object) - remainingTargetHealth)
       const penalty = worstReplyPenalty(evaluation.state, ownerId, countNode)
       const isStructure = enemy.object.type === 'building' || enemy.object.type === 'castle'
-      const blocksRoute = Boolean(routeBlocker && positionKey(routeBlocker) === positionKey(enemy.position))
+      const blocksRoute = Boolean(routeIntent?.blocker && samePosition(routeIntent.blocker, enemy.position))
       const isRaidTarget = Boolean(raidObjective?.targetCells.some((position) => samePosition(position, enemy.position)))
       const dangerousTower = enemy.object.type === 'building' && enemy.object.kind === 'tower' && (enemy.object.garrison?.archers ?? 0) > 0
+      const threatensRoute = dangerousTower && Boolean(routeIntent?.path.some((position) => (
+        towerHasLineOfFire(state.scenario.cells, enemy.position, position)
+      )))
       const finishableSquad = enemy.object.type === 'squad'
         && (healthShare(enemy.object) <= aiTacticalConfig.formation.finisherHealthShare
           || squadSize(enemy.object) <= aiTacticalConfig.formation.finisherMaximumSize)
       const finisherAdjustment = finishableSquad
         ? aiTacticalConfig.formation.finisherUtility * profile.doctrine.finisherBias
         : 0
+      const opportunityAttack = phase === 'assault' && isOpportunisticStructureAttack(
+        state, profile, squad, enemy, routeIntent, damage,
+      )
+      if (phase === 'assault' && isStructure && enemy.object.type !== 'castle'
+        && !blocksRoute && !isRaidTarget && !threatensRoute && !opportunityAttack) continue
       const routeAdjustment = blocksRoute ? aiTacticalConfig.siege.routeBlockerPriorityBonus
         : isRaidTarget ? aiTacticalConfig.raid.targetAttackBonus
-          : phase === 'assault' && isStructure && enemy.object.type !== 'castle' && !dangerousTower
-            ? -aiTacticalConfig.siege.irrelevantStructurePenalty
-            : 0
+          : threatensRoute ? aiTacticalConfig.siege.routeThreatPriorityBonus
+            : opportunityAttack ? aiTacticalConfig.raid.opportunityAttackBonus
+              : 0
       candidates.push({
         command,
         score: evaluation.score - penalty + routeAdjustment + finisherAdjustment,
@@ -304,7 +463,8 @@ function attackCandidates(
             ? ['route-blocker']
             : isRaidTarget
               ? [...raidObjective!.factors, 'raid-target']
-              : routeAdjustment < 0 ? ['off-route-structure'] : [])],
+              : threatensRoute ? ['route-fire-threat']
+                : opportunityAttack ? ['opportunity-strike'] : [])],
       })
     }
   }
@@ -501,6 +661,7 @@ function routeScore(
   role: AiSquadRole,
   memory: AiMemory,
   phase: AiStrategicPhase,
+  towerThreats: TowerThreat[],
 ) {
   const next = path[1]
   const nearby = nearbyFriendlyCount(squads, next, squad.position)
@@ -523,7 +684,11 @@ function routeScore(
     return sum + Math.max(0, route.rememberedDangerRadius - nearest)
       * Math.max(0, gameConfig.ai.memoryRouteAvoidanceTurns - age) * route.rememberedDangerUtility
   }, 0)
-  return -path.length * route.pathLengthPenalty + spreadValue + cohesionValue - knightForestPenalty - rememberedDanger
+  const towerExposure = phase === 'assault'
+    ? towerExposureAlong(state, path, towerThreats)
+    : 0
+  return -path.length * route.pathLengthPenalty + spreadValue + cohesionValue - knightForestPenalty
+    - rememberedDanger - towerExposure * aiTacticalConfig.siege.towerExposureRoutePenalty
 }
 
 function movementCandidates(
@@ -617,6 +782,7 @@ function movementCandidates(
     ? supportBand.minimum
     : preferredSupportAssemblyPower
   const supportReady = phase === 'assault' && assembledSupportPower >= supportAssemblyPower
+  const assaultTowerThreats = phase === 'assault' ? towerThreatsFor(state, ownerId) : []
   for (const [squadIndex, squad] of squads.entries()) {
     if (!countNode()) break
     const role = memory.squadRoles[positionKey(squad.position)] ?? 'assault'
@@ -686,7 +852,7 @@ function movementCandidates(
               cellCost: (_position, cell) => squadMovementOrderCost(squad.object, cell),
             })
           : phase === 'assault' && targetOwnerId && !waitingForSupport
-            ? assaultPathFor(state, navigationMap, squad.object, squad.position, destination, targetOwnerId)
+            ? assaultPathWithThreats(state, navigationMap, squad.object, squad.position, destination, targetOwnerId, assaultTowerThreats)
             : findMovementPath(navigationMap, squad.position, destination, { ownerId })
         if (!path || path.length < 2) continue
         const to = path[1]
@@ -698,7 +864,7 @@ function movementCandidates(
         const command: AiCommand = { type: 'move-or-attack', from: squad.position, to }
         const evaluation = evaluateCommand(state, command, phase, targetOwnerId)
         if (!evaluation) continue
-        const situational = routeScore(state, profile, squads, squad, path, role, memory, phase)
+        const situational = routeScore(state, profile, squads, squad, path, role, memory, phase, assaultTowerThreats)
         const defenseBonus = role === 'defender' && phase === 'defense'
           ? aiTacticalConfig.movement.defenderUtility
           : 0
@@ -831,14 +997,17 @@ function splitCandidate(state: MatchState, profile: AiProfileRules, memory: AiMe
     if (isTemporarilyBlocked(memory, to, state.turn)) continue
     const cell = navigationMap[to.row]?.[to.column]
     if (!cell || cell.landform === 'peak' || cell.object) continue
+    if (splitFailure(state, source.position, to, splitUnits) !== null) continue
     for (const firstDestination of approaches) {
       if (!countNode()) return best
       const firstPath = findMovementPath(navigationMap, source.position, firstDestination, { ownerId: state.activeParticipantId })
-      if (!firstPath) continue
+      if (!firstPath || firstPath.length < aiTacticalConfig.formation.splitMinimumRouteLength) continue
       for (const secondDestination of approaches) {
         if (!countNode()) return best
+        if (positionDistance(firstDestination, secondDestination)
+          < aiTacticalConfig.formation.splitMinimumDestinationSeparation) continue
         const secondPath = findMovementPath(navigationMap, to, secondDestination, { ownerId: state.activeParticipantId })
-        if (!secondPath) continue
+        if (!secondPath || secondPath.length < aiTacticalConfig.formation.splitMinimumRouteLength) continue
         const overlap = pathOverlap(firstPath, secondPath)
         if (overlap > aiTacticalConfig.formation.splitMaximumPathOverlap) continue
         const diversity = (1 - overlap) * aiTacticalConfig.formation.splitDiversityUtility * profile.doctrine.maneuverBias
