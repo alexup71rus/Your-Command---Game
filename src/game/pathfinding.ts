@@ -1,18 +1,13 @@
-import type { GameMap } from './map'
+import type { GameMap, MapCell } from './map'
+import { cardinalDirections } from './geometry'
 import { friendlyBarbicanPassage, terrainMovementOrderMultiplier } from './movement'
 import type { CellPosition } from './scenario'
 
-interface MovementPathOptions {
+export interface MovementPathOptions {
   canEnterOccupiedCell?: (position: CellPosition) => boolean
+  cellCost?: (position: CellPosition, cell: MapCell) => number
   ownerId?: string
 }
-
-const directions = [
-  { column: 1, row: 0 },
-  { column: -1, row: 0 },
-  { column: 0, row: 1 },
-  { column: 0, row: -1 },
-]
 
 const samePosition = (first: CellPosition, second: CellPosition) => first.column === second.column && first.row === second.row
 
@@ -71,13 +66,13 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
     const currentIndex = currentEntry.index
     if (currentIndex === targetIndex) break
     const current = { column: currentIndex % columns, row: Math.floor(currentIndex / columns) }
-    for (const direction of directions) {
+    for (const direction of cardinalDirections) {
       const next = { column: current.column + direction.column, row: current.row + direction.row }
       if (!insideMap(next)) continue
       const cell = map[next.row]?.[next.column]
       if (cell && cell.landform !== 'peak' && (!cell.object || options.canEnterOccupiedCell?.(next))) {
         const nextIndex = next.row * columns + next.column
-        const cost = currentEntry.cost + terrainMovementOrderMultiplier(cell)
+        const cost = currentEntry.cost + (options.cellCost?.(next, cell) ?? terrainMovementOrderMultiplier(cell))
         if (cost < distances[nextIndex]) {
           distances[nextIndex] = cost
           previous[nextIndex] = currentIndex
@@ -92,8 +87,8 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
         if (!passage) continue
         const landingIndex = landing.row * columns + landing.column
         const passageCost = currentEntry.cost
-          + terrainMovementOrderMultiplier(passage.middleCell)
-          + terrainMovementOrderMultiplier(passage.destination)
+          + (options.cellCost?.(passage.middle, passage.middleCell) ?? terrainMovementOrderMultiplier(passage.middleCell))
+          + (options.cellCost?.(landing, passage.destination) ?? terrainMovementOrderMultiplier(passage.destination))
         if (passageCost >= distances[landingIndex]) continue
         distances[landingIndex] = passageCost
         previous[landingIndex] = currentIndex

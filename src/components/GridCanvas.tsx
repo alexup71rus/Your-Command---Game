@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { aiAvatarPaths } from '../config/ai'
 import { gameConfig } from '../config/game'
 import { buildingRules, troopKinds } from '../config/rules'
 import {
@@ -14,7 +15,7 @@ import {
 import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game/map'
 import { maxSquadHealth, squadHealth } from '../game/match'
 import { squadMovementOrderCost, squadMovementOrderCostBetween } from '../game/movement'
-import { isCastleSiteValid, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
+import { isCastleSiteValid, type AiProfileId, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
 import { isCellVisible, isObjectVisible, visibleObjectAt, type VisibilityMap } from '../game/visibility'
 
 const CELL_SIZE = gameConfig.map.cellSize
@@ -24,6 +25,7 @@ interface GridCanvasProps {
   territories?: TerritoryMap
   regions?: StartRegion[]
   participants?: MatchParticipant[]
+  foundingOpponents?: Array<{ profileId: AiProfileId; region: StartRegion }>
   showTerritories?: boolean
   showGrid?: boolean
   territoryInspecting?: boolean
@@ -73,13 +75,23 @@ export function GridCanvas(props: GridCanvasProps) {
   const propsRef = useRef(props)
   const requestDrawRef = useRef<() => void>(() => undefined)
   const focusRef = useRef<(command: CameraCommand) => void>(() => undefined)
+  const opponentImagesRef = useRef(new Map<AiProfileId, HTMLImageElement>())
   const cameraCommand = props.cameraCommand
   const initialCameraCommandRef = useRef(cameraCommand)
   const mapRows = props.map.length
   const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.foundingOpponents, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
+  useEffect(() => {
+    props.foundingOpponents?.forEach(({ profileId }) => {
+      if (opponentImagesRef.current.has(profileId)) return
+      const image = new Image()
+      image.onload = () => requestDrawRef.current()
+      image.src = `${import.meta.env.BASE_URL}${aiAvatarPaths[profileId]}`
+      opponentImagesRef.current.set(profileId, image)
+    })
+  }, [props.foundingOpponents])
   useEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
@@ -600,6 +612,26 @@ export function GridCanvas(props: GridCanvasProps) {
             context.fillText(String(region.index + 1), center.x, center.y + 0.5)
           })
         }
+        if (current.mode === 'founding' && current.selectedRegionId) {
+          current.foundingOpponents?.forEach(({ profileId, region }) => {
+            const image = opponentImagesRef.current.get(profileId)
+            const center = worldToScreen({ x: (region.center.column + 0.5) * CELL_SIZE, y: (region.center.row + 0.5) * CELL_SIZE }, camera, viewport)
+            const radius = Math.max(18, Math.min(27, 18 * Math.sqrt(camera.zoom)))
+            context.save()
+            context.shadowColor = 'rgba(0, 0, 0, .62)'
+            context.shadowBlur = 12
+            context.fillStyle = '#172019'
+            context.beginPath(); context.arc(center.x, center.y, radius + 4, 0, Math.PI * 2); context.fill()
+            context.shadowColor = 'transparent'
+            context.beginPath(); context.arc(center.x, center.y, radius, 0, Math.PI * 2); context.clip()
+            if (image?.complete && image.naturalWidth > 0) context.drawImage(image, center.x - radius, center.y - radius, radius * 2, radius * 2)
+            else { context.fillStyle = region.color; context.fillRect(center.x - radius, center.y - radius, radius * 2, radius * 2) }
+            context.restore()
+            context.strokeStyle = region.color
+            context.lineWidth = 3
+            context.beginPath(); context.arc(center.x, center.y, radius + 2, 0, Math.PI * 2); context.stroke()
+          })
+        }
       }
 
       if (current.showGrid !== false) {
@@ -799,14 +831,14 @@ export function GridCanvas(props: GridCanvasProps) {
                 if (cell.vegetation && !target) break
                 const x = mapOrigin.x + column * cellSize
                 const y = mapOrigin.y + row * cellSize
-                if (!target && distance >= 2) {
+                if (!target && distance >= gameConfig.turn.archerMinimumRange) {
                   context.save()
                   context.fillStyle = 'rgba(210, 183, 103, .42)'
                   context.beginPath(); context.arc(x + cellSize * .5, y + cellSize * .5, Math.max(1.5, cellSize * .035), 0, Math.PI * 2); context.fill()
                   context.restore()
                 }
                 if (target) {
-                  if (distance >= 2 && target.ownerId !== source.ownerId) {
+                  if (distance >= gameConfig.turn.archerMinimumRange && target.ownerId !== source.ownerId) {
                     context.save()
                     context.fillStyle = 'rgba(176, 72, 58, .22)'; context.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2)
                     context.strokeStyle = '#d97860'; context.lineWidth = Math.max(1.5, Math.min(2.5, camera.zoom * 2)); context.setLineDash([3, 3]); context.strokeRect(x + 3, y + 3, Math.max(0, cellSize - 6), Math.max(0, cellSize - 6)); context.setLineDash([])

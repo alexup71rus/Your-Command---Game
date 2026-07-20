@@ -5,13 +5,23 @@ const en: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield and the number of domains. Your castle will stand where you decide to found the settlement.',
-    chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Participants', participantDescription: '1 player, the rest are NPCs',
-    humanAndNpc: '1 player + NPCs', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
+    chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Opponents', participantDescription: 'Selected rulers',
+    humanAndNpc: '1 player and opponents', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
     openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Choose a domain', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game',
     presets: {
       greenMarches: { name: 'Green Marches', description: 'Open plains, gentle heights and room for an economy.' },
       highlandPasses: { name: 'Highland Passes', description: 'Heights and narrow routes create natural defensive lines.' },
       woodedBorder: { name: 'Wooded Border', description: 'Dense forests divide domains and conceal lines of attack.' },
+    },
+  },
+  opponents: {
+    kicker: 'ROUND TABLE', title: 'Choose your opponents', description: 'Every ruler follows a distinct strategy and controls a separate domain.',
+    player: 'You', playerDescription: 'Founder of a new domain', selected: 'At the table', choose: 'Rulers', addOpponent: 'Choose opponent', removeOpponent: 'Remove opponent', confirm: 'Confirm roster', close: 'Close round table', playerMark: 'YOU', mapCapacity: 'The selected map supports up to {count} opponents.',
+    arsenal: { basic: 'Basic arsenal', tactical: 'Tactical arsenal', complete: 'Complete arsenal' },
+    profiles: {
+      radomir: { name: 'Radomir the Prudent', strategy: 'Builds a simple sustainable settlement and favors a direct concentrated advance.', toolkit: 'Militia · spearmen · basic economy' },
+      velislava: { name: 'Velislava of the Frontier', strategy: 'Fortifies passages, protects archers and maneuvers whenever the terrain rewards it.', toolkit: 'Farms · archers · walls · barbicans' },
+      svyatobor: { name: 'Svyatobor Ironhand', strategy: 'Plans several turns ahead and uses every military production chain.', toolkit: 'Iron · knights · market · tower garrisons' },
     },
   },
   founding: {
@@ -21,7 +31,8 @@ const en: LocaleDictionary = {
     chooseSite: 'Choose a cell on the map', validSite: 'Suitable castle site', invalidSite: 'A castle cannot be founded here', confirm: 'Confirm founding',
   },
   hud: {
-    state: 'Domain status', resources: 'Resources', people: 'Civilians', army: 'Recruited troops', turn: 'Turn', ordersAvailable: 'Orders available', workers: 'Employed', freePeople: 'Free', diverseDiet: 'Varied diet',
+    state: 'Domain status', resources: 'Resources', people: 'Civilians', army: 'Recruited troops', turn: 'Turn', ordersAvailable: 'Orders available', workers: 'Employed', freePeople: 'Free', diverseDiet: 'Varied diet', thinking: 'is planning', longThinking: 'is evaluating a complex position', yourTurn: 'Your turn',
+    aiPhase: { recovery: 'is restoring the economy', survival: 'is securing supplies', expansion: 'is developing the domain', mobilization: 'is mustering troops', assault: 'is advancing', regroup: 'is regrouping', defense: 'is defending the castle' },
   },
   tabs: [
     { id: 'buildings', label: 'Buildings' }, { id: 'barracks', label: 'Barracks' }, { id: 'castle', label: 'Castle' },
@@ -46,7 +57,7 @@ const en: LocaleDictionary = {
     cancel: 'Cancel', split: 'Split', dismiss: 'Dismiss', confirmDismiss: 'Confirm', garrison: 'Garrison', garrisonEnter: 'Enter', garrisonExit: 'Exit', towerAttack: 'Fire', towerRange: 'Range', towerSight: 'Sight', towerCapacity: 'Archers', armyLimit: 'Army', endTurn: 'End turn', opponentTurn: 'Opponent turn', endTurnHint: 'Production yields resources while civilians and troops consume food.', production: 'Production', foodDemand: 'Food use', civilianFoodDemand: 'Civilian food', buildingOutput: 'Building output', populationCapacity: 'Population capacity',
     workers: 'Workers', size: 'Size', forestNeighbors: 'Adjacent forest', farmCapacity: 'Farm capacity', supportRadius: 'Support radius', requiresMill: 'Requires a mill', processing: 'Processing', foodService: 'Serves civilians', serviceRadius: 'Service radius', workerProductionFull: 'The building is fully staffed.', workerProductionReduced: 'Too few workers: production is reduced.', workerProductionStopped: 'No workers: production has stopped.', workerProductionUnsupported: 'No active mill: production has stopped.', workerSupportIdle: 'No farms are linked, so no worker is needed yet.',
     taxes: 'Tax collection', taxRates: { none: 'No taxes', moderate: 'Moderate', extortionate: 'Extortionate' }, taxFoodShort: 'Food', taxOutputShort: 'Output', upkeep: 'Upkeep', nextTurn: 'After turn', stable: 'Supply is sufficient', deficit: 'Deficit expected', foodShortage: 'Food or service capacity will not meet demand', marketTitle: 'Market', marketDescription: 'Prices react to trade volume and reset after each turn.', marketPriceChangesIn: 'Price changes in {count}', marketUnitsToStep: '{count} to next tier', marketUnavailable: 'Demand is exhausted until next turn', foodSupply: 'Food supply', turnsOfSupply: 'About {count} turns of supply remain.', buy: 'Buy', sell: 'Sell',
-    victoryTitle: 'The domains are conquered', victoryDescription: 'Every foreign castle has fallen. The map remains available for inspection.', continue: 'Continue viewing', turnDesertion: 'A {unit} deserted because upkeep could not be paid.', turnStarvation: 'A civilian died from starvation.', turnCapacityLoss: 'A civilian left because housing or food service capacity was insufficient.', turnStarvationTroop: 'A {unit} died from starvation.',
+    victoryTitle: 'The domains are conquered', victoryDescription: 'Every foreign castle has fallen. The map remains available for inspection.', defeatTitle: 'Your castle has fallen', defeatDescription: 'The domain is lost. You may inspect the map before returning to the main menu.', continue: 'Continue viewing', turnDesertion: 'A {unit} deserted because upkeep could not be paid.', turnStarvation: 'A civilian died from starvation.', turnCapacityLoss: 'A civilian left because housing or food service capacity was insufficient.', turnStarvationTroop: 'A {unit} died from starvation.',
     previousItems: 'Previous buildings', nextItems: 'Next buildings', buildingCategories: { resources: 'Resources', food: 'Food', settlement: 'Settlement' }, previousTroops: 'Previous troops', nextTroops: 'Next troops',
     failures: {
       'game-over': 'The match has already ended.', 'not-owned': 'You do not own this object.', occupied: 'This cell is occupied.', 'invalid-terrain': 'The terrain is unsuitable for this action.',
@@ -73,7 +84,7 @@ const en: LocaleDictionary = {
     title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately', grid: 'Map grid', gridDescription: 'Show cell borders and a stronger line every ten rows', gridEnabled: 'Show', gridDisabled: 'Hide', mainMenu: 'Main menu', mainMenuDescription: 'Return to map selection', saveGame: 'Save and load', saveGameDescription: 'Create new slots and return to saved games', manageGames: 'Open games',
   },
   savedGames: {
-    kicker: 'GAMES', title: 'Save and load', close: 'Close saved games', empty: 'There are no saved games yet.', saveCurrent: 'Current game', saveCurrentDescription: 'Create a separate slot on the current turn.', saveUnavailable: 'Saving will be available after the opponent turn.', save: 'Save', loadSection: 'Load game', loadSectionDescription: 'The most recent saves are shown first.', slots: 'Slots', latest: 'Latest', load: 'Load', remove: 'Delete', turn: 'Turn', updated: 'Saved', saved: 'Game saved', saveFailed: 'Could not save the game', loadFailed: 'This save is corrupted or unavailable', readFailed: 'Could not read the saved game list', deleteFailed: 'Could not delete the saved game', loadTitle: 'Load this game?', loadDescription: 'Unsaved progress in the current game will be lost.', loadConfirm: 'Load', deleteTitle: 'Delete this save?', deleteDescription: 'This progress cannot be recovered.',
+    kicker: 'GAMES', title: 'Save and load', close: 'Close saved games', empty: 'There are no saved games yet.', saveCurrent: 'Current game', saveCurrentDescription: 'Create a separate slot on the current turn.', saveUnavailable: 'Saving will be available after the opponent turn.', save: 'Save', loadSection: 'Load game', loadSectionDescription: 'The most recent saves are shown first.', slots: 'Slots', latest: 'Latest', load: 'Load', remove: 'Delete', turn: 'Turn', updated: 'Saved', saved: 'Game saved', saveFailed: 'Could not save the game', loadFailed: 'This save is corrupted, unavailable, or belongs to an incompatible game version', readFailed: 'Could not read the saved game list', deleteFailed: 'Could not delete the saved game', loadTitle: 'Load this game?', loadDescription: 'Unsaved progress in the current game will be lost.', loadConfirm: 'Load', deleteTitle: 'Delete this save?', deleteDescription: 'This progress cannot be recovered.',
   },
   generator: {
     title: 'World generator', close: 'Close generator',
@@ -85,7 +96,7 @@ const en: LocaleDictionary = {
     plain: 'Plain', elevation: 'Height', forest: 'Forest', peak: 'Peak', seed: 'Generation seed',
     traversableHeights: 'Traversable heights', impassablePeaks: 'Impassable peaks', forestCoverage: 'Forest coverage', cells: 'cells',
     note: 'Paint large nodes on the preview. They spread smoothly across real cells; forests avoid impassable peaks and steep slopes.',
-    participants: 'Starting domains', regionsCalculating: 'Calculating domain borders…', regionsError: 'These settings do not leave enough suitable land', regionsUnbalanced: 'The domains could not be divided fairly — change the terrain or seed', regionsUnviable: 'The domains do not have the minimum room needed for early development', workerError: 'The background domain calculation failed.', retry: 'Retry calculation', saveError: 'The browser could not store this map. Free some space or check storage access.',
+    participants: 'Starting domains', participantLimit: 'A {size} × {size} map supports up to {count} domains.', regionsCalculating: 'Calculating domain borders…', regionsError: 'These settings do not leave enough suitable land', regionsUnbalanced: 'The domains could not be divided fairly — change the terrain or seed', regionsUnviable: 'The domains do not have the minimum room needed for early development', workerError: 'The background domain calculation failed.', retry: 'Retry calculation', saveError: 'The browser could not store this map. Free some space or check storage access.',
     newVariant: 'New variant', mapName: 'Map name', defaultMapName: 'My map', saveMap: 'Save to my maps', apply: 'Choose a domain',
   },
 }

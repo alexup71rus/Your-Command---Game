@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { LocaleDictionary } from '../config/localization'
-import { gameConfig } from '../config/game'
 import { createManualHeightGrid, generateMap, type GeneratorSettings, type ManualHeightGrid } from '../game/generator'
 import type { GameMap } from '../game/map'
 import { mapPresets } from '../game/presets'
@@ -9,6 +8,8 @@ import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
 import { ConfirmDialog } from './ui/ConfirmDialog'
+import { aiAvatarPaths } from '../config/ai'
+import type { AiProfileId } from '../game/scenario'
 
 const previewCache = new Map<string, GameMap>()
 const defaultPreviewGrid = createManualHeightGrid()
@@ -92,9 +93,10 @@ interface StartMenuProps {
   selectedMap: MapSelection
   savedMaps: SavedMapDefinition[]
   participantCount: number
+  opponentProfileIds: AiProfileId[]
   onMapChange: (selection: MapSelection) => void
   onDeleteSavedMap: (id: string) => void
-  onParticipantChange: (count: number) => void
+  onOpenOpponents: () => void
   onOpenGenerator: () => void
   onStart: (scenario: MapScenario) => void
   hasSavedGames: boolean
@@ -103,7 +105,7 @@ interface StartMenuProps {
   utilityControls: ReactNode
 }
 
-export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, onMapChange, onDeleteSavedMap, onParticipantChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, storageFeedback, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, onMapChange, onDeleteSavedMap, onOpenOpponents, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, storageFeedback, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
@@ -179,11 +181,7 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
         </div>
 
         <footer className="match-action-bar">
-          <div className="participant-control"><span><strong>{text.participants}</strong><small>{text.participantDescription}</small></span><div className="participant-picker" role="group" aria-label={text.participants}>
-            {Array.from({ length: gameConfig.match.maxParticipants - gameConfig.match.minParticipants + 1 }, (_, index) => gameConfig.match.minParticipants + index).map((count) => (
-              <button type="button" key={count} className={participantCount === count ? 'active' : ''} aria-label={`${count} · ${text.humanAndNpc}`} aria-pressed={participantCount === count} onClick={() => onParticipantChange(count)}><strong>{count}</strong></button>
-            ))}
-          </div></div>
+          <button type="button" className="participant-control opponent-control" onClick={onOpenOpponents}><span><strong>{text.participants}</strong><small>{text.participantDescription}</small></span><span className="opponent-avatar-stack" aria-label={`${participantCount} · ${text.humanAndNpc}`}>{opponentProfileIds.map((profileId) => <img key={profileId} src={`${import.meta.env.BASE_URL}${aiAvatarPaths[profileId]}`} alt="" />)}<b>{opponentProfileIds.length}</b></span></button>
           <div className="match-primary-actions">
             {hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}</button>}
             <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : text.start}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>

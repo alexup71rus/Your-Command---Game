@@ -1,7 +1,7 @@
 {
   "name": "your-command",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "homepage": "https://alexup71rus.github.io/Your-Command---Game/",
   "repository": {
     "type": "git",
@@ -18,7 +18,8 @@
     "precommit": "node scripts/precommit.mjs",
     "prepare": "node scripts/setup-hooks.mjs",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:ai": "VITE_RUN_LONG_AI_SIMULATIONS=1 vitest run src/game/ai/simulation.test.ts"
   },
   "dependencies": {
     "react": "^19.1.1",

@@ -31,6 +31,23 @@ export interface LocaleDictionary {
     loadGame: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
+  opponents: {
+    title: string
+    kicker: string
+    description: string
+    player: string
+    playerDescription: string
+    selected: string
+    choose: string
+    addOpponent: string
+    removeOpponent: string
+    confirm: string
+    close: string
+    playerMark: string
+    mapCapacity: string
+    arsenal: Record<AiArsenalTier, string>
+    profiles: Record<AiProfileId, { name: string; strategy: string; toolkit: string }>
+  }
   founding: {
     chooseTitle: string
     chooseDescription: string
@@ -57,6 +74,10 @@ export interface LocaleDictionary {
     workers: string
     freePeople: string
     diverseDiet: string
+    thinking: string
+    longThinking: string
+    yourTurn: string
+    aiPhase: Record<AiStrategicPhase, string>
   }
   tabs: Array<{ id: TabId; label: string }>
   game: {
@@ -158,6 +179,8 @@ export interface LocaleDictionary {
     sell: string
     victoryTitle: string
     victoryDescription: string
+    defeatTitle: string
+    defeatDescription: string
     continue: string
     turnDesertion: string
     turnStarvation: string
@@ -290,6 +313,7 @@ export interface LocaleDictionary {
     cells: string
     note: string
     participants: string
+    participantLimit: string
     regionsCalculating: string
     regionsError: string
     regionsUnbalanced: string
@@ -323,3 +347,6 @@ export async function loadLocale(locale: Locale) {
 }
 import type { BuildingKind, ResourceId, TroopKind } from '../game/map'
 import type { CommandFailure } from '../game/match'
+import type { AiProfileId } from '../game/scenario'
+import type { AiArsenalTier } from '../game/ai/model'
+import type { AiStrategicPhase } from '../game/ai/model'

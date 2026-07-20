@@ -3,16 +3,19 @@ import { resourceIds, troopKinds } from '../config/rules'
 import type { LocaleDictionary } from '../config/localization'
 import { gameConfig } from '../config/game'
 import { armyCapacity, civilianPopulationCapacityFor, humanDomain, totalArmySize, troopTotals, turnEconomyForecastFor, type MatchState } from '../game/match'
+import { aiAvatarPaths } from '../config/ai'
 
 interface GameHudProps {
   match: MatchState
   text: LocaleDictionary
   opponentTurn: boolean
+  aiBusy: boolean
+  aiSlow: boolean
   previewOrderCost: number
   onEndTurn: () => void
 }
 
-export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn }: GameHudProps) {
+export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, previewOrderCost, onEndTurn }: GameHudProps) {
   const domain = humanDomain(match)
   const forecast = useMemo(() => turnEconomyForecastFor(match, match.playerId), [match])
   const turnDelta = Object.fromEntries(resourceIds.map((resource) => [resource, (forecast?.resources[resource] ?? domain.resources[resource]) - domain.resources[resource]])) as Record<(typeof resourceIds)[number], number>
@@ -22,6 +25,14 @@ export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn
   const gameOver = match.status !== 'playing'
   const previewedOrders = Math.min(match.ordersRemaining, Math.max(0, previewOrderCost))
   const previewStart = match.ordersRemaining - previewedOrders
+  const activeParticipant = match.scenario.participants.find((participant) => participant.id === match.activeParticipantId)
+  const activeProfileId = activeParticipant?.kind === 'ai' ? activeParticipant.profileId : undefined
+  const activeAiPhase = activeParticipant?.kind === 'ai' ? match.aiMemory[activeParticipant.id]?.phase : undefined
+  const activeAiStatus = aiSlow
+    ? text.hud.longThinking
+    : activeAiPhase
+      ? text.hud.aiPhase[activeAiPhase]
+      : aiBusy ? text.hud.thinking : text.game.opponentTurn
   return (
     <>
       <header className="hud" aria-label={text.hud.state}>
@@ -41,6 +52,7 @@ export function GameHud({ match, text, opponentTurn, previewOrderCost, onEndTurn
         </section>
       </header>
       <section className={`hud-panel turn-panel${opponentTurn ? ' opponent-turn' : ''}`} aria-label={text.hud.turn} aria-busy={opponentTurn}>
+        {activeProfileId && <div className="active-opponent"><img src={`${import.meta.env.BASE_URL}${aiAvatarPaths[activeProfileId]}`} alt="" /><span><strong>{text.opponents.profiles[activeProfileId].name}</strong><small>{activeAiStatus}</small></span></div>}
         <div className="current-turn"><span>{text.hud.turn}</span><strong>{match.turn}</strong></div>
         <div className="order-status">
           <div className="order-markers" aria-label={`${text.hud.ordersAvailable}: ${match.ordersRemaining}${previewedOrders ? `. ${text.game.cost}: ${previewedOrders}` : ''}`}>

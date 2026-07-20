@@ -73,6 +73,23 @@ export const troopKinds: TroopKind[] = ['militia', 'spearmen', 'archers', 'knigh
 export const workerBuildingKinds: BuildingKind[] = ['mill', 'orchard', 'huntingLodge', 'farm', 'kitchen', 'lumberMill', 'quarry', 'mine', 'smelter']
 export const starvationTroopOrder: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
 
+/** Shared combat coefficients used by the authoritative domain and simulations. */
+export const combatRules = {
+  melee: {
+    hillDamageMultiplier: 1.12,
+    forestDamageMultiplier: 1.08,
+    defenderDamageDivisor: 2.2,
+    retaliationDamageDivisor: 3,
+  },
+  ranged: {
+    hillDamageMultiplier: 1.2,
+    forestCoverMultiplier: 0.75,
+    squadDamageDivisor: 2.5,
+    structureDamageMultiplier: 0.5,
+  },
+  casualtyOrder: ['militia', 'archers', 'spearmen', 'knights'] as TroopKind[],
+} as const
+
 export const buildingRules: Record<BuildingKind, BuildingRule> = {
   mill: {
     actionCost: 4,

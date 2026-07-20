@@ -1,4 +1,4 @@
-import { buildingRules, castleProduction, defaultTaxRate, marketPriceBatchSizes, marketPrices, resourceIds, starvationTroopOrder, startingResources, taxRates, tradeableResources, troopKinds, troopRules, workerBuildingKinds, type ResourceAmount, type TaxRate, type TradeResource } from '../config/rules'
+import { buildingRules, castleProduction, combatRules, defaultTaxRate, marketPriceBatchSizes, marketPrices, resourceIds, starvationTroopOrder, startingResources, taxRates, tradeableResources, troopKinds, troopRules, workerBuildingKinds, type ResourceAmount, type TaxRate, type TradeResource } from '../config/rules'
 import { gameConfig } from '../config/game'
 import type {
   BuildingKind,
@@ -13,7 +13,9 @@ import type {
   TroopKind,
 } from './map'
 import type { CellPosition, MapScenario, MatchParticipant } from './scenario'
+import { cardinalDirections } from './geometry'
 import { friendlyBarbicanPassage, squadMovementOrderCost, squadMovementOrderCostBetween } from './movement'
+import { createAiMemory, type AiMemory } from './ai/model'
 
 export interface DomainEconomy {
   resources: Record<ResourceId, number>
@@ -95,12 +97,14 @@ export interface MatchEvent {
 export interface MatchState {
   scenario: MapScenario
   playerId: string
+  activeParticipantId: string
   turn: number
   ordersRemaining: number
   domains: Record<string, DomainEconomy>
   status: MatchStatus
   lastEvent: MatchEvent | null
   lastTurnReports: Record<string, TurnReport>
+  aiMemory: Record<string, AiMemory>
 }
 
 export type CommandFailure =
@@ -376,12 +380,16 @@ export function createMatch(scenario: MapScenario): MatchState {
   return {
     scenario,
     playerId: player.id,
+    activeParticipantId: player.id,
     turn: 1,
     ordersRemaining: gameConfig.turn.maxOrders,
     domains,
     status: 'playing',
     lastEvent: null,
     lastTurnReports: {},
+    aiMemory: Object.fromEntries(scenario.participants
+      .filter((participant) => participant.kind === 'ai')
+      .map((participant) => [participant.id, createAiMemory()])),
   }
 }
 
@@ -391,6 +399,10 @@ export function participantForOwner(state: MatchState, ownerId: string): MatchPa
 
 export function humanDomain(state: MatchState) {
   return state.domains[state.playerId]
+}
+
+export function activeDomain(state: MatchState) {
+  return state.domains[state.activeParticipantId]
 }
 
 export function objectAt(state: MatchState, position: CellPosition) {
@@ -481,7 +493,7 @@ function commandGuard(state: MatchState, actionCost: number): CommandFailure | n
 export function buildingAvailabilityFailure(state: MatchState, kind: BuildingKind): CommandFailure | null {
   const guard = buildingCommandGuard(state, kind)
   if (guard) return guard
-  if (!hasResources(humanDomain(state).resources, buildingResourceCostFor(state, state.playerId, kind))) return 'not-enough-resources'
+  if (!hasResources(activeDomain(state).resources, buildingResourceCostFor(state, state.activeParticipantId, kind))) return 'not-enough-resources'
   return null
 }
 
@@ -489,19 +501,19 @@ function buildingCommandGuard(state: MatchState, kind: BuildingKind): CommandFai
   const rule = buildingRules[kind]
   const guard = commandGuard(state, rule.actionCost)
   if (guard) return guard
-  return rule.maxPerOwner && ownedBuildingCount(state, state.playerId, kind) >= rule.maxPerOwner ? 'building-limit' : null
+  return rule.maxPerOwner && ownedBuildingCount(state, state.activeParticipantId, kind) >= rule.maxPerOwner ? 'building-limit' : null
 }
 
-function playerRegionId(state: MatchState) {
-  return participantForOwner(state, state.playerId)?.regionId
+function activeRegionId(state: MatchState) {
+  return participantForOwner(state, state.activeParticipantId)?.regionId
 }
 
 function hasPotentialFarmSiteForMill(state: MatchState, millPosition: CellPosition) {
   const farmRule = buildingRules.farm
   const millRule = buildingRules.mill.farmSupport!
   const footprint = farmRule.footprint!
-  const regionId = playerRegionId(state)
-  if (ownedBuildingEntries(state, state.playerId, 'farm').some((farm) => buildingDistance({ kind: 'mill', position: millPosition }, farm) <= millRule.radius)) return true
+  const regionId = activeRegionId(state)
+  if (ownedBuildingEntries(state, state.activeParticipantId, 'farm').some((farm) => buildingDistance({ kind: 'mill', position: millPosition }, farm) <= millRule.radius)) return true
   for (let row = millPosition.row - millRule.radius - footprint.rows + 1; row <= millPosition.row + millRule.radius; row += 1) {
     for (let column = millPosition.column - millRule.radius - footprint.columns + 1; column <= millPosition.column + millRule.radius; column += 1) {
       const origin = { column, row }
@@ -524,12 +536,12 @@ export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, 
   const cells = positions.map((candidate) => cellAt(state, candidate))
   if (cells.some((cell) => !cell || cell.landform === 'peak')) return 'invalid-terrain'
   if (cells.some((cell) => cell?.object)) return 'occupied'
-  const regionId = playerRegionId(state)
+  const regionId = activeRegionId(state)
   if (positions.some((candidate) => state.scenario.territories[candidate.row]?.[candidate.column] !== regionId)) return 'outside-domain'
   if (rule.requiresFoodServiceAccess) {
     const inRange = state.scenario.cells.some((row, rowIndex) => row.some((cell, column) => {
       const object = cell.object
-      if (!object || object.ownerId !== state.playerId || !isPrimaryObjectCell(object, column, rowIndex)) return false
+      if (!object || object.ownerId !== state.activeParticipantId || !isPrimaryObjectCell(object, column, rowIndex)) return false
       const isServiceSource = object.type === 'castle' || (object.type === 'building' && (buildingRules[object.kind].foodServiceCapacity ?? 0) > 0)
       return isServiceSource && positions.some((candidate) => Math.abs(candidate.column - column) + Math.abs(candidate.row - rowIndex) <= gameConfig.economy.foodServiceRadius)
     }))
@@ -537,20 +549,18 @@ export function buildingPlacementFailure(state: MatchState, kind: BuildingKind, 
   }
   const placement = rule.placement
   if (rule.minimumAdjacentForestCells) {
-    const adjacentForestCells = new Set(positions.flatMap((candidate) => [
-      { column: candidate.column + 1, row: candidate.row },
-      { column: candidate.column - 1, row: candidate.row },
-      { column: candidate.column, row: candidate.row + 1 },
-      { column: candidate.column, row: candidate.row - 1 },
-    ]).filter((neighbor) => cellAt(state, neighbor)?.vegetation).map((neighbor) => `${neighbor.column}:${neighbor.row}`))
+    const adjacentForestCells = new Set(positions.flatMap((candidate) => cardinalDirections.map((direction) => ({
+      column: candidate.column + direction.column,
+      row: candidate.row + direction.row,
+    }))).filter((neighbor) => cellAt(state, neighbor)?.vegetation).map((neighbor) => `${neighbor.column}:${neighbor.row}`))
     if (adjacentForestCells.size < rule.minimumAdjacentForestCells) return 'invalid-terrain'
   }
   if (placement === 'hill' && cells.some((cell) => cell?.landform !== 'hill' || cell.vegetation)) return 'invalid-terrain'
   if (placement === 'plain' && cells.some((cell) => cell?.landform !== 'plain' || cell.vegetation)) return 'invalid-terrain'
   if (placement === 'open' && cells.some((cell) => cell?.vegetation)) return 'invalid-terrain'
   if (kind === 'mill' && !hasPotentialFarmSiteForMill(state, position)) return 'requires-farm-site'
-  if (rule.requiresMillSupport && !supportingMillFor(state, state.playerId, position, true)) return 'requires-support'
-  if (!hasResources(humanDomain(state).resources, buildingResourceCostFor(state, state.playerId, kind))) return 'not-enough-resources'
+  if (rule.requiresMillSupport && !supportingMillFor(state, state.activeParticipantId, position, true)) return 'requires-support'
+  if (!hasResources(activeDomain(state).resources, buildingResourceCostFor(state, state.activeParticipantId, kind))) return 'not-enough-resources'
   return null
 }
 
@@ -558,26 +568,26 @@ export function build(state: MatchState, kind: BuildingKind, position: CellPosit
   const failure = buildingPlacementFailure(state, kind, position)
   if (failure) return { ok: false, state, reason: failure }
   const rule = buildingRules[kind]
-  const constructionCost = buildingResourceCostFor(state, state.playerId, kind)
+  const constructionCost = buildingResourceCostFor(state, state.activeParticipantId, kind)
   const footprint = rule.footprint
   const object: BuildingObject = {
     type: 'building',
     kind,
-    ownerId: state.playerId,
+    ownerId: state.activeParticipantId,
     hitPoints: rule.hitPoints,
     maxHitPoints: rule.hitPoints,
     constructionCost: { ...constructionCost },
     footprint: footprint ? { originColumn: position.column, originRow: position.row, ...footprint } : undefined,
   }
   const next = withCells(state, buildingFootprintPositions(kind, position), (cell) => ({ ...cell, object }), { kind: 'built', position }, rule.actionCost)
-  const domain = humanDomain(next)
+  const domain = activeDomain(next)
   return {
     ok: true,
     state: {
       ...next,
       domains: {
         ...next.domains,
-        [state.playerId]: {
+        [state.activeParticipantId]: {
           ...domain,
           resources: spendResources(domain.resources, constructionCost),
         },
@@ -590,7 +600,7 @@ function recruitmentSourcePositions(state: MatchState, troop: TroopKind) {
   const positions: CellPosition[] = []
   state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
-    if (object?.ownerId !== state.playerId) return
+    if (object?.ownerId !== state.activeParticipantId) return
     if ((troop === 'militia' && object.type === 'castle') || (object.type === 'building' && object.kind === 'barracks')) positions.push({ column, row: rowIndex })
   }))
   return positions
@@ -607,12 +617,12 @@ export function recruitmentFailure(state: MatchState, troop: TroopKind, quantity
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > gameConfig.turn.squadCapacity) return 'invalid-squad'
   const cell = cellAt(state, position)
   if (!cell || cell.landform === 'peak') return 'invalid-terrain'
-  if (cell.object && (cell.object.type !== 'squad' || cell.object.ownerId !== state.playerId)) return 'occupied'
+  if (cell.object && (cell.object.type !== 'squad' || cell.object.ownerId !== state.activeParticipantId)) return 'occupied'
   const existingSize = cell.object?.type === 'squad' ? squadSize(cell.object) : 0
   if (existingSize + quantity > gameConfig.turn.squadCapacity) return 'squad-full'
   if (!recruitmentSourcePositions(state, troop).some((source) => isAdjacent(source, position))) return 'requires-barracks'
-  const domain = humanDomain(state)
-  if (totalArmySize(state) + quantity > armyCapacity) return 'army-full'
+  const domain = activeDomain(state)
+  if (totalArmySize(state, state.activeParticipantId) + quantity > armyCapacity) return 'army-full'
   if (domain.population < rule.populationCost * quantity) return 'not-enough-population'
   if (!hasResources(domain.resources, rule.resourceCost, quantity)) return 'not-enough-resources'
   return null
@@ -626,16 +636,16 @@ export function recruit(state: MatchState, troop: TroopKind, quantity: number, p
   const units = current?.type === 'squad' ? { ...current.units } : emptyComposition()
   units[troop] = (units[troop] ?? 0) + quantity
   const health = (current?.type === 'squad' ? squadHealth(current) : 0) + rule.durability * quantity
-  const squad: SquadObject = { type: 'squad', ownerId: state.playerId, units, health }
+  const squad: SquadObject = { type: 'squad', ownerId: state.activeParticipantId, units, health }
   const next = withCell(state, position, (cell) => ({ ...cell, object: squad }), { kind: 'recruited', position, amount: quantity }, rule.actionCost)
-  const domain = humanDomain(next)
+  const domain = activeDomain(next)
   return {
     ok: true,
     state: {
       ...next,
       domains: {
         ...next.domains,
-        [state.playerId]: {
+        [state.activeParticipantId]: {
           ...domain,
           population: domain.population - rule.populationCost * quantity,
           resources: spendResources(domain.resources, rule.resourceCost, quantity),
@@ -646,7 +656,11 @@ export function recruit(state: MatchState, troop: TroopKind, quantity: number, p
 }
 
 function squadDamage(state: MatchState, squad: SquadObject, cell: MapCell) {
-  const terrainMultiplier = cell.landform === 'hill' ? 1.12 : cell.vegetation ? 1.08 : 1
+  const terrainMultiplier = cell.landform === 'hill'
+    ? combatRules.melee.hillDamageMultiplier
+    : cell.vegetation
+      ? combatRules.melee.forestDamageMultiplier
+      : 1
   const dietMultiplier = state.domains[squad.ownerId]?.diverseDiet ? gameConfig.economy.diverseDietDamageMultiplier : 1
   return troopKinds.reduce((sum, kind) => sum + (squad.units[kind] ?? 0) * troopRules[kind].damage, 0) * terrainMultiplier * dietMultiplier
 }
@@ -657,8 +671,7 @@ function applySquadDamage(squad: SquadObject, damage: number): SquadObject | nul
 
   const units = { ...squad.units }
   let remainingCapacity = maxSquadHealth({ units })
-  const casualtyOrder: TroopKind[] = ['militia', 'archers', 'spearmen', 'knights']
-  casualtyOrder.forEach((kind) => {
+  combatRules.casualtyOrder.forEach((kind) => {
     const durability = troopRules[kind].durability
     while ((units[kind] ?? 0) > 0 && remainingCapacity - durability >= nextHealth - 0.0001) {
       units[kind] = (units[kind] ?? 0) - 1
@@ -669,8 +682,20 @@ function applySquadDamage(squad: SquadObject, damage: number): SquadObject | nul
   return { ...squad, units, health: Math.min(nextHealth, remainingCapacity) }
 }
 
-function remainingEnemyCastles(cells: GameMap, playerId: string) {
-  return cells.flat().filter((cell) => cell.object?.type === 'castle' && cell.object.ownerId !== playerId).length
+export function hasLivingCastle(state: Pick<MatchState, 'scenario'>, ownerId: string) {
+  return state.scenario.cells.some((row) => row.some((cell) => cell.object?.type === 'castle' && cell.object.ownerId === ownerId))
+}
+
+function collapseDefeatedOwner(state: MatchState, ownerId: string) {
+  const cells = state.scenario.cells.map((row) => row.map((cell) => cell.object?.ownerId === ownerId ? { ...cell, object: undefined } : cell))
+  return { ...state, scenario: { ...state.scenario, cells } }
+}
+
+function afterCastleDestroyed(state: MatchState, defeatedOwnerId: string) {
+  if (defeatedOwnerId === state.playerId) return { ...state, status: 'lost' as const }
+  const collapsed = collapseDefeatedOwner(state, defeatedOwnerId)
+  const aiStillAlive = collapsed.scenario.participants.some((participant) => participant.kind === 'ai' && hasLivingCastle(collapsed, participant.id))
+  return aiStillAlive ? collapsed : { ...collapsed, status: 'won' as const }
 }
 
 function withRangedStructureDamage(state: MatchState, position: CellPosition, defender: BuildingObject | Extract<MapObject, { type: 'castle' }>, hitPoints: number, damage: number, orderCost: number) {
@@ -704,11 +729,13 @@ function withMeleeStructureDamage(state: MatchState, from: CellPosition, to: Cel
 export function isRangedAttack(state: MatchState, from: CellPosition, to: CellPosition) {
   const source = objectAt(state, from)
   const target = objectAt(state, to)
-  if (source?.type !== 'squad' || source.ownerId !== state.playerId || (source.units.archers ?? 0) < 1 || !target || target.ownerId === state.playerId) return false
+  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId || (source.units.archers ?? 0) < 1 || !target || target.ownerId === state.activeParticipantId) return false
   const columnDistance = Math.abs(to.column - from.column)
   const rowDistance = Math.abs(to.row - from.row)
   const distance = columnDistance + rowDistance
-  if ((columnDistance !== 0 && rowDistance !== 0) || distance < 2 || distance > gameConfig.turn.archerRange) return false
+  if ((columnDistance !== 0 && rowDistance !== 0)
+    || distance < gameConfig.turn.archerMinimumRange
+    || distance > gameConfig.turn.archerRange) return false
   const columnStep = Math.sign(to.column - from.column)
   const rowStep = Math.sign(to.row - from.row)
   for (let step = 1; step < distance; step += 1) {
@@ -729,12 +756,13 @@ function resolveRangedAttack(
 ): MatchState {
   const sourceCell = cellAt(state, from)
   const targetCell = cellAt(state, to)
-  const heightMultiplier = heightMultiplierOverride ?? (sourceCell.landform === 'hill' ? 1.2 : 1)
-  const coverMultiplier = targetCell.vegetation ? 0.75 : 1
+  const heightMultiplier = heightMultiplierOverride
+    ?? (sourceCell.landform === 'hill' ? combatRules.ranged.hillDamageMultiplier : 1)
+  const coverMultiplier = targetCell.vegetation ? combatRules.ranged.forestCoverMultiplier : 1
   const dietMultiplier = state.domains[attacker.ownerId]?.diverseDiet ? gameConfig.economy.diverseDietDamageMultiplier : 1
   const archerDamage = (attacker.units.archers ?? 0) * troopRules.archers.damage * heightMultiplier * coverMultiplier * dietMultiplier
   if (defender.type === 'squad') {
-    const damage = archerDamage / 2.5
+    const damage = archerDamage / combatRules.ranged.squadDamageDivisor
     const nextDefender = applySquadDamage(defender, damage)
     const losses = squadSize(defender) - (nextDefender ? squadSize(nextDefender) : 0)
     return withCell(state, to, (cell) => ({ ...cell, object: nextDefender ?? undefined }), { kind: nextDefender ? 'attacked' : 'destroyed', position: to, amount: losses }, orderCost)
@@ -742,10 +770,10 @@ function resolveRangedAttack(
   const damageMultiplier = defender.type === 'building'
     ? buildingRules[defender.kind].incomingDamageMultiplier ?? 1
     : 1
-  const damage = Math.max(1, Math.ceil(archerDamage * 0.5 * damageMultiplier))
+  const damage = Math.max(1, Math.ceil(archerDamage * combatRules.ranged.structureDamageMultiplier * damageMultiplier))
   const hitPoints = defender.hitPoints - damage
   const next = withRangedStructureDamage(state, to, defender, hitPoints, damage, orderCost)
-  if (hitPoints <= 0 && defender.type === 'castle' && remainingEnemyCastles(next.scenario.cells, state.playerId) === 0) return { ...next, status: 'won' }
+  if (hitPoints <= 0 && defender.type === 'castle') return afterCastleDestroyed(next, defender.ownerId)
   return next
 }
 
@@ -753,8 +781,8 @@ function resolveAttack(state: MatchState, from: CellPosition, to: CellPosition, 
   const fromCell = cellAt(state, from)
   const targetCell = cellAt(state, to)
   if (defender.type === 'squad') {
-    const nextDefender = applySquadDamage(defender, squadDamage(state, attacker, fromCell) / 2.2)
-    const nextAttacker = applySquadDamage(attacker, squadDamage(state, defender, targetCell) / 3)
+    const nextDefender = applySquadDamage(defender, squadDamage(state, attacker, fromCell) / combatRules.melee.defenderDamageDivisor)
+    const nextAttacker = applySquadDamage(attacker, squadDamage(state, defender, targetCell) / combatRules.melee.retaliationDamageDivisor)
     const attackerSurvives = nextAttacker !== null
     const defenderSurvives = nextDefender !== null
     const defenderLosses = squadSize(defender) - (nextDefender ? squadSize(nextDefender) : 0)
@@ -774,7 +802,7 @@ function resolveAttack(state: MatchState, from: CellPosition, to: CellPosition, 
   const damage = Math.max(1, Math.ceil(squadDamage(state, attacker, fromCell) * damageMultiplier))
   const hitPoints = defender.hitPoints - damage
   const next = withMeleeStructureDamage(state, from, to, attacker, defender, hitPoints, damage)
-  if (hitPoints <= 0 && defender.type === 'castle' && remainingEnemyCastles(next.scenario.cells, state.playerId) === 0) return { ...next, status: 'won' }
+  if (hitPoints <= 0 && defender.type === 'castle') return afterCastleDestroyed(next, defender.ownerId)
   return next
 }
 
@@ -782,7 +810,7 @@ export function moveOrAttackFailure(state: MatchState, from: CellPosition, to: C
   const gameGuard = commandGuard(state, 0)
   if (gameGuard) return gameGuard
   const source = objectAt(state, from)
-  if (source?.type !== 'squad' || source.ownerId !== state.playerId) return 'not-owned'
+  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId) return 'not-owned'
   const targetCell = cellAt(state, to)
   if (!targetCell || targetCell.landform === 'peak') return 'invalid-terrain'
   const target = targetCell.object
@@ -790,18 +818,18 @@ export function moveOrAttackFailure(state: MatchState, from: CellPosition, to: C
     const passageCost = squadMovementOrderCostBetween(state.scenario.cells, source, from, to)
     if (passageCost !== null) return commandGuard(state, passageCost)
     if (isRangedAttack(state, from, to)) return commandGuard(state, gameConfig.turn.movementOrderCost)
-    if (target && target.ownerId !== state.playerId && (source.units.archers ?? 0) > 0) {
+    if (target && target.ownerId !== state.activeParticipantId && (source.units.archers ?? 0) > 0) {
       const aligned = from.column === to.column || from.row === to.row
       const distance = Math.abs(from.column - to.column) + Math.abs(from.row - to.row)
       return aligned && distance <= gameConfig.turn.archerRange ? 'ranged-shot-blocked' : 'out-of-range'
     }
     return 'not-adjacent'
   }
-  if (target?.ownerId === state.playerId && target.type !== 'squad') return 'occupied'
-  if (target?.type === 'squad' && target.ownerId === state.playerId && squadSize(source) + squadSize(target) > gameConfig.turn.squadCapacity) return 'squad-full'
+  if (target?.ownerId === state.activeParticipantId && target.type !== 'squad') return 'occupied'
+  if (target?.type === 'squad' && target.ownerId === state.activeParticipantId && squadSize(source) + squadSize(target) > gameConfig.turn.squadCapacity) return 'squad-full'
   const orderCost = !target
     ? squadMovementOrderCost(source, targetCell)
-    : target.ownerId === state.playerId
+    : target.ownerId === state.activeParticipantId
       ? gameConfig.turn.squadReorganizationOrderCost
       : gameConfig.turn.movementOrderCost
   const orderGuard = commandGuard(state, orderCost)
@@ -825,7 +853,7 @@ export function moveOrAttack(state: MatchState, from: CellPosition, to: CellPosi
     }
   }
   if (!isAdjacent(from, to) && target) return { ok: true, state: resolveRangedAttack(state, from, to, source, target) }
-  if (target && target.ownerId !== state.playerId) return { ok: true, state: resolveAttack(state, from, to, source, target) }
+  if (target && target.ownerId !== state.activeParticipantId) return { ok: true, state: resolveAttack(state, from, to, source, target) }
   if (target?.type === 'squad') {
     const units = { ...target.units }
     troopKinds.forEach((kind) => { units[kind] = (units[kind] ?? 0) + (source.units[kind] ?? 0) })
@@ -845,7 +873,7 @@ export function splitFailure(state: MatchState, from: CellPosition, to: CellPosi
   const guard = commandGuard(state, gameConfig.turn.squadReorganizationOrderCost)
   if (guard) return guard
   const source = objectAt(state, from)
-  if (source?.type !== 'squad' || source.ownerId !== state.playerId) return 'not-owned'
+  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isAdjacent(from, to)) return 'not-adjacent'
   const targetCell = cellAt(state, to)
   if (!targetCell || targetCell.landform === 'peak') return 'invalid-terrain'
@@ -860,10 +888,10 @@ export function dismissFailure(state: MatchState, sourcePosition: CellPosition, 
   const guard = commandGuard(state, gameConfig.turn.squadReorganizationOrderCost)
   if (guard) return guard
   const source = objectAt(state, sourcePosition)
-  if (source?.type !== 'squad' || source.ownerId !== state.playerId) return 'not-owned'
+  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isValidComposition(units)) return 'invalid-squad'
   const amount = squadSize({ units })
-  if (amount < 1 || amount >= squadSize(source) || troopKinds.some((kind) => units[kind] > (source.units[kind] ?? 0))) return 'invalid-squad'
+  if (amount < 1 || amount > squadSize(source) || troopKinds.some((kind) => units[kind] > (source.units[kind] ?? 0))) return 'invalid-squad'
   return null
 }
 
@@ -877,21 +905,24 @@ export function dismissSquad(state: MatchState, sourcePosition: CellPosition, un
   const sourceMaxHealth = maxSquadHealth(source)
   const dismissedMaxHealth = maxSquadHealth({ units })
   const dismissedHealth = sourceMaxHealth > 0 ? squadHealth(source) * dismissedMaxHealth / sourceMaxHealth : 0
+  const remainingObject = squadSize({ units: remaining }) > 0
+    ? { ...source, units: remaining, health: Math.max(0, squadHealth(source) - dismissedHealth) }
+    : undefined
   const next = withCell(
     state,
     sourcePosition,
-    (cell) => ({ ...cell, object: { ...source, units: remaining, health: Math.max(0, squadHealth(source) - dismissedHealth) } }),
+    (cell) => ({ ...cell, object: remainingObject }),
     { kind: 'dismissed', position: sourcePosition, amount: squadSize({ units }) },
     gameConfig.turn.squadReorganizationOrderCost,
   )
-  const domain = humanDomain(next)
+  const domain = activeDomain(next)
   return {
     ok: true,
     state: {
       ...next,
       domains: {
         ...next.domains,
-        [state.playerId]: { ...domain, population: domain.population + squadSize({ units }) },
+        [state.activeParticipantId]: { ...domain, population: domain.population + squadSize({ units }) },
       },
     },
   }
@@ -914,10 +945,10 @@ export function garrisonFailure(state: MatchState, from: CellPosition, towerPosi
   if (guard) return guard
   if (!isAdjacent(from, towerPosition)) return 'not-adjacent'
   const squad = objectAt(state, from)
-  if (squad?.type !== 'squad' || squad.ownerId !== state.playerId) return 'not-owned'
+  if (squad?.type !== 'squad' || squad.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isValidComposition(squad.units) || (squad.units.archers ?? 0) < 1 || !Number.isFinite(squadHealth(squad)) || squadHealth(squad) <= 0) return 'invalid-squad'
   const tower = objectAt(state, towerPosition)
-  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.playerId) return 'not-owned'
+  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.activeParticipantId) return 'not-owned'
   if (tower.garrison && !isValidGarrison(tower.garrison)) return 'invalid-garrison'
   if ((tower.garrison?.archers ?? 0) >= towerRule.capacity) return 'squad-full'
   return null
@@ -961,7 +992,7 @@ export function ungarrisonFailure(state: MatchState, towerPosition: CellPosition
   if (guard) return guard
   if (!isAdjacent(towerPosition, to)) return 'not-adjacent'
   const tower = objectAt(state, towerPosition)
-  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.playerId) return 'not-owned'
+  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isValidGarrison(tower.garrison)) return 'requires-garrison'
   const targetCell = cellAt(state, to)
   if (!targetCell || targetCell.landform === 'peak') return 'invalid-terrain'
@@ -979,7 +1010,7 @@ export function ungarrisonTower(state: MatchState, towerPosition: CellPosition, 
   const units = { ...emptyComposition(), archers: garrison.archers }
   const squad: SquadObject = {
     type: 'squad',
-    ownerId: state.playerId,
+    ownerId: state.activeParticipantId,
     units,
     health: garrison.health,
   }
@@ -1001,10 +1032,10 @@ export function towerAttackFailure(state: MatchState, towerPosition: CellPositio
   const guard = commandGuard(state, towerRule.attackOrderCost)
   if (guard) return guard
   const tower = objectAt(state, towerPosition)
-  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.playerId) return 'not-owned'
+  if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isValidGarrison(tower.garrison)) return 'requires-garrison'
   const target = objectAt(state, to)
-  if (!target || target.ownerId === state.playerId) return 'requires-target'
+  if (!target || target.ownerId === state.activeParticipantId) return 'requires-target'
   const columnDistance = Math.abs(to.column - towerPosition.column)
   const rowDistance = Math.abs(to.row - towerPosition.row)
   const distance = columnDistance + rowDistance
@@ -1024,7 +1055,7 @@ export function towerAttack(state: MatchState, towerPosition: CellPosition, to: 
   const tower = objectAt(state, towerPosition) as BuildingObject
   const attacker: SquadObject = {
     type: 'squad',
-    ownerId: state.playerId,
+    ownerId: state.activeParticipantId,
     units: { ...emptyComposition(), archers: tower.garrison!.archers },
     health: tower.garrison!.health,
   }
@@ -1050,7 +1081,7 @@ export function splitSquad(state: MatchState, from: CellPosition, to: CellPositi
       from,
       to,
       { ...fromCell, object: { ...source, units: remaining, health: remainingHealth } },
-      { ...targetCell, object: { type: 'squad', ownerId: state.playerId, units: { ...units }, health: splitHealth } },
+      { ...targetCell, object: { type: 'squad', ownerId: state.activeParticipantId, units: { ...units }, health: splitHealth } },
       { kind: 'split', position: to, amount: squadSize({ units }) },
       gameConfig.turn.squadReorganizationOrderCost,
     ),
@@ -1070,12 +1101,12 @@ export function demolish(state: MatchState, position: CellPosition): CommandResu
   const guard = commandGuard(state, gameConfig.turn.demolishOrderCost)
   if (guard) return { ok: false, state, reason: guard }
   const object = objectAt(state, position)
-  if (!object || object.ownerId !== state.playerId) return { ok: false, state, reason: 'not-owned' }
+  if (!object || object.ownerId !== state.activeParticipantId) return { ok: false, state, reason: 'not-owned' }
   if (object.type === 'castle' || (object.type === 'building' && object.kind === 'tower' && object.garrison)) return { ok: false, state, reason: 'cannot-demolish' }
   if (object.type === 'squad' && !isValidComposition(object.units)) return { ok: false, state, reason: 'invalid-squad' }
   const positions = object.type === 'building' ? buildingObjectPositions(object, position) : [position]
   const next = withCells(state, positions, (cell) => ({ ...cell, object: undefined }), { kind: 'demolished', position }, gameConfig.turn.demolishOrderCost)
-  const domain = humanDomain(next)
+  const domain = activeDomain(next)
   const populationReturn = object.type === 'squad' ? squadSize(object) : 0
   const refund = demolitionRefundFor(object)
   return {
@@ -1084,7 +1115,7 @@ export function demolish(state: MatchState, position: CellPosition): CommandResu
       ...next,
       domains: {
         ...next.domains,
-        [state.playerId]: {
+        [state.activeParticipantId]: {
           ...domain,
           population: domain.population + populationReturn,
           resources: applyResources(domain.resources, refund),
@@ -1313,12 +1344,12 @@ export function turnResourceDeltaFor(state: MatchState, ownerId: string) {
 
 export function setTaxRate(state: MatchState, rate: TaxRate): CommandResult {
   if (state.status !== 'playing') return { ok: false, state, reason: 'game-over' }
-  const domain = humanDomain(state)
+  const domain = activeDomain(state)
   return {
     ok: true,
     state: {
       ...state,
-      domains: { ...state.domains, [state.playerId]: { ...domain, taxRate: rate } },
+      domains: { ...state.domains, [state.activeParticipantId]: { ...domain, taxRate: rate } },
       lastEvent: { kind: 'tax-changed' },
     },
   }
@@ -1364,9 +1395,9 @@ export function tradeQuoteFor(domain: DomainEconomy, resource: TradeResource, di
 export function trade(state: MatchState, marketPosition: CellPosition, resource: TradeResource, direction: 'buy' | 'sell', quantity: number): CommandResult {
   if (state.status !== 'playing') return { ok: false, state, reason: 'game-over' }
   const market = objectAt(state, marketPosition)
-  if (market?.type !== 'building' || market.kind !== 'market' || market.ownerId !== state.playerId) return { ok: false, state, reason: 'requires-market' }
+  if (market?.type !== 'building' || market.kind !== 'market' || market.ownerId !== state.activeParticipantId) return { ok: false, state, reason: 'requires-market' }
   if (!tradeableResources.includes(resource) || !Number.isSafeInteger(quantity) || quantity < 1) return { ok: false, state, reason: 'invalid-trade' }
-  const domain = humanDomain(state)
+  const domain = activeDomain(state)
   const quote = tradeQuoteFor(domain, resource, direction, quantity)
   if (quote.includesUnavailableUnits) return { ok: false, state, reason: 'market-exhausted' }
   const price = quote.total
@@ -1387,7 +1418,7 @@ export function trade(state: MatchState, marketPosition: CellPosition, resource:
     ok: true,
     state: {
       ...state,
-      domains: { ...state.domains, [state.playerId]: { ...domain, resources, marketActivity: { ...marketActivity, [activityKey]: nextActivity } } },
+      domains: { ...state.domains, [state.activeParticipantId]: { ...domain, resources, marketActivity: { ...marketActivity, [activityKey]: nextActivity } } },
       lastEvent: { kind: 'traded', amount: quantity },
     },
   }
@@ -1436,77 +1467,114 @@ function removeCheapestTroop(cells: GameMap, ownerId: string): { cells: GameMap;
 
 export function endTurn(state: MatchState): CommandResult {
   if (state.status !== 'playing') return { ok: false, state, reason: 'game-over' }
-  const domains = { ...state.domains }
-  const lastTurnReports: Record<string, TurnReport> = {}
-  let cells = state.scenario.cells
-  state.scenario.participants.forEach((participant) => {
-    const current = domains[participant.id]
-    if (!current) return
-    const turnState = { ...state, scenario: { ...state.scenario, cells }, domains }
-    const resolution = resolveTurnEconomy(turnState, participant.id)
-    if (!resolution) return
-    const { resources, food, upkeepPaid } = resolution
-    cells = resolution.cells
-    let population = current.population
-    let populationReason: TurnReport['populationReason'] = null
-    let starvation: TurnReport['starvation'] = null
-    const afterEconomyState = { ...turnState, scenario: { ...turnState.scenario, cells } }
-    if (food.fed) {
-      const capacityState = {
-        ...afterEconomyState,
-        domains: { ...afterEconomyState.domains, [participant.id]: { ...current, diverseDiet: food.diverseDiet } },
-      }
-      const civilianCapacity = civilianPopulationCapacityFor(capacityState, participant.id)
-      if (current.population > civilianCapacity) {
-        population = Math.max(civilianCapacity, current.population - Math.min(1, gameConfig.economy.starvationPopulationLoss))
-        populationReason = 'capacity'
-      } else if (current.population < civilianCapacity) {
-        const dietGrowth = food.diverseDiet ? gameConfig.economy.diverseDietPopulationGrowthBonus : 0
-        population = Math.min(civilianCapacity, current.population + gameConfig.economy.basePopulationGrowth + dietGrowth + (upkeepPaid ? populationGrowthFor(afterEconomyState, participant.id) : 0))
-        if (population > current.population) populationReason = 'growth'
-      }
-    } else {
-      const soldiers = totalArmySize(afterEconomyState, participant.id)
-      if (current.population > 0 && current.population + soldiers > gameConfig.economy.minimumPopulation) {
-        population = Math.max(0, current.population - gameConfig.economy.starvationPopulationLoss)
-        populationReason = 'starvation'
-        starvation = 'civilian'
-      } else if (current.population === 0 && soldiers > gameConfig.economy.minimumPopulation) {
-        const starvationResult = removeCheapestTroop(cells, participant.id)
-        cells = starvationResult.cells
-        starvation = starvationResult.loss
-      }
+  const ownerId = state.activeParticipantId
+  const current = state.domains[ownerId]
+  if (!current) return { ok: false, state, reason: 'not-owned' }
+  const resolution = resolveTurnEconomy(state, ownerId)
+  if (!resolution) return { ok: false, state, reason: 'not-owned' }
+  const { resources, food, upkeepPaid } = resolution
+  let cells = resolution.cells
+  let population = current.population
+  let populationReason: TurnReport['populationReason'] = null
+  let starvation: TurnReport['starvation'] = null
+  const afterEconomyState = { ...state, scenario: { ...state.scenario, cells } }
+  if (food.fed) {
+    const capacityState = {
+      ...afterEconomyState,
+      domains: { ...afterEconomyState.domains, [ownerId]: { ...current, diverseDiet: food.diverseDiet } },
     }
-    domains[participant.id] = { ...current, resources, population, diverseDiet: food.diverseDiet, marketActivity: emptyMarketActivity() }
-    lastTurnReports[participant.id] = {
-      ownerId: participant.id,
-      resourcesBefore: { ...current.resources },
-      production: resolution.production,
-      taxIncome: resolution.taxIncome,
-      upkeep: resolution.upkeep,
-      upkeepPaid,
-      processing: resolution.processing,
-      food,
-      resourcesAfter: { ...resources },
-      populationBefore: current.population,
-      populationAfter: population,
-      populationReason,
-      desertion: resolution.desertion,
-      starvation,
+    const civilianCapacity = civilianPopulationCapacityFor(capacityState, ownerId)
+    if (current.population > civilianCapacity) {
+      population = Math.max(civilianCapacity, current.population - Math.min(1, gameConfig.economy.starvationPopulationLoss))
+      populationReason = 'capacity'
+    } else if (current.population < civilianCapacity) {
+      const dietGrowth = food.diverseDiet ? gameConfig.economy.diverseDietPopulationGrowthBonus : 0
+      population = Math.min(civilianCapacity, current.population + gameConfig.economy.basePopulationGrowth + dietGrowth + (upkeepPaid ? populationGrowthFor(afterEconomyState, ownerId) : 0))
+      if (population > current.population) populationReason = 'growth'
     }
-  })
+  } else {
+    const soldiers = totalArmySize(afterEconomyState, ownerId)
+    if (current.population > 0 && current.population + soldiers > gameConfig.economy.minimumPopulation) {
+      population = Math.max(0, current.population - gameConfig.economy.starvationPopulationLoss)
+      populationReason = 'starvation'
+      starvation = 'civilian'
+    } else if (current.population === 0 && soldiers > gameConfig.economy.minimumPopulation) {
+      const starvationResult = removeCheapestTroop(cells, ownerId)
+      cells = starvationResult.cells
+      starvation = starvationResult.loss
+    }
+  }
+  const domains = {
+    ...state.domains,
+    [ownerId]: { ...current, resources, population, diverseDiet: food.diverseDiet, marketActivity: emptyMarketActivity() },
+  }
+  const report: TurnReport = {
+    ownerId,
+    resourcesBefore: { ...current.resources },
+    production: resolution.production,
+    taxIncome: resolution.taxIncome,
+    upkeep: resolution.upkeep,
+    upkeepPaid,
+    processing: resolution.processing,
+    food,
+    resourcesAfter: { ...resources },
+    populationBefore: current.population,
+    populationAfter: population,
+    populationReason,
+    desertion: resolution.desertion,
+    starvation,
+  }
+  const participants = state.scenario.participants
+  const currentIndex = Math.max(0, participants.findIndex((participant) => participant.id === ownerId))
+  let nextParticipant = participants[currentIndex]
+  for (let offset = 1; offset <= participants.length; offset += 1) {
+    const candidate = participants[(currentIndex + offset) % participants.length]
+    if (hasLivingCastle({ scenario: { ...state.scenario, cells } }, candidate.id)) {
+      nextParticipant = candidate
+      break
+    }
+  }
+  const wrappedToPlayer = nextParticipant.id === state.playerId && ownerId !== state.playerId
   return {
     ok: true,
     state: {
       ...state,
-      turn: state.turn + 1,
+      turn: state.turn + (wrappedToPlayer ? 1 : 0),
+      activeParticipantId: nextParticipant.id,
       ordersRemaining: gameConfig.turn.maxOrders,
       domains,
       scenario: { ...state.scenario, cells },
       lastEvent: { kind: 'turn-ended' },
-      lastTurnReports,
+      lastTurnReports: { ...state.lastTurnReports, [ownerId]: report },
     },
   }
+}
+
+export interface OwnerEconomyProjection {
+  state: MatchState
+  reports: TurnReport[]
+}
+
+/**
+ * Runs the authoritative end-of-turn economy repeatedly for one owner without
+ * advancing the real participant cycle. Used by forecasts and AI evaluation.
+ */
+export function projectOwnerEconomy(state: MatchState, ownerId: string, turns: number): OwnerEconomyProjection {
+  let projected: MatchState = { ...state, activeParticipantId: ownerId, ordersRemaining: gameConfig.turn.maxOrders }
+  const reports: TurnReport[] = []
+  for (let index = 0; index < Math.max(0, Math.floor(turns)); index += 1) {
+    const result = endTurn(projected)
+    if (!result.ok) break
+    const report = result.state.lastTurnReports[ownerId]
+    if (report) reports.push(report)
+    projected = {
+      ...result.state,
+      activeParticipantId: ownerId,
+      ordersRemaining: gameConfig.turn.maxOrders,
+      turn: state.turn + index + 1,
+    }
+  }
+  return { state: projected, reports }
 }
 
 export function defaultSplit(squad: SquadObject) {
@@ -1521,12 +1589,10 @@ export function defaultSplit(squad: SquadObject) {
 }
 
 export function positionsAround(position: CellPosition) {
-  return [
-    { column: position.column + 1, row: position.row },
-    { column: position.column - 1, row: position.row },
-    { column: position.column, row: position.row + 1 },
-    { column: position.column, row: position.row - 1 },
-  ]
+  return cardinalDirections.map((direction) => ({
+    column: position.column + direction.column,
+    row: position.row + direction.row,
+  }))
 }
 
 export function isSamePosition(a: CellPosition | null, b: CellPosition | null) {

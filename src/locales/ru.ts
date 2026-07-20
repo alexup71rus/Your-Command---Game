@@ -5,13 +5,23 @@ const ru: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Пошаговая стратегия', title: 'Ваш приказ',
     description: 'Выберите поле будущей войны и число владений. Замок появится только там, где вы решите основать своё поселение.',
-    chooseMap: 'Карты сражений', builtInMaps: 'Встроенные сценарии', myMaps: 'Мои карты', participants: 'Участники', participantDescription: '1 игрок, остальные — NPC',
-    humanAndNpc: '1 игрок + NPC', customMap: 'Свой мир', customMapDescription: 'Настройте рельеф, леса и стартовые владения вручную.',
+    chooseMap: 'Карты сражений', builtInMaps: 'Встроенные сценарии', myMaps: 'Мои карты', participants: 'Соперники', participantDescription: 'Выбранные правители',
+    humanAndNpc: '1 игрок и соперники', customMap: 'Свой мир', customMapDescription: 'Настройте рельеф, леса и стартовые владения вручную.',
     openGenerator: 'Открыть генератор', seedShort: 'семя', deleteSavedMap: 'Удалить карту', start: 'Перейти к выбору владения', starting: 'Рассчитываем владения…', mapError: 'Не удалось сбалансировать владения. Выберите другую карту или число участников.', mapUnviable: 'Во владениях недостаточно места для первых построек. Измените карту или число участников.', workerError: 'Не удалось рассчитать владения.', retry: 'Повторить', mapSaveFailed: 'Не удалось сохранить карту в этом браузере.', mapDeleteFailed: 'Не удалось удалить сохранённую карту.', mapReadFailed: 'Не удалось прочитать сохранённые карты из хранилища браузера.', loadGame: 'Загрузить игру',
     presets: {
       greenMarches: { name: 'Зелёные равнины', description: 'Открытые равнины, мягкие высоты и простор для экономики.' },
       highlandPasses: { name: 'Горные проходы', description: 'Высоты и узкие пути создают естественные линии обороны.' },
       woodedBorder: { name: 'Лесной рубеж', description: 'Густые леса разделяют владения и скрывают направления атаки.' },
+    },
+  },
+  opponents: {
+    kicker: 'КРУГЛЫЙ СТОЛ', title: 'Выберите соперников', description: 'Каждый правитель играет по собственной стратегии и занимает отдельное владение.',
+    player: 'Вы', playerDescription: 'Основатель нового владения', selected: 'За столом', choose: 'Правители', addOpponent: 'Выбрать соперника', removeOpponent: 'Убрать соперника', confirm: 'Подтвердить состав', close: 'Закрыть круглый стол', playerMark: 'ВЫ', mapCapacity: 'Для выбранной карты доступно соперников: до {count}.',
+    arsenal: { basic: 'Базовый арсенал', tactical: 'Тактический арсенал', complete: 'Полный арсенал' },
+    profiles: {
+      radomir: { name: 'Радомир Рассудительный', strategy: 'Развивает простое устойчивое поселение и предпочитает прямое сосредоточенное наступление.', toolkit: 'Ополчение · копейщики · базовая экономика' },
+      velislava: { name: 'Велислава Рубежная', strategy: 'Укрепляет проходы, бережёт стрелков и маневрирует там, где карта даёт преимущество.', toolkit: 'Фермы · лучники · стены · барбаканы' },
+      svyatobor: { name: 'Святобор Железная Рука', strategy: 'Планирует экономику на несколько ходов и использует все военные цепочки.', toolkit: 'Железо · рыцари · рынок · башенные гарнизоны' },
     },
   },
   founding: {
@@ -29,7 +39,8 @@ const ru: LocaleDictionary = {
     ordersAvailable: 'Доступно приказов',
     workers: 'Заняты',
     freePeople: 'Свободны',
-    diverseDiet: 'Разнообразное питание',
+    diverseDiet: 'Разнообразное питание', thinking: 'обдумывает ход', longThinking: 'оценивает сложную позицию', yourTurn: 'Ваш ход',
+    aiPhase: { recovery: 'восстанавливает хозяйство', survival: 'налаживает снабжение', expansion: 'развивает владение', mobilization: 'собирает войска', assault: 'ведёт наступление', regroup: 'перегруппировывается', defense: 'защищает замок' },
   },
   tabs: [
     { id: 'buildings', label: 'Здания' },
@@ -66,7 +77,7 @@ const ru: LocaleDictionary = {
     cancel: 'Отменить', split: 'Разделить', dismiss: 'Уволить', confirmDismiss: 'Подтвердить', garrison: 'Гарнизон', garrisonEnter: 'Ввести', garrisonExit: 'Вывести', towerAttack: 'Стрелять', towerRange: 'Дальность', towerSight: 'Обзор', towerCapacity: 'Лучников', armyLimit: 'Армия', endTurn: 'Завершить ход', opponentTurn: 'Ход противника', endTurnHint: 'Производства выдадут ресурсы, а жители и армия потребят пищу.', production: 'Производство', foodDemand: 'Расход пищи', civilianFoodDemand: 'Пища жителей', buildingOutput: 'Выпуск зданий', populationCapacity: 'Предел населения',
     workers: 'Работники', size: 'Размер', forestNeighbors: 'Лес рядом', farmCapacity: 'Обслуживает ферм', supportRadius: 'Радиус поддержки', requiresMill: 'Требует мельницу', processing: 'Переработка', foodService: 'Обслуживает жителей', serviceRadius: 'Радиус обслуживания', workerProductionFull: 'Все рабочие на месте.', workerProductionReduced: 'Назначена только часть работников.', workerProductionStopped: 'Нет работников: здание остановлено.', workerProductionUnsupported: 'Нет работающей мельницы: производство остановлено.', workerSupportIdle: 'Нет связанных ферм: работник пока не требуется.',
     taxes: 'Сбор налогов', taxRates: { none: 'Без налогов', moderate: 'Умеренные', extortionate: 'Грабительские' }, taxFoodShort: 'Еда', taxOutputShort: 'Выпуск', upkeep: 'Содержание', nextTurn: 'После хода', stable: 'Запас достаточен', deficit: 'Будет дефицит', foodShortage: 'Пища или обслуживание не покрывают потребность', marketTitle: 'Рынок', marketDescription: 'Цена меняется от объёма торговли и восстанавливается после хода.', marketPriceChangesIn: 'Новая цена через {count}', marketUnitsToStep: 'до шага {count}', marketUnavailable: 'Спрос исчерпан до следующего хода', foodSupply: 'Запас пищи', turnsOfSupply: 'Хватит примерно на {count} ход.', buy: 'Купить', sell: 'Продать',
-    victoryTitle: 'Владения покорены', victoryDescription: 'Все чужие замки разрушены. Карта остаётся доступной для осмотра.', continue: 'Продолжить осмотр', turnDesertion: 'Из-за нехватки содержания владение покинул боец: {unit}.', turnStarvation: 'Из-за голода погиб мирный житель.', turnCapacityLoss: 'Из-за нехватки мест или обслуживания владение покинул мирный житель.', turnStarvationTroop: 'Из-за голода погиб боец: {unit}.',
+    victoryTitle: 'Владения покорены', victoryDescription: 'Все чужие замки разрушены. Карта остаётся доступной для осмотра.', defeatTitle: 'Ваш замок пал', defeatDescription: 'Владение потеряно. Карту можно осмотреть перед возвращением в главное меню.', continue: 'Продолжить осмотр', turnDesertion: 'Из-за нехватки содержания владение покинул боец: {unit}.', turnStarvation: 'Из-за голода погиб мирный житель.', turnCapacityLoss: 'Из-за нехватки мест или обслуживания владение покинул мирный житель.', turnStarvationTroop: 'Из-за голода погиб боец: {unit}.',
     previousItems: 'Предыдущие постройки', nextItems: 'Следующие постройки', buildingCategories: { resources: 'Добыча', food: 'Пища', settlement: 'Поселение' }, previousTroops: 'Предыдущие войска', nextTroops: 'Следующие войска',
     failures: {
       'game-over': 'Партия уже завершена.', 'not-owned': 'Этот объект вам не принадлежит.', occupied: 'Клетка уже занята.', 'invalid-terrain': 'Для этого действия не подходит местность.',
@@ -130,7 +141,7 @@ const ru: LocaleDictionary = {
     manageGames: 'Открыть партии',
   },
   savedGames: {
-    kicker: 'ПАРТИИ', title: 'Сохранение и загрузка', close: 'Закрыть сохранения', empty: 'Сохранённых партий пока нет.', saveCurrent: 'Текущая партия', saveCurrentDescription: 'Создать отдельный слот на текущем ходу.', saveUnavailable: 'Сохранение станет доступно после хода противника.', save: 'Сохранить', loadSection: 'Загрузить партию', loadSectionDescription: 'Сначала показаны последние сохранения.', slots: 'Слотов', latest: 'Последнее', load: 'Загрузить', remove: 'Удалить', turn: 'Ход', updated: 'Сохранено', saved: 'Игра сохранена', saveFailed: 'Не удалось сохранить игру', loadFailed: 'Сохранение повреждено или недоступно', readFailed: 'Не удалось прочитать список сохранений', deleteFailed: 'Не удалось удалить сохранение', loadTitle: 'Загрузить эту партию?', loadDescription: 'Несохранённый прогресс текущей партии будет потерян.', loadConfirm: 'Загрузить', deleteTitle: 'Удалить сохранение?', deleteDescription: 'Восстановить этот прогресс будет невозможно.',
+    kicker: 'ПАРТИИ', title: 'Сохранение и загрузка', close: 'Закрыть сохранения', empty: 'Сохранённых партий пока нет.', saveCurrent: 'Текущая партия', saveCurrentDescription: 'Создать отдельный слот на текущем ходу.', saveUnavailable: 'Сохранение станет доступно после хода противника.', save: 'Сохранить', loadSection: 'Загрузить партию', loadSectionDescription: 'Сначала показаны последние сохранения.', slots: 'Слотов', latest: 'Последнее', load: 'Загрузить', remove: 'Удалить', turn: 'Ход', updated: 'Сохранено', saved: 'Игра сохранена', saveFailed: 'Не удалось сохранить игру', loadFailed: 'Сохранение повреждено, недоступно или создано несовместимой версией игры', readFailed: 'Не удалось прочитать список сохранений', deleteFailed: 'Не удалось удалить сохранение', loadTitle: 'Загрузить эту партию?', loadDescription: 'Несохранённый прогресс текущей партии будет потерян.', loadConfirm: 'Загрузить', deleteTitle: 'Удалить сохранение?', deleteDescription: 'Восстановить этот прогресс будет невозможно.',
   },
   generator: {
     title: 'Генератор мира', close: 'Закрыть генератор',
@@ -142,7 +153,7 @@ const ru: LocaleDictionary = {
     plain: 'Равнина', elevation: 'Высота', forest: 'Лес', peak: 'Пик', seed: 'Семя генерации',
     traversableHeights: 'Проходимые высоты', impassablePeaks: 'Непроходимые пики', forestCoverage: 'Лесное покрытие', cells: 'клеток',
     note: 'Рисуйте крупные узлы на превью. Они плавно распространяются на реальные клетки; лес избегает непроходимых пиков и крутых склонов.',
-    participants: 'Стартовые владения', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя', regionsUnviable: 'Во владениях нет минимального места для стартового развития', workerError: 'Фоновый расчёт владений завершился ошибкой.', retry: 'Повторить расчёт', saveError: 'Браузер не смог сохранить карту. Освободите место или проверьте доступ к хранилищу.',
+    participants: 'Стартовые владения', participantLimit: 'Для карты {size} × {size} доступно владений: до {count}.', regionsCalculating: 'Рассчитываем границы владений…', regionsError: 'Для этих настроек недостаточно пригодной земли', regionsUnbalanced: 'Не удалось честно разделить владения — измените рельеф или семя', regionsUnviable: 'Во владениях нет минимального места для стартового развития', workerError: 'Фоновый расчёт владений завершился ошибкой.', retry: 'Повторить расчёт', saveError: 'Браузер не смог сохранить карту. Освободите место или проверьте доступ к хранилищу.',
     newVariant: 'Новый вариант', mapName: 'Название карты', defaultMapName: 'Моя карта', saveMap: 'Сохранить в мои карты', apply: 'Перейти к выбору владения',
   },
 }

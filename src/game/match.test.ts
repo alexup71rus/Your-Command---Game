@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
-import { buildingRules, economyBuildingCategories, economyBuildingKinds, marketPrices, startingResources, taxRates, troopRules } from '../config/rules'
+import { buildingRules, castleProduction, economyBuildingCategories, economyBuildingKinds, marketPrices, startingResources, taxRates, troopRules } from '../config/rules'
 import type { BuildingKind, GameMap, TroopComposition } from './map'
 import {
   build,
@@ -64,7 +64,7 @@ function createScenario(size = 8): MapScenario {
     ],
     participants: [
       { id: 'player', kind: 'human', regionId: 'region-0', color: '#d2b45f' },
-      { id: 'npc-2', kind: 'npc', regionId: 'region-1', color: '#6f9c83' },
+      { id: 'npc-2', kind: 'ai', profileId: 'radomir', regionId: 'region-1', color: '#6f9c83' },
     ],
   }
 }
@@ -87,6 +87,19 @@ function placeBuilding(scenario: MapScenario, kind: BuildingKind, column: number
 
 function removePlayerCastle(scenario: MapScenario) {
   scenario.cells[1][1] = { ...scenario.cells[1][1], object: undefined }
+}
+
+function advanceRound(state: ReturnType<typeof createMatch>) {
+  let current = state
+  let steps = 0
+  do {
+    const advanced = endTurn(current)
+    if (!advanced.ok) return advanced
+    current = advanced.state
+    steps += 1
+  } while (current.status === 'playing' && current.activeParticipantId !== current.playerId && steps <= state.scenario.participants.length)
+  if (current.status === 'playing' && current.activeParticipantId !== current.playerId) throw new Error('round did not return to the human participant')
+  return { ok: true as const, state: current }
 }
 
 describe('match rules', () => {
@@ -145,13 +158,13 @@ describe('match rules', () => {
   it('survives four complete moderate-tax turns without a food building and starves on the fifth', () => {
     let state = createMatch(createScenario())
     for (let turn = 0; turn < 4; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       state = advanced.state
     }
     expect(state.domains.player.resources.flour + state.domains.player.resources.meat + state.domains.player.resources.fruit).toBe(2)
-    const fifth = endTurn(state)
+    const fifth = advanceRound(state)
     if (!fifth.ok) throw new Error('turn failed')
     expect(fifth.state.lastTurnReports.player.food.fed).toBe(false)
     expect(fifth.state.domains.player.population).toBe(gameConfig.turn.startingPopulation - 1)
@@ -174,7 +187,7 @@ describe('match rules', () => {
     expect(productionFor(built.state, 'player').meat).toBe(0)
     expect(match.scenario.cells[2][2].object).toBeUndefined()
 
-    const advanced = endTurn(built.state)
+    const advanced = advanceRound(built.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
     expect(advanced.state.turn).toBe(2)
@@ -288,7 +301,6 @@ describe('match rules', () => {
     expect(marketPrices.iron).toEqual({ buy: 10, sell: 6 })
     expect(marketPrices.iron.buy).toBe(Math.max(...Object.values(marketPrices).map(({ buy }) => buy)))
     const scenario = createScenario()
-    removePlayerCastle(scenario)
     placeBuilding(scenario, 'smelter', 0, 3)
     placeBuilding(scenario, 'market', 3, 3)
     const match = createMatch(scenario)
@@ -296,14 +308,14 @@ describe('match rules', () => {
     const bought = trade({ ...match, domains: { ...match.domains, player } }, { column: 3, row: 3 }, 'ore', 'buy', 5)
     expect(bought.ok).toBe(true)
     if (!bought.ok) return
-    const advanced = endTurn(bought.state)
+    const advanced = advanceRound(bought.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
-    expect(advanced.state.domains.player.resources).toMatchObject({ ore: 0, iron: 5, gold: 0 })
+    expect(advanced.state.domains.player.resources).toMatchObject({ ore: 0, iron: 5, gold: castleProduction.gold })
     const sold = trade(advanced.state, { column: 3, row: 3 }, 'iron', 'sell', 5)
     expect(sold.ok).toBe(true)
     if (!sold.ok) return
-    expect(sold.state.domains.player.resources.gold).toBe(30)
+    expect(sold.state.domains.player.resources.gold - (castleProduction.gold ?? 0)).toBe(30)
   })
 
   it('quotes every market unit, tracks domain activity and resets prices after a turn', () => {
@@ -786,13 +798,13 @@ describe('match rules', () => {
     const farm = build(mill.state, 'farm', { column: 0, row: 3 })
     if (!farm.ok) throw new Error('farm building failed')
     expect(farm.state.ordersRemaining).toBe(0)
-    const firstTurn = endTurn(farm.state)
+    const firstTurn = advanceRound(farm.state)
     if (!firstTurn.ok) throw new Error('turn failed')
     const house = build(firstTurn.state, 'house', { column: 2, row: 4 })
     if (!house.ok) throw new Error('house building failed')
     let state = house.state
     for (let turn = 0; turn < 5; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       state = advanced.state
@@ -848,7 +860,7 @@ describe('match rules', () => {
     placeBuilding(scenario, 'house', 0, 4)
     const initial = createMatch(scenario)
     const player = { ...initial.domains.player, taxRate: 'none' as const, resources: { ...initial.domains.player.resources, flour: 10, meat: 10, fruit: 10 } }
-    const fed = endTurn({ ...initial, domains: { ...initial.domains, player } })
+    const fed = advanceRound({ ...initial, domains: { ...initial.domains, player } })
     expect(fed.ok).toBe(true)
     if (!fed.ok) return
     expect(fed.state.domains.player.diverseDiet).toBe(true)
@@ -857,7 +869,7 @@ describe('match rules', () => {
     expect(fed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
 
     const withoutMeat = { ...fed.state.domains.player, resources: { ...fed.state.domains.player.resources, flour: 10, meat: 0, fruit: 10 } }
-    const lost = endTurn({ ...fed.state, domains: { ...fed.state.domains, player: withoutMeat } })
+    const lost = advanceRound({ ...fed.state, domains: { ...fed.state.domains, player: withoutMeat } })
     expect(lost.ok).toBe(true)
     if (!lost.ok) return
     expect(lost.state.domains.player.diverseDiet).toBe(false)
@@ -869,7 +881,7 @@ describe('match rules', () => {
     const simulate = (state: ReturnType<typeof createMatch>, turns = 20) => {
       let current = state
       for (let turn = 0; turn < turns; turn += 1) {
-        const advanced = endTurn(current)
+        const advanced = advanceRound(current)
         if (!advanced.ok) throw new Error('turn failed')
         expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
         expect(advanced.state.lastTurnReports.player.desertion).toBeNull()
@@ -941,7 +953,7 @@ describe('match rules', () => {
   it('leaves a recovery path after one expensive mistake and tolerates five militia', () => {
     const mistaken = build(createMatch(createScenario()), 'church', { column: 2, row: 2 })
     if (!mistaken.ok) throw new Error('expensive building failed')
-    const nextTurn = endTurn(mistaken.state)
+    const nextTurn = advanceRound(mistaken.state)
     if (!nextTurn.ok) throw new Error('turn failed')
     const orchard = build(nextTurn.state, 'orchard', { column: 0, row: 4 })
     if (!orchard.ok) throw new Error('orchard recovery failed')
@@ -956,7 +968,7 @@ describe('match rules', () => {
     state.domains.player.population = 5
     state.domains.player.taxRate = 'none'
     for (let turn = 0; turn < 20; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       expect(advanced.state.lastTurnReports.player.desertion).toBeNull()
@@ -1042,7 +1054,7 @@ describe('match rules', () => {
     const initialDemand = foodDemandFor(untaxed.state, 'player')
     let state = untaxed.state
     for (let turn = 0; turn < 6; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       state = advanced.state
     }
@@ -1182,7 +1194,7 @@ describe('match rules', () => {
     expect(recruit(match, 'militia', 1, { column: 1, row: 2 })).toMatchObject({ ok: false, reason: 'army-full' })
   })
 
-  it('dismisses only a strict partial integer composition for two orders', () => {
+  it('dismisses a partial or complete integer composition for two orders', () => {
     const scenario = createScenario()
     scenario.cells[2][1] = { ...scenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 6, spearmen: 0, archers: 0, knights: 0 }, health: 6 } }
     const match = createMatch(scenario)
@@ -1191,7 +1203,10 @@ describe('match rules', () => {
     expect(dismissed.state.ordersRemaining).toBe(6)
     expect(dismissed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
     expect(dismissed.state.scenario.cells[2][1].object).toMatchObject({ type: 'squad', units: { militia: 4 }, health: 4 })
-    expect(dismissSquad(match, { column: 1, row: 2 }, { militia: 6, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+    const disbanded = dismissSquad(match, { column: 1, row: 2 }, { militia: 6, spearmen: 0, archers: 0, knights: 0 })
+    if (!disbanded.ok) throw new Error('disband failed')
+    expect(disbanded.state.scenario.cells[2][1].object).toBeUndefined()
+    expect(disbanded.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 6)
     expect(dismissSquad(match, { column: 1, row: 2 }, { militia: Number.NaN, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
     expect(splitSquad(match, { column: 1, row: 2 }, { column: 2, row: 2 }, { militia: 1.5, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
   })

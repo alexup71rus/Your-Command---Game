@@ -33,6 +33,32 @@ describe('starting domains', () => {
   const defaultPreset = mapPresets[0]
   const map = generateMap(defaultPreset.settings, createManualHeightGrid())
 
+  it.each(mapPresets)(
+    'supports a 50×50 $id duel',
+    (preset) => {
+      const settings = { ...preset.settings, mapSize: 50 }
+      const compactMap = generateMap(settings, createManualHeightGrid())
+      expect(createMapScenario(compactMap, 2, settings.seed)).toMatchObject({ ok: true })
+    },
+  )
+
+  it.each([
+    { mapSize: 50, participants: 3 },
+    { mapSize: 74, participants: 3 },
+    { mapSize: 75, participants: 4 },
+    { mapSize: 99, participants: 4 },
+  ])('rejects $participants participants on a $mapSize×$mapSize map', ({ mapSize, participants }) => {
+    const settings = { ...defaultPreset.settings, mapSize }
+    const compactMap = generateMap(settings, createManualHeightGrid())
+    expect(createMapScenario(compactMap, participants, settings.seed)).toEqual({ ok: false, reason: 'not-enough-land' })
+  })
+
+  it('supports three participants from 75×75 and four from 100×100', () => {
+    const mediumSettings = { ...defaultPreset.settings, mapSize: 75 }
+    expect(createMapScenario(generateMap(mediumSettings, createManualHeightGrid()), 3, mediumSettings.seed)).toMatchObject({ ok: true })
+    expect(createMapScenario(map, 4, defaultPreset.settings.seed)).toMatchObject({ ok: true })
+  })
+
   it.each([2, 3, 4])('creates %i connected regions with castle sites', (participantCount) => {
     const result = createMapScenario(map, participantCount, defaultPreset.settings.seed)
     expect(result).toMatchObject({ ok: true })
@@ -91,7 +117,7 @@ describe('starting domains', () => {
     const castles = founded.cells.flat().filter((cell) => cell.object?.type === 'castle')
     expect(castles).toHaveLength(3)
     expect(founded.participants.filter((participant) => participant.kind === 'human')).toHaveLength(1)
-    expect(founded.participants.filter((participant) => participant.kind === 'npc')).toHaveLength(2)
+    expect(founded.participants.filter((participant) => participant.kind === 'ai')).toHaveLength(2)
     expect(new Set(founded.participants.map((participant) => participant.regionId)).size).toBe(3)
   })
 
@@ -214,7 +240,7 @@ describe('starting domains', () => {
 
   it.each([50, 150])('supports a generated square map with %i cells per side', (mapSize) => {
     const sizedMap = generateMap({ ...defaultPreset.settings, mapSize }, createManualHeightGrid())
-    const result = createMapScenario(sizedMap, 4, defaultPreset.settings.seed)
+    const result = createMapScenario(sizedMap, mapSize < 75 ? 2 : 4, defaultPreset.settings.seed)
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.scenario.cells).toHaveLength(mapSize)
   })

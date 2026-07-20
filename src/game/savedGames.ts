@@ -1,10 +1,23 @@
-import { gameConfig } from '../config/game'
+import { gameConfig, maximumParticipantsForMapSize } from '../config/game'
+import { aiPlannerConfig } from '../config/ai'
 import { buildingKinds, buildingRules, resourceIds, taxRates, tradeableResources, troopKinds, troopRules } from '../config/rules'
 import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './map'
 import type { MatchEvent, MatchState, TurnReport } from './match'
 import type { CellPosition, MapScenario, StartRegion } from './scenario'
+import {
+  aiLayoutKinds,
+  aiOpeningKinds,
+  aiProfileIds,
+  aiReservedSiteKinds,
+  aiSettlementZoneKinds,
+  aiSquadRoleKinds,
+  aiStrategicPhases,
+  aiWaveKinds,
+} from './ai/model'
 
-export const SAVE_VERSION = 8
+// Match saves are intentionally current-format only. Do not add implicit
+// defaults or migration branches here: incompatible records stay unreadable.
+export const CURRENT_SAVE_FORMAT_VERSION = 9
 
 export interface SavedGameSummary {
   id: string
@@ -15,13 +28,12 @@ export interface SavedGameSummary {
 }
 
 export interface SavedGameRecord extends SavedGameSummary {
-  version: typeof SAVE_VERSION
+  version: typeof CURRENT_SAVE_FORMAT_VERSION
   match: MatchState
 }
 
 const eventKinds: MatchEvent['kind'][] = ['built', 'recruited', 'moved', 'merged', 'split', 'dismissed', 'garrisoned', 'ungarrisoned', 'attacked', 'destroyed', 'demolished', 'traded', 'tax-changed', 'turn-ended']
 const statuses: MatchState['status'][] = ['playing', 'won', 'lost']
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -44,8 +56,51 @@ function isPosition(value: unknown, size: number): value is CellPosition {
     && isNonNegativeInteger(value.row) && value.row < size
 }
 
+function isPositionList(value: unknown, size: number, maximum = size * size) {
+  if (!Array.isArray(value) || value.length > maximum || !value.every((position) => isPosition(position, size))) return false
+  const keys = value.map((position) => `${position.column}:${position.row}`)
+  return new Set(keys).size === keys.length
+}
+
+function isSettlementPlan(value: unknown, size: number) {
+  if (!isRecord(value)
+    || typeof value.layout !== 'string' || !aiLayoutKinds.some((kind) => kind === value.layout)
+    || typeof value.opening !== 'string' || !aiOpeningKinds.some((kind) => kind === value.opening)
+    || !isPosition(value.front, size)
+    || !isPositionList(value.reservedCorridors, size)
+    || !isRecord(value.reservedSites)
+    || Object.keys(value.reservedSites).some((key) => !aiReservedSiteKinds.some((kind) => kind === key))
+    || Object.values(value.reservedSites).some((position) => position !== undefined && !isPosition(position, size))
+    || !isRecord(value.zones)
+    || Object.keys(value.zones).length !== aiSettlementZoneKinds.length) return false
+  const zones = value.zones
+  return aiSettlementZoneKinds.every((kind) => {
+    const zone = zones[kind]
+    if (!isRecord(zone)
+      || !isPositionList(zone.centers, size, 4)
+      || !isPositionList(zone.cells, size)
+      || !isNonNegativeInteger(zone.maxOrigins) || zone.maxOrigins < 1 || zone.maxOrigins > size * size
+      || !isRecord(zone.maxBuildings)
+      || Object.keys(zone.maxBuildings).some((building) => !buildingKinds.includes(building as BuildingKind))
+      || Object.values(zone.maxBuildings).some((maximum) => !isNonNegativeInteger(maximum) || Number(maximum) > size * size)
+      || !isNonNegativeInteger(zone.overflowRadius) || zone.overflowRadius > 8) return false
+    return true
+  })
+}
+
+function isSquadRoleRecord(value: unknown, size: number) {
+  if (!isRecord(value)) return false
+  return Object.entries(value).every(([key, role]) => {
+    const match = /^(\d+):(\d+)$/.exec(key)
+    if (!match || !aiSquadRoleKinds.some((kind) => kind === role)) return false
+    const column = Number(match[1])
+    const row = Number(match[2])
+    return Number.isSafeInteger(column) && Number.isSafeInteger(row) && column >= 0 && column < size && row >= 0 && row < size
+  })
+}
+
 function isResourceRecord(value: unknown): value is Record<ResourceId, number> {
-  return isRecord(value) && resourceIds.every((resource) => isFiniteNonNegative(value[resource]))
+  return isRecord(value) && resourceIds.every((resource) => isNonNegativeInteger(value[resource]))
 }
 
 function isResourceAmount(value: unknown) {
@@ -55,7 +110,7 @@ function isResourceAmount(value: unknown) {
 }
 
 function isSignedResourceRecord(value: unknown): value is Record<ResourceId, number> {
-  return isRecord(value) && resourceIds.every((resource) => typeof value[resource] === 'number' && Number.isFinite(value[resource]))
+  return isRecord(value) && resourceIds.every((resource) => Number.isSafeInteger(value[resource]))
 }
 
 function isMarketActivity(value: unknown) {
@@ -156,6 +211,7 @@ function isScenario(value: unknown): value is MapScenario {
   const participantCount = value.participantCount
   const size = value.cells.length
   if (size < gameConfig.generator.minMapSize || size > gameConfig.generator.maxMapSize) return false
+  if (participantCount > maximumParticipantsForMapSize(size)) return false
   if (!Array.isArray(value.territories) || value.territories.length !== size
     || !Array.isArray(value.regions) || value.regions.length !== value.participantCount
     || !Array.isArray(value.participants) || value.participants.length !== value.participantCount) return false
@@ -167,12 +223,16 @@ function isScenario(value: unknown): value is MapScenario {
   if (ownerIds.size !== participantCount || regionIds.size !== participantCount) return false
   if (!participants.every((participant) => (
     isBoundedString(participant.id, 64)
-    && (participant.kind === 'human' || participant.kind === 'npc')
+    && (participant.kind === 'human' || participant.kind === 'ai')
     && isBoundedString(participant.regionId, 64)
     && regionIds.has(participant.regionId)
     && typeof participant.color === 'string'
+    && (participant.kind === 'human'
+      ? participant.profileId === undefined
+      : typeof participant.profileId === 'string' && aiProfileIds.some((profileId) => profileId === participant.profileId))
   ))) return false
   if (participants.filter((participant) => participant.kind === 'human').length !== 1) return false
+  if (new Set(participants.flatMap((participant) => participant.kind === 'ai' ? [participant.profileId] : [])).size !== participantCount - 1) return false
   if (new Set(participants.map((participant) => participant.regionId)).size !== participantCount) return false
   if (!value.regions.every((region) => isRegion(region, regionIds, size))) return false
   const regions = value.regions as StartRegion[]
@@ -303,12 +363,15 @@ function isMatchState(value: unknown): value is MatchState {
   const owners = new Set(scenario.participants.map((participant) => participant.id))
   const human = scenario.participants.find((participant) => participant.kind === 'human')
   if (!isBoundedString(value.playerId, 64) || value.playerId !== human?.id
+    || !isBoundedString(value.activeParticipantId, 64) || !owners.has(value.activeParticipantId)
     || !isNonNegativeInteger(value.turn) || value.turn < 1
     || !isNonNegativeInteger(value.ordersRemaining) || value.ordersRemaining > gameConfig.turn.maxOrders
     || typeof value.status !== 'string' || !statuses.includes(value.status as MatchState['status'])
     || (value.lastEvent !== null && !isMatchEvent(value.lastEvent, size))
     || !isRecord(value.domains)
-    || !isRecord(value.lastTurnReports)) return false
+    || !isRecord(value.lastTurnReports)
+    || !isRecord(value.aiMemory)) return false
+  const turn = value.turn as number
   const domains = value.domains
   if (Object.keys(domains).length !== owners.size || ![...owners].every((owner) => {
     const domain = domains[owner]
@@ -334,12 +397,54 @@ function isMatchState(value: unknown): value is MatchState {
     const maximum = buildingRules[kind].maxPerOwner
     return maximum !== undefined && buildingCounts[owner][kind] > maximum
   }))) return false
+  const castleOwners = scenario.cells.flatMap((row) => row.flatMap((cell) => cell.object?.type === 'castle' ? [cell.object.ownerId] : []))
+  const castleOwnerSet = new Set(castleOwners)
+  const livingAiCount = scenario.participants.filter((participant) => participant.kind === 'ai' && castleOwnerSet.has(participant.id)).length
+  if (castleOwners.length !== castleOwnerSet.size) return false
+  if (value.status === 'playing' && (!castleOwnerSet.has(value.playerId) || livingAiCount < 1 || !castleOwnerSet.has(value.activeParticipantId))) return false
+  if (value.status === 'won' && (!castleOwnerSet.has(value.playerId) || livingAiCount !== 0)) return false
+  if (value.status === 'lost' && castleOwnerSet.has(value.playerId)) return false
+  const aiOwners = scenario.participants.filter((participant) => participant.kind === 'ai').map((participant) => participant.id)
+  const aiMemory = value.aiMemory as Record<string, unknown>
+  if (Object.keys(aiMemory).length !== aiOwners.length || !aiOwners.every((owner) => {
+    const memory = aiMemory[owner]
+    return isRecord(memory)
+      && (memory.targetOwnerId === null || (isBoundedString(memory.targetOwnerId, 64) && owners.has(memory.targetOwnerId) && memory.targetOwnerId !== owner))
+      && typeof memory.phase === 'string' && aiStrategicPhases.some((phase) => phase === memory.phase)
+      && (memory.settlementPlan === null || isSettlementPlan(memory.settlementPlan, size))
+      && isSquadRoleRecord(memory.squadRoles, size)
+      && typeof memory.wave === 'string' && aiWaveKinds.some((wave) => wave === memory.wave)
+      && isNonNegativeInteger(memory.lastTargetChangeTurn) && memory.lastTargetChangeTurn <= turn
+      && isNonNegativeInteger(memory.lastTaxChangeTurn) && memory.lastTaxChangeTurn <= turn
+      && isNonNegativeInteger(memory.lastArmyReorganizationTurn) && memory.lastArmyReorganizationTurn <= turn
+      && isNonNegativeInteger(memory.stableTurns) && memory.stableTurns <= turn + 1
+      && isNonNegativeInteger(memory.idleTurns) && memory.idleTurns <= turn + 1
+      && isNonNegativeInteger(memory.stalledTurns) && memory.stalledTurns <= turn + 1
+      && (memory.lastCancellationReason === null || (typeof memory.lastCancellationReason === 'string' && memory.lastCancellationReason.length <= 128))
+      && Array.isArray(memory.contacts)
+      && memory.contacts.length <= aiPlannerConfig.maximumRememberedContacts
+      && memory.contacts.every((contact) => isRecord(contact)
+        && isBoundedString(contact.ownerId, 64) && owners.has(contact.ownerId) && contact.ownerId !== owner
+        && (contact.kind === 'squad' || contact.kind === 'barracks')
+        && isPosition(contact.position, size)
+        && isNonNegativeInteger(contact.lastSeenTurn) && contact.lastSeenTurn <= turn
+        && (contact.kind === 'squad'
+          ? isComposition(contact.units) && compositionSize(contact.units) > 0 && compositionSize(contact.units) <= gameConfig.turn.squadCapacity
+            && isFiniteNonNegative(contact.health) && contact.health > 0 && contact.health <= compositionHealth(contact.units)
+          : contact.units === undefined && contact.health === undefined))
+      && Array.isArray(memory.blockedCells)
+      && memory.blockedCells.length <= aiPlannerConfig.maximumBlockedCells
+      && memory.blockedCells.every((entry) => isRecord(entry)
+        && isPosition(entry.position, size)
+        && isNonNegativeInteger(entry.expiresTurn)
+        && entry.expiresTurn <= turn + aiPlannerConfig.blockedCellMemoryTurns)
+  })) return false
   return Object.entries(value.lastTurnReports).every(([owner, report]) => owners.has(owner) && isTurnReport(report, owners, size) && report.ownerId === owner)
 }
 
 export function isSavedGameRecord(value: unknown): value is SavedGameRecord {
   if (!isRecord(value)
-    || value.version !== SAVE_VERSION
+    || value.version !== CURRENT_SAVE_FORMAT_VERSION
     || !isBoundedString(value.id)
     || !isBoundedString(value.name)
     || !isBoundedString(value.mapName)
@@ -347,14 +452,17 @@ export function isSavedGameRecord(value: unknown): value is SavedGameRecord {
     || value.turn < 1
     || !isNonNegativeInteger(value.updatedAt)
     || !isMatchState(value.match)) return false
-  return value.turn === value.match.turn && value.mapName === value.match.scenario.name
+  return value.turn === value.match.turn
+    && value.mapName === value.match.scenario.name
+    && value.match.activeParticipantId === value.match.playerId
 }
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let settled = false
-    const request = indexedDB.open(gameConfig.savedGames.databaseName, gameConfig.savedGames.version)
+    const request = indexedDB.open(gameConfig.savedGames.databaseName, gameConfig.savedGames.databaseSchemaVersion)
     request.onupgradeneeded = () => {
+      // This initializes the IndexedDB container; it does not migrate match data.
       const database = request.result
       if (!database.objectStoreNames.contains(gameConfig.savedGames.storeName)) {
         database.createObjectStore(gameConfig.savedGames.storeName, { keyPath: 'id' })
@@ -425,7 +533,7 @@ export async function saveGame(match: MatchState): Promise<SavedGameSummary> {
   const updatedAt = Date.now()
   const id = crypto.randomUUID()
   const mapName = match.scenario.name || 'Map'
-  const record: SavedGameRecord = { version: SAVE_VERSION, id, name: `${mapName} · ${match.turn}`, mapName, turn: match.turn, updatedAt, match }
+  const record: SavedGameRecord = { version: CURRENT_SAVE_FORMAT_VERSION, id, name: `${mapName} · ${match.turn}`, mapName, turn: match.turn, updatedAt, match }
   if (!isSavedGameRecord(record)) throw new Error('Current match state cannot be saved')
   const database = await openDatabase()
   try {
