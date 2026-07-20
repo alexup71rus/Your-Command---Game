@@ -19,7 +19,8 @@
     "prepare": "node scripts/setup-hooks.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "test:ai": "VITE_RUN_LONG_AI_SIMULATIONS=1 vitest run src/game/ai/simulation.test.ts"
+    "test:ai": "vitest run src/game/ai/combatScenarios.test.ts src/game/ai/economyScenarios.test.ts src/game/ai/planner.test.ts",
+    "test:stable": "vitest run --exclude src/game/ai/combatScenarios.test.ts --exclude src/game/ai/economyScenarios.test.ts"
   },
   "dependencies": {
     "react": "^19.1.1",

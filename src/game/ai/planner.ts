@@ -1,5 +1,6 @@
 import { aiPlannerConfig, aiProfiles } from '../../config/ai'
 import { gameConfig } from '../../config/game'
+import { economyBuildingKinds } from '../../config/rules'
 import { executeAiCommand } from './commands'
 import { aiWorldAnalysisKey, analyzeAiWorld, createSettlementPlan, type AiWorldAnalysis } from './analysis'
 import { createAiPerception } from './perception'
@@ -13,7 +14,13 @@ import {
   strategicPhaseFor,
   type StrategicCandidate,
 } from './strategy'
-import { assignSquadRoles, tacticalCandidates, waveFor } from './tactics'
+import {
+  assignSquadRoles,
+  selectTacticalCandidate,
+  tacticalCandidates,
+  tacticalMovementEdgeKey,
+  waveFor,
+} from './tactics'
 import { createAiMemory, type AiCommand, type AiMemory, type AiPlan, type AiPlanTraceEntry } from './model'
 import type { AiProfileId } from '../scenario'
 import { objectAt, type MatchState } from '../match'
@@ -23,6 +30,48 @@ interface SearchNode {
   candidates: StrategicCandidate[]
   bonus: number
   utility: number
+}
+
+export type AiPlanningMode = 'full' | 'development-only' | 'economy-only' | 'combat-only'
+
+export interface AiPlanningOptions {
+  cachedAnalysis?: AiWorldAnalysis | null
+  mode?: AiPlanningMode
+  /** Tests can rely exclusively on the deterministic node budget. */
+  enforceTimeBudget?: boolean
+  nodeBudget?: number
+}
+
+interface StrategicSearchOptions {
+  diagnostics?: AiPlanTraceEntry[]
+  orderReserve?: number
+  mode?: AiPlanningMode
+}
+
+const engagementCommandTypes = new Set<AiCommand['type']>([
+  'move-or-attack',
+  'split',
+  'garrison',
+  'ungarrison',
+  'tower-attack',
+])
+
+function commandAllowed(state: MatchState, command: AiCommand, mode: AiPlanningMode) {
+  if (mode === 'full') return true
+  const engagement = engagementCommandTypes.has(command.type)
+  if (mode === 'combat-only') return engagement
+  if (engagement) return false
+  if (mode === 'development-only') return true
+  if (command.type === 'build') {
+    return command.building !== 'barracks' && economyBuildingKinds.includes(command.building)
+  }
+  if (command.type === 'demolish') {
+    const object = objectAt(state, command.position)
+    return object?.type === 'building'
+      && object.kind !== 'barracks'
+      && economyBuildingKinds.includes(object.kind)
+  }
+  return command.type === 'tax' || command.type === 'trade' || command.type === 'dismiss'
 }
 
 const commandKey = (command: AiCommand) => JSON.stringify(command)
@@ -39,9 +88,10 @@ function searchStrategicSequence(
   analysis: AiWorldAnalysis,
   memory: AiMemory,
   countNode: () => boolean,
-  diagnostics?: AiPlanTraceEntry[],
+  options: StrategicSearchOptions = {},
 ) {
-  const reserve = strategicOrderReserve(memory.phase)
+  const reserve = options.orderReserve ?? strategicOrderReserve(memory.phase)
+  const mode = options.mode ?? 'full'
   const rootScore = projectedStrategicScore(state, profile, memory.phase)
   let beam: SearchNode[] = [{ state, candidates: [], bonus: 0, utility: rootScore }]
   let best = beam[0]
@@ -50,7 +100,8 @@ function searchStrategicSequence(
     const expanded: SearchNode[] = []
     for (const node of beam) {
       const candidates = strategicCandidates(node.state, profile, analysis, memory, memory.phase, countNode,
-        depth === 0 && node === beam[0] ? diagnostics : undefined)
+        depth === 0 && node === beam[0] ? options.diagnostics : undefined)
+        .filter((candidate) => commandAllowed(node.state, candidate.command, mode))
       for (const candidate of candidates) {
         if (!countNode()) break
         if (node.candidates.some((selected) => commandKey(selected.command) === commandKey(candidate.command))) continue
@@ -119,15 +170,17 @@ export function planAiTurn(
   authoritativeState: MatchState,
   previousMemory: AiMemory,
   profileId: AiProfileId,
-  cachedAnalysis?: AiWorldAnalysis | null,
+  options: AiPlanningOptions = {},
 ): AiPlan {
   const profile = aiProfiles[profileId]
+  const mode = options.mode ?? 'full'
   const startedAt = performance.now()
   let exploredNodes = 0
   let hitBudget = false
   const countNode = () => {
-    const exhausted = exploredNodes >= aiPlannerConfig.nodeBudget
-      || performance.now() - startedAt >= aiPlannerConfig.hardBudgetMs - aiPlannerConfig.deadlineSafetyMarginMs
+    const exhausted = exploredNodes >= (options.nodeBudget ?? aiPlannerConfig.nodeBudget)
+      || (options.enforceTimeBudget !== false
+        && performance.now() - startedAt >= aiPlannerConfig.hardBudgetMs - aiPlannerConfig.deadlineSafetyMarginMs)
     if (exhausted) {
       hitBudget = true
       return false
@@ -139,8 +192,9 @@ export function planAiTurn(
   const perception = createAiPerception(authoritativeState, authoritativeState.activeParticipantId, normalizeMemory(previousMemory))
   let state = perception.state
   let memory = perception.memory
-  const analysis = cachedAnalysis?.ownerId === state.activeParticipantId && cachedAnalysis.key === aiWorldAnalysisKey(state.scenario, state.activeParticipantId)
-    ? cachedAnalysis
+  const analysis = options.cachedAnalysis?.ownerId === state.activeParticipantId
+    && options.cachedAnalysis.key === aiWorldAnalysisKey(state.scenario, state.activeParticipantId)
+    ? options.cachedAnalysis
     : analyzeAiWorld(state.scenario, state.activeParticipantId)
   if (!analysis) return { commands: [], memory, exploredNodes, partial: false, elapsedMs: performance.now() - startedAt, trace: [] }
 
@@ -153,17 +207,25 @@ export function planAiTurn(
     ...memory,
     targetOwnerId,
     lastTargetChangeTurn: targetChanged ? state.turn : memory.lastTargetChangeTurn,
+    lastOffensiveEndTurn: targetChanged && memory.phase === 'assault'
+      ? state.turn
+      : memory.lastOffensiveEndTurn,
+    wave: targetChanged && memory.phase === 'assault' ? 'regroup' : memory.wave,
     // A deliberate retarget is part of the anti-stall recovery. Preserve the
     // accumulated inactivity so the new objective can be probed immediately;
     // otherwise every retarget reset prevented the mobilization fallback from
     // ever activating in an FFA with several living opponents.
     idleTurns: targetChanged && !retargetedAfterStall ? 0 : memory.idleTurns,
   }
+  const previousPhase = memory.phase
   const phase = strategicPhaseFor(state, profile, memory)
   const stable = phase !== 'recovery' && phase !== 'defense'
   memory = {
     ...memory,
     phase,
+    lastOffensiveEndTurn: previousPhase === 'assault' && phase !== 'assault'
+      ? state.turn
+      : memory.lastOffensiveEndTurn,
     stableTurns: stable ? memory.stableTurns + 1 : 0,
   }
   memory = {
@@ -179,6 +241,7 @@ export function planAiTurn(
     { goal: 'target', score: targetOwnerId ? 1 : 0, factors: [`target:${targetOwnerId ?? 'none'}`, `phase:${phase}`, `wave:${memory.wave}`] },
   ]
   const apply = (command: AiCommand, factors: string[], score: number, goal: AiPlanTraceEntry['goal']) => {
+    if (!commandAllowed(state, command, mode)) return false
     const mergesFriendlySquads = command.type === 'move-or-attack'
       && objectAt(state, command.from)?.type === 'squad'
       && objectAt(state, command.to)?.type === 'squad'
@@ -202,25 +265,25 @@ export function planAiTurn(
   }
 
   const runTactics = () => {
+    const initialCommandCount = commands.length
     let guard = 0
     while (state.ordersRemaining > 0 && commands.length < aiPlannerConfig.maximumCommands && countNode()
       && guard < gameConfig.turn.maxOrders * aiPlannerConfig.tacticalGuardMultiplier) {
       guard += 1
       memory = { ...memory, squadRoles: assignSquadRoles(state, profile, memory.squadRoles, phase) }
-      const candidates = tacticalCandidates(state, profile, memory, phase, countNode).filter((item) => {
-        if (commands.some((command) => commandKey(command) === commandKey(item.command))) return false
-        if (item.command.type !== 'move-or-attack') return true
-        return !traversedEdges.has(`${item.command.to.column}:${item.command.to.row}>${item.command.from.column}:${item.command.from.row}`)
+      const candidate = selectTacticalCandidate(tacticalCandidates(state, profile, memory, phase, countNode), {
+        phase,
+        idleTurns: memory.idleTurns,
+        previousCommands: commands,
+        traversedEdges,
+        commandAllowed: (command) => commandAllowed(state, command, mode),
       })
-      const candidate = candidates.find((item) => item.score > 0)
-        ?? (phase === 'assault' && memory.idleTurns >= aiPlannerConfig.forcedAdvanceAfterIdleTurns
-          ? candidates.find((item) => item.command.type === 'move-or-attack' && item.score > aiPlannerConfig.forcedAdvanceMinimumScore)
-          : undefined)
       if (!candidate || !apply(candidate.command, candidate.factors, candidate.score, 'tactics')) break
       if (candidate.command.type === 'move-or-attack') {
-        traversedEdges.add(`${candidate.command.from.column}:${candidate.command.from.row}>${candidate.command.to.column}:${candidate.command.to.row}`)
+        traversedEdges.add(tacticalMovementEdgeKey(candidate.command.from, candidate.command.to))
       }
     }
+    return commands.length - initialCommandCount
   }
 
   const openingEconomy = economySnapshotFor(state, state.activeParticipantId)
@@ -231,7 +294,11 @@ export function planAiTurn(
     // A threatened settlement must still execute a viable recovery prefix.
     // The strategic search keeps the combat order reserve intact, so tactics
     // cannot consume every order while the economy collapses underneath it.
-    const recovery = searchStrategicSequence(state, profile, analysis, memory, countNode, trace)
+    const recovery = searchStrategicSequence(state, profile, analysis, memory, countNode, {
+      diagnostics: trace,
+      orderReserve: strategicOrderReserve(memory.phase),
+      mode,
+    })
     for (const candidate of recovery.candidates) {
       if (commands.length >= aiPlannerConfig.maximumCommands || !countNode()) break
       if (!apply(candidate.command, [...candidate.factors, 'defense-economy'], candidate.utility, candidate.goal)) break
@@ -247,14 +314,30 @@ export function planAiTurn(
         reinforcement = recruitmentCandidate(state, profile, phase, countNode, memory)
       }
     }
-    if (reinforcement) apply(reinforcement.command, [...reinforcement.factors, 'emergency-reinforcement'],
+    if (reinforcement && commandAllowed(state, reinforcement.command, mode)) apply(reinforcement.command, [...reinforcement.factors, 'emergency-reinforcement'],
       reinforcement.utility + aiPlannerConfig.defenseRecruitUtilityBonus, 'defense')
   }
 
-  if (phase === 'defense' || phase === 'assault' || phase === 'regroup') runTactics()
+  let openingTacticalCommands = 0
+  if (phase === 'defense' || phase === 'assault' || phase === 'regroup') {
+    openingTacticalCommands = runTactics()
+  }
 
   if (commands.length < aiPlannerConfig.maximumCommands && countNode()) {
-    const strategic = searchStrategicSequence(state, profile, analysis, memory, countNode, trace)
+    const strategic = searchStrategicSequence(
+      state,
+      profile,
+      analysis,
+      memory,
+      countNode,
+      {
+        diagnostics: trace,
+        orderReserve: phase === 'assault' && openingTacticalCommands === 0
+          ? 0
+          : strategicOrderReserve(phase),
+        mode,
+      },
+    )
     for (const candidate of strategic.candidates) {
       if (commands.length >= aiPlannerConfig.maximumCommands || !countNode()) break
       if (!apply(candidate.command, candidate.factors, candidate.utility, candidate.goal)) break

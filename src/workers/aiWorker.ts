@@ -29,7 +29,7 @@ scope.onmessage = (event: MessageEvent<AiWorkerRequest>) => {
     const response: AiWorkerResponse = {
       requestId: request.requestId,
       type: 'plan',
-      plan: planAiTurn(request.state, request.memory, request.profileId, analysis),
+      plan: planAiTurn(request.state, request.memory, request.profileId, { cachedAnalysis: analysis }),
     }
     scope.postMessage(response)
   } catch (error) {

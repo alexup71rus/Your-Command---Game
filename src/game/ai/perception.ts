@@ -1,5 +1,6 @@
 import { resourceIds, tradeableResources } from '../../config/rules'
 import { aiPlannerConfig } from '../../config/ai'
+import { gameConfig } from '../../config/game'
 import { squadHealth, type DomainEconomy, type MatchState } from '../match'
 import { calculateVisibility, isCellVisible, visibleObjectAt } from '../visibility'
 import { createAiMemory, type AiContact, type AiMemory } from './model'
@@ -19,9 +20,21 @@ function redactedDomain(): DomainEconomy {
   }
 }
 
-export function updateAiMemory(state: MatchState, ownerId: string, previous: AiMemory): AiMemory {
+export function updateAiMemory(
+  state: MatchState,
+  ownerId: string,
+  previous: AiMemory,
+  fogEnabled: boolean = gameConfig.visibility.enabled,
+): AiMemory {
   const normalized = { ...createAiMemory(), ...previous }
-  const visibility = calculateVisibility(state.scenario.cells, ownerId)
+  if (!fogEnabled) {
+    return {
+      ...normalized,
+      contacts: [],
+      blockedCells: normalized.blockedCells.filter((entry) => entry.expiresTurn >= state.turn),
+    }
+  }
+  const visibility = calculateVisibility(state.scenario.cells, ownerId, fogEnabled)
   const contacts = new Map(normalized.contacts
     .filter((contact) => state.turn - contact.lastSeenTurn <= aiPlannerConfig.targetMemoryTurns)
     .map((contact) => [contactKey(contact), contact]))
@@ -56,13 +69,20 @@ export function updateAiMemory(state: MatchState, ownerId: string, previous: AiM
   }
 }
 
-export function createAiPerception(state: MatchState, ownerId: string, previous: AiMemory) {
-  const memory = updateAiMemory(state, ownerId, previous)
-  const visibility = calculateVisibility(state.scenario.cells, ownerId)
-  const cells = state.scenario.cells.map((row, rowIndex) => row.map((cell, column) => {
-    const object = visibleObjectAt(state.scenario.cells, visibility, ownerId, { column, row: rowIndex })
-    return object === cell.object ? cell : { ...cell, object }
-  }))
+export function createAiPerception(
+  state: MatchState,
+  ownerId: string,
+  previous: AiMemory,
+  fogEnabled: boolean = gameConfig.visibility.enabled,
+) {
+  const memory = updateAiMemory(state, ownerId, previous, fogEnabled)
+  const visibility = fogEnabled ? calculateVisibility(state.scenario.cells, ownerId, true) : null
+  const cells = fogEnabled && visibility
+    ? state.scenario.cells.map((row, rowIndex) => row.map((cell, column) => {
+        const object = visibleObjectAt(state.scenario.cells, visibility, ownerId, { column, row: rowIndex })
+        return object === cell.object ? cell : { ...cell, object }
+      }))
+    : state.scenario.cells
   const domains = Object.fromEntries(Object.entries(state.domains).map(([participantId, domain]) => [participantId, participantId === ownerId ? domain : redactedDomain()]))
   return { state: { ...state, scenario: { ...state.scenario, cells }, domains }, memory, visibility }
 }

@@ -6,6 +6,7 @@ export const aiProfileIds: AiProfileId[] = ['radomir', 'velislava', 'svyatobor']
 
 export type AiArsenalTier = 'basic' | 'tactical' | 'complete'
 export type AiLayoutKind = 'courtyard' | 'frontier' | 'strongpoint'
+export type AiFortificationKind = 'curtain' | 'terrain-gate' | 'bastion'
 export type AiOpeningKind = 'forest' | 'plains' | 'highland'
 export type AiStrategicPhase = 'recovery' | 'survival' | 'expansion' | 'mobilization' | 'assault' | 'regroup' | 'defense'
 export type AiWaveKind = 'none' | 'probe' | 'main' | 'support' | 'regroup' | 'siege'
@@ -15,6 +16,7 @@ export type AiSettlementZoneKind = 'housing' | 'food' | 'industry' | 'military' 
 export type AiReservedSiteKind = 'housing' | 'food' | 'military' | 'industry' | 'gate' | 'leftTower' | 'rightTower'
 
 export const aiLayoutKinds: readonly AiLayoutKind[] = ['courtyard', 'frontier', 'strongpoint']
+export const aiFortificationKinds: readonly AiFortificationKind[] = ['curtain', 'terrain-gate', 'bastion']
 export const aiOpeningKinds: readonly AiOpeningKind[] = ['forest', 'plains', 'highland']
 export const aiStrategicPhases: readonly AiStrategicPhase[] = ['recovery', 'survival', 'expansion', 'mobilization', 'assault', 'regroup', 'defense']
 export const aiWaveKinds: readonly AiWaveKind[] = ['none', 'probe', 'main', 'support', 'regroup', 'siege']
@@ -42,6 +44,15 @@ export interface AiSettlementPlan {
   front: CellPosition
   reservedCorridors: CellPosition[]
   reservedSites: Partial<Record<AiReservedSiteKind, CellPosition>>
+  fortification: {
+    lines: Array<{
+      kind: AiFortificationKind
+      approach: CellPosition
+      gate: CellPosition
+      walls: CellPosition[]
+      towers: CellPosition[]
+    }>
+  } | null
   zones: Record<AiSettlementZoneKind, {
     centers: CellPosition[]
     cells: CellPosition[]
@@ -62,6 +73,7 @@ export interface AiMemory {
   lastTargetChangeTurn: number
   lastTaxChangeTurn: number
   lastArmyReorganizationTurn: number
+  lastOffensiveEndTurn: number
   stableTurns: number
   idleTurns: number
   stalledTurns: number
@@ -80,6 +92,7 @@ export function createAiMemory(): AiMemory {
     lastTargetChangeTurn: 0,
     lastTaxChangeTurn: 0,
     lastArmyReorganizationTurn: 0,
+    lastOffensiveEndTurn: 0,
     stableTurns: 0,
     idleTurns: 0,
     stalledTurns: 0,
@@ -124,15 +137,25 @@ export interface AiCapabilities {
 
 export interface AiDoctrine {
   preferredTroops: TroopKind[]
+  defensiveTroops: TroopKind[]
   targetComposition: Partial<Record<TroopKind, number>>
-  reserveShare: number
+  defenseForceShare: number
+  raidForceShare: number
   retreatHealthShare: number
   targetStickiness: number
   maneuverBias: number
   concentrationBias: number
+  raidBias: number
+  finisherBias: number
+  musterBias: number
   marchingGroupBias: number
   probeRiskThreshold: number
-  minimumProbePower: number
+  forceTargets: Record<'probe' | 'raid' | 'assault' | 'defense', {
+    minimum: number
+    preferred: number
+    maximum: number
+  }>
+  offensivePauseTurns: number
 }
 
 export interface AiSettlementDoctrine {

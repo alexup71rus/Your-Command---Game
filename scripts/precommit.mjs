@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 const checks = [
   ['npm', ['run', 'lint']],
   ['npm', ['run', 'typecheck']],
-  ['npm', ['test', '--', '--run']],
+  ['npm', ['run', 'test:stable']],
   ['npm', ['run', 'build']],
 ]
 

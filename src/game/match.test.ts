@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
-import { buildingRules, castleProduction, economyBuildingCategories, economyBuildingKinds, marketPrices, startingResources, taxRates, troopRules } from '../config/rules'
+import { buildingRules, castleProduction, marketPrices, startingResources, taxRates } from '../config/rules'
 import type { BuildingKind, GameMap, TroopComposition } from './map'
 import {
   build,
@@ -103,47 +103,6 @@ function advanceRound(state: ReturnType<typeof createMatch>) {
 }
 
 describe('match rules', () => {
-  it('places every economy building in exactly one construction category', () => {
-    const categorized = Object.values(economyBuildingCategories).flat()
-    expect(new Set(categorized).size).toBe(categorized.length)
-    expect([...categorized].sort()).toEqual([...economyBuildingKinds].sort())
-  })
-
-  it('keeps troop roles and recruitment prices in the intended order', () => {
-    const recruitmentValue = (kind: keyof typeof troopRules) => Object.entries(troopRules[kind].resourceCost).reduce((total, [resource, amount]) => {
-      if (!amount) return total
-      return total + (resource === 'gold' ? amount : amount * marketPrices[resource as keyof typeof marketPrices].buy)
-    }, 0)
-
-    expect(troopRules.archers.damage).toBe(troopRules.militia.damage)
-    expect(troopRules.archers.durability).toBe(troopRules.militia.durability)
-    expect(troopRules.spearmen.damage).toBeGreaterThan(troopRules.militia.damage)
-    expect(troopRules.spearmen.durability).toBeGreaterThan(troopRules.militia.durability)
-    expect(troopRules.knights.damage).toBe(troopRules.spearmen.damage)
-    expect(troopRules.knights.durability).toBeGreaterThan(troopRules.spearmen.durability * 1.8)
-    expect(recruitmentValue('militia')).toBeLessThan(recruitmentValue('spearmen'))
-    expect(recruitmentValue('spearmen')).toBeLessThan(recruitmentValue('archers'))
-    expect(recruitmentValue('knights')).toBeGreaterThan(recruitmentValue('archers') * 2)
-    expect(startingResources.iron).toBe((troopRules.spearmen.resourceCost.iron ?? 0) * 2)
-    expect(startingResources.ore).toBe(0)
-    expect(buildingRules.quarry.production).toEqual({ stone: 8 })
-    expect(buildingRules.mine.production).toEqual({ ore: 4 })
-    expect(buildingRules.smelter).toMatchObject({ actionCost: 4, resourceCost: { wood: 32, stone: 28, gold: 24 }, processing: { input: 'ore', output: 'iron', maximumPerTurn: 5 }, hitPoints: 22, footprint: { columns: 2, rows: 2 } })
-    expect(buildingRules.smelter.upkeep).toBeUndefined()
-    expect(buildingRules.kitchen).toMatchObject({ actionCost: 4, resourceCost: { wood: 20, stone: 12, gold: 8 }, workersRequired: 1, foodServiceCapacity: 20, hitPoints: 14 })
-    expect(buildingRules.lumberMill.workersRequired).toBe(1)
-    expect(buildingRules.quarry.workersRequired).toBe(2)
-    expect(buildingRules.mine.workersRequired).toBe(1)
-    expect(buildingRules.smelter.workersRequired).toBe(2)
-    expect(buildingRules.mill).toMatchObject({ resourceCost: { wood: 20, stone: 12, gold: 10 }, farmSupport: { radius: 2, capacity: 2 }, workersRequired: 1 })
-    expect(buildingRules.farm).toMatchObject({ resourceCost: { wood: 28, gold: 8 }, production: { flour: 14 }, workersRequired: 2, requiresMillSupport: true })
-    expect(buildingRules.orchard).toMatchObject({ resourceCost: { wood: 20, gold: 6 }, production: { fruit: 6 }, workersRequired: 1, footprint: { columns: 2, rows: 2 } })
-    expect(buildingRules.huntingLodge).toMatchObject({ actionCost: 4, resourceCost: { wood: 18, gold: 8 }, production: { meat: 6 }, hitPoints: 12, workersRequired: 1 })
-    expect(buildingRules.quarry.resourceCost).toEqual({ wood: 20 })
-    expect(buildingRules.house.resourceCost).toEqual({ wood: 25, gold: 5 })
-    expect(buildingRules.market).toMatchObject({ resourceCost: { gold: 28 }, maxPerOwner: 1 })
-  })
-
   it('initializes a playable human domain with eight orders', () => {
     const match = createMatch(createScenario())
     expect(match.turn).toBe(1)

@@ -72,7 +72,7 @@ function BuildingStats({ kind, text }: { kind: BuildingKind; text: LocaleDiction
     {rule.minimumAdjacentForestCells && <small>{text.game.forestNeighbors} <b>{rule.minimumAdjacentForestCells}+</b></small>}
     {rule.farmSupport && <><small>{text.game.farmCapacity} <b>{rule.farmSupport.capacity}</b></small><small>{text.game.supportRadius} <b>{rule.farmSupport.radius}</b></small></>}
     {rule.requiresMillSupport && <small>{text.game.requiresMill}</small>}
-    {rule.garrison && <><small>{text.game.towerCapacity} <b>{rule.garrison.capacity}</b></small><small>{text.game.towerRange} <b>{rule.garrison.attackRange}</b></small><small>{text.game.towerSight} <b>{rule.garrison.visibilityRadius}</b></small></>}
+    {rule.garrison && <><small>{text.game.towerCapacity} <b>{rule.garrison.capacity}</b></small><small>{text.game.towerRange} <b>{rule.garrison.attackRange}</b></small></>}
   </span>
 }
 
@@ -242,7 +242,7 @@ function FortificationsPanel({ match, text, locked, onChoose, onOrderPreview }: 
   return <div className="command-card-grid fortification-command-grid">{fortificationKinds.map((kind) => {
     const rule = buildingRules[kind]
     const unavailable = buildingUnavailableReason(match, kind, locked, text)
-    return <button type="button" className="fortification-command-card" key={kind} disabled={Boolean(unavailable)} title={unavailable ?? text.game.buildingDescriptions[kind]} {...orderPreviewHandlers(rule.actionCost, Boolean(unavailable), onOrderPreview)} onClick={() => onChoose(kind)}><span><strong>{text.game.buildingNames[kind]}</strong><small>{text.game.buildingDescriptions[kind]}</small></span><span className="fortification-card-visual"><span className="fortification-card-emblem"><FortificationIcon kind={kind} /></span><span className="fortification-card-stats"><span><small>{text.game.hitPoints}</small><b>{rule.hitPoints}</b></span>{rule.incomingDamageMultiplier && <span><small>{text.game.defense}</small><b>{Math.round((1 - rule.incomingDamageMultiplier) * 100)}%</b></span>}{rule.garrison && <><span><small>{text.game.towerRange}</small><b>{rule.garrison.attackRange}</b></span><span><small>{text.game.towerSight}</small><b>{rule.garrison.visibilityRadius}</b></span><span><small>{text.game.towerCapacity}</small><b>{rule.garrison.capacity}</b></span></>}</span></span><Cost cost={rule.resourceCost} text={text} /></button>
+    return <button type="button" className="fortification-command-card" key={kind} disabled={Boolean(unavailable)} title={unavailable ?? text.game.buildingDescriptions[kind]} {...orderPreviewHandlers(rule.actionCost, Boolean(unavailable), onOrderPreview)} onClick={() => onChoose(kind)}><span><strong>{text.game.buildingNames[kind]}</strong><small>{text.game.buildingDescriptions[kind]}</small></span><span className="fortification-card-visual"><span className="fortification-card-emblem"><FortificationIcon kind={kind} /></span><span className="fortification-card-stats"><span><small>{text.game.hitPoints}</small><b>{rule.hitPoints}</b></span>{rule.incomingDamageMultiplier && <span><small>{text.game.defense}</small><b>{Math.round((1 - rule.incomingDamageMultiplier) * 100)}%</b></span>}{rule.garrison && <><span><small>{text.game.towerRange}</small><b>{rule.garrison.attackRange}</b></span><span><small>{text.game.towerCapacity}</small><b>{rule.garrison.capacity}</b></span></>}</span></span><Cost cost={rule.resourceCost} text={text} /></button>
   })}</div>
 }
 

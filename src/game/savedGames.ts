@@ -6,6 +6,7 @@ import type { MatchEvent, MatchState, TurnReport } from './match'
 import type { CellPosition, MapScenario, StartRegion } from './scenario'
 import {
   aiLayoutKinds,
+  aiFortificationKinds,
   aiOpeningKinds,
   aiProfileIds,
   aiReservedSiteKinds,
@@ -17,7 +18,7 @@ import {
 
 // Match saves are intentionally current-format only. Do not add implicit
 // defaults or migration branches here: incompatible records stay unreadable.
-export const CURRENT_SAVE_FORMAT_VERSION = 9
+export const CURRENT_SAVE_FORMAT_VERSION = 10
 
 export interface SavedGameSummary {
   id: string
@@ -62,6 +63,23 @@ function isPositionList(value: unknown, size: number, maximum = size * size) {
   return new Set(keys).size === keys.length
 }
 
+function isFortificationLine(value: unknown, size: number) {
+  if (!isRecord(value) || typeof value.kind !== 'string'
+    || !aiFortificationKinds.some((kind) => kind === value.kind)
+    || !isPosition(value.approach, size) || !isPosition(value.gate, size)
+    || !Array.isArray(value.walls) || value.walls.length < 2
+    || !isPositionList(value.walls, size, 12)
+    || !Array.isArray(value.towers) || !isPositionList(value.towers, size, 4)) return false
+  const positions = [value.gate, ...value.walls, ...value.towers]
+  return new Set(positions.map((position) => `${position.column}:${position.row}`)).size === positions.length
+}
+
+function isFortificationPlan(value: unknown, size: number) {
+  return value === null || (isRecord(value) && Array.isArray(value.lines)
+    && value.lines.length > 0 && value.lines.length <= 3
+    && value.lines.every((line) => isFortificationLine(line, size)))
+}
+
 function isSettlementPlan(value: unknown, size: number) {
   if (!isRecord(value)
     || typeof value.layout !== 'string' || !aiLayoutKinds.some((kind) => kind === value.layout)
@@ -71,6 +89,7 @@ function isSettlementPlan(value: unknown, size: number) {
     || !isRecord(value.reservedSites)
     || Object.keys(value.reservedSites).some((key) => !aiReservedSiteKinds.some((kind) => kind === key))
     || Object.values(value.reservedSites).some((position) => position !== undefined && !isPosition(position, size))
+    || !isFortificationPlan(value.fortification, size)
     || !isRecord(value.zones)
     || Object.keys(value.zones).length !== aiSettlementZoneKinds.length) return false
   const zones = value.zones
@@ -417,6 +436,7 @@ function isMatchState(value: unknown): value is MatchState {
       && isNonNegativeInteger(memory.lastTargetChangeTurn) && memory.lastTargetChangeTurn <= turn
       && isNonNegativeInteger(memory.lastTaxChangeTurn) && memory.lastTaxChangeTurn <= turn
       && isNonNegativeInteger(memory.lastArmyReorganizationTurn) && memory.lastArmyReorganizationTurn <= turn
+      && isNonNegativeInteger(memory.lastOffensiveEndTurn) && memory.lastOffensiveEndTurn <= turn
       && isNonNegativeInteger(memory.stableTurns) && memory.stableTurns <= turn + 1
       && isNonNegativeInteger(memory.idleTurns) && memory.idleTurns <= turn + 1
       && isNonNegativeInteger(memory.stalledTurns) && memory.stalledTurns <= turn + 1

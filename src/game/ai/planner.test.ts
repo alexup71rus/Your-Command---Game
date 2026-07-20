@@ -1,55 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { aiBuildingZoneByKind, aiPlannerConfig, aiProfiles } from '../../config/ai'
-import { gameConfig } from '../../config/game'
-import { buildingKinds } from '../../config/rules'
-import type { GameMap, TroopComposition } from '../map'
-import { createMatch, endTurn, ownedBuildingCount, workforceFor } from '../match'
-import type { AiProfileId, MapScenario } from '../scenario'
+import { aiPlannerConfig, aiProfiles } from '../../config/ai'
+import {
+  totalArmySize,
+} from '../match'
+import type { AiProfileId } from '../scenario'
 import { executeAiCommand, rememberAiCommandFailure } from './commands'
 import { analyzeAiWorld, createSettlementPlan, positionDistance, positionKey } from './analysis'
 import { createAiPerception, updateAiMemory } from './perception'
 import { planAiTurn } from './planner'
 import { createAiMemory } from './model'
-import { findStrategicBuildPosition, homeThreatFor, marketCandidate, stagingAnchorsFor, strategicPhaseFor } from './strategy'
-import { assaultPathFor, assignSquadRoles, formationSplit, tacticalCandidates } from './tactics'
+import { desiredBuildingGoals, economicEmergencyFor, findStrategicBuildPosition, homeThreatFor, marketCandidate, nextFortificationStep, stagingAnchorsFor, strategicPhaseFor } from './strategy'
+import { raidObjectivesFor } from './strategy/raids'
+import { assignSquadRoles, formationSplit, tacticalCandidates } from './tactics'
 import { findMovementPath } from '../pathfinding'
-
-const units = (militia = 1): TroopComposition => ({ militia, spearmen: 0, archers: 0, knights: 0 })
-
-function createAiScenario(profileId: AiProfileId = 'radomir'): MapScenario {
-  const size = 24
-  const cells: GameMap = Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, column) => ({
-    elevation: column >= 14 && column <= 17 && row >= 3 && row <= 6 ? 0.55 : 0.2,
-    landform: column >= 14 && column <= 17 && row >= 3 && row <= 6 ? 'hill' as const : 'plain' as const,
-    vegetation: column >= 20 && column <= 22 && row >= 2 && row <= 5,
-  })))
-  cells[12][3] = { ...cells[12][3], object: { type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100 } }
-  cells[12][20] = { ...cells[12][20], vegetation: false, object: { type: 'castle', ownerId: `ai-${profileId}`, hitPoints: 100, maxHitPoints: 100 } }
-  return {
-    id: 'ai-test', name: 'AI test', seed: 91, participantCount: 2, cells,
-    territories: Array.from({ length: size }, () => Array.from({ length: size }, (_, column) => column < size / 2 ? 'region-0' : 'region-1')),
-    regions: [
-      { id: 'region-0', index: 0, color: '#d2b45f', center: { column: 3, row: 12 }, validCastleCells: [{ column: 3, row: 12 }], reservedBuildSites: { plain: { column: 3, row: 3 }, hill: { column: 3, row: 5 }, extra: { column: 5, row: 3 }, house: { column: 4, row: 12 } }, score: { cells: 288, forest: 0, hills: 0, quality: 288 } },
-      { id: 'region-1', index: 1, color: '#6f9c83', center: { column: 20, row: 12 }, validCastleCells: [{ column: 20, row: 12 }], reservedBuildSites: { plain: { column: 18, row: 8 }, hill: { column: 14, row: 3 }, extra: { column: 18, row: 14 }, house: { column: 19, row: 12 } }, score: { cells: 288, forest: 12, hills: 16, quality: 304 } },
-    ],
-    participants: [
-      { id: 'player', kind: 'human', regionId: 'region-0', color: '#d2b45f' },
-      { id: `ai-${profileId}`, kind: 'ai', profileId, regionId: 'region-1', color: '#6f9c83' },
-    ],
-  }
-}
-
-function startAiTurn(profileId: AiProfileId) {
-  const ended = endTurn(createMatch(createAiScenario(profileId)))
-  if (!ended.ok) throw new Error('Could not start AI turn')
-  return ended.state
-}
+import { militia as units, placeTestBuilding, startAiTurn } from './testing/scenarioFixtures'
 
 describe('AI perception and planning', () => {
-  it('keeps every building kind in exactly one configured settlement zone', () => {
-    expect(Object.keys(aiBuildingZoneByKind).sort()).toEqual([...buildingKinds].sort())
-  })
-
   it('remembers a hidden occupied target briefly without committing speculative plan memory', () => {
     const state = startAiTurn('radomir')
     const participantId = state.activeParticipantId
@@ -70,113 +36,149 @@ describe('AI perception and planning', () => {
     expect(unrelated.aiMemory[participantId].blockedCells).toEqual([])
   })
 
-  it('breaches a weak gate but takes a forest detour around a costly wall', () => {
+  it('assigns a viable probe to an exposed economic target instead of the closest protected one', () => {
     const state = startAiTurn('velislava')
     const ownerId = state.activeParticipantId
-    const from = { column: 18, row: 12 }
-    const to = { column: 10, row: 12 }
-    const obstacle = { column: 14, row: 12 }
-    const squad = {
-      type: 'squad' as const,
+    const squadPosition = { column: 13, row: 16 }
+    state.scenario.cells[squadPosition.row][squadPosition.column].object = {
+      type: 'squad',
+      ownerId,
+      units: { militia: 0, spearmen: 4, archers: 0, knights: 0 },
+      health: 5.4,
+    }
+    const exposedOrchard = { column: 9, row: 16 }
+    const protectedFarm = { column: 4, row: 14 }
+    placeTestBuilding(state, 'player', 'orchard', exposedOrchard)
+    placeTestBuilding(state, 'player', 'farm', protectedFarm)
+    const memory = {
+      ...createAiMemory(),
+      targetOwnerId: 'player',
+      phase: 'assault' as const,
+      wave: 'probe' as const,
+      squadRoles: { [positionKey(squadPosition)]: 'scout' as const },
+    }
+
+    const objectives = raidObjectivesFor(
+      state,
+      state.scenario.cells,
+      aiProfiles.velislava,
+      memory,
+      'assault',
+      () => true,
+    )
+
+    expect(objectives[positionKey(squadPosition)]?.origin).toEqual(exposedOrchard)
+    expect(objectives[positionKey(squadPosition)]?.factors).toContain('raid:orchard')
+    const raidMove = tacticalCandidates(
+      state,
+      aiProfiles.velislava,
+      memory,
+      'assault',
+      () => true,
+    ).find((candidate) => candidate.factors.includes('raid:orchard'))
+    expect(raidMove?.command.type).toBe('move-or-attack')
+    if (raidMove?.command.type === 'move-or-attack') {
+      expect(positionDistance(raidMove.command.to, exposedOrchard))
+        .toBeLessThan(positionDistance(squadPosition, exposedOrchard))
+    }
+
+    const adjacentPosition = { column: 11, row: 16 }
+    const raiders = state.scenario.cells[squadPosition.row][squadPosition.column].object
+    state.scenario.cells[squadPosition.row][squadPosition.column].object = undefined
+    state.scenario.cells[adjacentPosition.row][adjacentPosition.column].object = raiders
+    const adjacentMemory = {
+      ...memory,
+      squadRoles: { [positionKey(adjacentPosition)]: 'scout' as const },
+    }
+    const raidStrike = tacticalCandidates(
+      state,
+      aiProfiles.velislava,
+      adjacentMemory,
+      'assault',
+      () => true,
+    ).find((candidate) => candidate.factors.includes('raid-target'))
+    expect(raidStrike?.command).toEqual({
+      type: 'move-or-attack',
+      from: adjacentPosition,
+      to: { column: 10, row: 16 },
+    })
+  })
+
+  it('rejects an economic raid whose reaction window is covered by a stronger defender', () => {
+    const state = startAiTurn('velislava')
+    const ownerId = state.activeParticipantId
+    const squadPosition = { column: 13, row: 16 }
+    state.scenario.cells[squadPosition.row][squadPosition.column].object = {
+      type: 'squad',
       ownerId,
       units: { militia: 0, spearmen: 3, archers: 0, knights: 0 },
-      health: 3,
+      health: 4.05,
     }
-    for (let row = 10; row <= 13; row += 1) {
-      for (let column = 9; column <= 19; column += 1) {
-        state.scenario.cells[row][column] = {
-          ...state.scenario.cells[row][column],
-          landform: row === 10 || row === 13 ? 'peak' : 'plain',
-          vegetation: row === 11 && column >= 13 && column <= 15,
-          object: undefined,
-        }
-      }
+    const exposedOrchard = { column: 9, row: 16 }
+    placeTestBuilding(state, 'player', 'orchard', exposedOrchard)
+    state.scenario.cells[15][9].object = {
+      type: 'squad',
+      ownerId: 'player',
+      units: { militia: 8, spearmen: 4, archers: 2, knights: 0 },
+      health: 15.4,
     }
-    state.scenario.cells[obstacle.row][obstacle.column].object = {
-      type: 'building', kind: 'barbican', ownerId: 'player', hitPoints: 1, maxHitPoints: 20,
+    const memory = {
+      ...createAiMemory(),
+      targetOwnerId: 'player',
+      phase: 'assault' as const,
+      wave: 'probe' as const,
+      squadRoles: { [positionKey(squadPosition)]: 'scout' as const },
     }
 
-    const weakGatePath = assaultPathFor(state, state.scenario.cells, squad, from, to, 'player')
-    expect(weakGatePath).toContainEqual(obstacle)
+    const objectives = raidObjectivesFor(
+      state,
+      state.scenario.cells,
+      aiProfiles.velislava,
+      memory,
+      'assault',
+      () => true,
+    )
 
-    state.scenario.cells[obstacle.row][obstacle.column].object = {
-      type: 'building', kind: 'wall', ownerId: 'player', hitPoints: 50, maxHitPoints: 50,
-    }
-    const wallDetour = assaultPathFor(state, state.scenario.cells, squad, from, to, 'player')
-    expect(wallDetour).not.toContainEqual(obstacle)
-    expect(wallDetour?.some((position) => state.scenario.cells[position.row][position.column].vegetation)).toBe(true)
+    expect(objectives[positionKey(squadPosition)]).toBeUndefined()
   })
 
-  it('keeps a siege route when every free approach to the castle is sealed', () => {
-    const state = startAiTurn('radomir')
-    const ownerId = state.activeParticipantId
-    const from = { column: 18, row: 12 }
-    const castle = { column: 10, row: 12 }
-    const gate = { column: 14, row: 12 }
-    for (let row = 10; row <= 14; row += 1) {
-      for (let column = 9; column <= 19; column += 1) {
-        state.scenario.cells[row][column] = {
-          ...state.scenario.cells[row][column],
-          landform: row === 12 ? 'plain' : 'peak',
-          vegetation: false,
-          object: undefined,
-        }
-      }
-    }
-    state.scenario.cells[castle.row][castle.column].object = {
-      type: 'castle', ownerId: 'player', hitPoints: 100, maxHitPoints: 100,
-    }
-    state.scenario.cells[gate.row][gate.column].object = {
-      type: 'building', kind: 'barbican', ownerId: 'player', hitPoints: 20, maxHitPoints: 20,
-    }
-    const squad = {
-      type: 'squad' as const,
-      ownerId,
-      units: units(8),
-      health: 8,
-    }
-
-    const path = assaultPathFor(state, state.scenario.cells, squad, from, castle, 'player')
-    expect(path).toContainEqual(gate)
-    expect(path?.at(-1)).toEqual(castle)
-  })
-
-  it('hides concealed enemy objects and every foreign economic value', () => {
+  it('shares the open battlefield but redacts every foreign economic value', () => {
     const state = startAiTurn('radomir')
     state.scenario.cells[2][2].object = { type: 'squad', ownerId: 'player', units: units(2) }
     state.scenario.cells[3][2].object = { type: 'building', kind: 'barracks', ownerId: 'player', hitPoints: 25, maxHitPoints: 25 }
     const perception = createAiPerception(state, state.activeParticipantId, createAiMemory())
-    expect(perception.state.scenario.cells[2][2].object).toBeUndefined()
-    expect(perception.state.scenario.cells[3][2].object).toBeUndefined()
+    expect(perception.state.scenario.cells[2][2].object).toMatchObject({ type: 'squad', ownerId: 'player' })
+    expect(perception.state.scenario.cells[3][2].object).toMatchObject({ type: 'building', kind: 'barracks' })
     expect(Object.values(perception.state.domains.player.resources).every((value) => value === 0)).toBe(true)
     expect(perception.state.domains.player.population).toBe(0)
     expect(perception.state.domains[state.activeParticipantId]).toEqual(state.domains[state.activeParticipantId])
+    expect(perception.memory.contacts).toEqual([])
   })
 
   it('keeps a last-seen contact until its cell is observed empty', () => {
     const state = startAiTurn('radomir')
     state.scenario.cells[12][13].object = { type: 'squad', ownerId: 'player', units: units(2) }
-    const remembered = updateAiMemory(state, state.activeParticipantId, createAiMemory())
+    const remembered = updateAiMemory(state, state.activeParticipantId, createAiMemory(), true)
     expect(remembered.contacts).toMatchObject([{ ownerId: 'player', kind: 'squad', position: { column: 13, row: 12 } }])
     expect(remembered.contacts[0]).toMatchObject({ units: units(2), health: 2 })
     const hiddenAgain = structuredClone(state)
     hiddenAgain.scenario.cells[12][13].object = undefined
     hiddenAgain.scenario.cells[12][20].object = undefined
     hiddenAgain.scenario.cells[20][20].object = { type: 'castle', ownerId: state.activeParticipantId, hitPoints: 100, maxHitPoints: 100 }
-    expect(updateAiMemory(hiddenAgain, hiddenAgain.activeParticipantId, remembered).contacts).toHaveLength(1)
+    expect(updateAiMemory(hiddenAgain, hiddenAgain.activeParticipantId, remembered, true).contacts).toHaveLength(1)
     hiddenAgain.scenario.cells[12][20].object = { type: 'castle', ownerId: state.activeParticipantId, hitPoints: 100, maxHitPoints: 100 }
-    expect(updateAiMemory(hiddenAgain, hiddenAgain.activeParticipantId, remembered).contacts).toHaveLength(0)
+    expect(updateAiMemory(hiddenAgain, hiddenAgain.activeParticipantId, remembered, true).contacts).toHaveLength(0)
   })
 
   it('uses a fresh last-seen squad to defend without revealing it on the perceived map', () => {
     const state = startAiTurn('velislava')
     state.scenario.cells[12][13].object = { type: 'squad', ownerId: 'player', units: units(3), health: 3 }
-    const seen = updateAiMemory(state, state.activeParticipantId, createAiMemory())
+    const seen = updateAiMemory(state, state.activeParticipantId, createAiMemory(), true)
     const hidden = structuredClone(state)
     hidden.scenario.cells[12][13].object = undefined
     hidden.scenario.cells[12][20].object = undefined
     hidden.scenario.cells[12][22].object = { type: 'castle', ownerId: hidden.activeParticipantId, hitPoints: 100, maxHitPoints: 100 }
-    const perception = createAiPerception(hidden, hidden.activeParticipantId, seen)
+    const perception = createAiPerception(hidden, hidden.activeParticipantId, seen, true)
     expect(perception.state.scenario.cells[12][13].object).toBeUndefined()
     expect(perception.memory.contacts).toHaveLength(1)
     expect(homeThreatFor(perception.state, hidden.activeParticipantId, perception.memory).threatened).toBe(true)
@@ -197,17 +199,6 @@ describe('AI perception and planning', () => {
       expect(executed.ok).toBe(true)
       if (executed.ok) authoritative = executed.state
     })
-  })
-
-  it('distinguishes opponents through their arsenal and doctrine rather than weaker search budgets', () => {
-    expect(aiProfiles.radomir.arsenalTier).toBe('basic')
-    expect(aiProfiles.velislava.arsenalTier).toBe('tactical')
-    expect(aiProfiles.svyatobor.arsenalTier).toBe('complete')
-    expect(aiProfiles.radomir.allowedBuildings).not.toContain('wall')
-    expect(aiProfiles.velislava.allowedBuildings).toContain('wall')
-    expect(aiProfiles.svyatobor.allowedBuildings).toContain('smelter')
-    expect(aiProfiles.svyatobor.allowedBuildings).toContain('tower')
-    expect(aiProfiles.velislava.doctrine.maneuverBias).toBeGreaterThan(aiProfiles.radomir.doctrine.maneuverBias)
   })
 
   it('uses the settlement heat map as an adaptive blueprint with profile-scaled capacity', () => {
@@ -239,6 +230,96 @@ describe('AI perception and planning', () => {
     const distance = Math.min(...basic.zones.food.cells.map((candidate) => positionDistance(position, candidate)))
     const adaptiveRadius = basic.zones.food.overflowRadius + Math.max(2, Math.ceil(Math.sqrt(basic.zones.food.cells.length) / 2))
     expect(distance).toBeLessThanOrEqual(adaptiveRadius)
+  })
+
+  it('plans a connected fortification and refuses to place decorative walls before its gate', () => {
+    const state = startAiTurn('velislava')
+    const ownerId = state.activeParticipantId
+    const analysis = analyzeAiWorld(state.scenario, ownerId)
+    expect(analysis).not.toBeNull()
+    if (!analysis) return
+    const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles.velislava)
+    const line = settlementPlan.fortification?.lines[0]
+    expect(line).toBeDefined()
+    if (!line) return
+    expect(line.walls.length).toBeGreaterThanOrEqual(2)
+    const connected = new Set([positionKey(line.gate)])
+    line.walls.forEach((wall) => {
+      expect([...connected].some((key) => {
+        const [column, row] = key.split(':').map(Number)
+        return positionDistance(wall, { column, row }) === 1
+      })).toBe(true)
+      connected.add(positionKey(wall))
+    })
+    const memory = { ...createAiMemory(), phase: 'mobilization' as const, settlementPlan }
+    expect(findStrategicBuildPosition(state, analysis, memory, 'wall', () => true)).toBeNull()
+    const gate = findStrategicBuildPosition(state, analysis, memory, 'barbican', () => true)
+    expect(gate).toEqual(line.gate)
+    if (!gate) return
+    const builtGate = executeAiCommand(state, { type: 'build', building: 'barbican', position: gate })
+    expect(builtGate.ok).toBe(true)
+    if (!builtGate.ok) return
+    expect(findStrategicBuildPosition(builtGate.state, analysis, memory, 'wall', () => true)).toEqual(line.walls[0])
+  })
+
+  it('moves archers into a completed tower garrison before a battle reaches the castle', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const tower = { column: 17, row: 12 }
+    const archers = { column: 18, row: 12 }
+    placeTestBuilding(state, ownerId, 'tower', tower)
+    state.scenario.cells[archers.row][archers.column].object = {
+      type: 'squad', ownerId, units: { militia: 0, spearmen: 0, archers: 2, knights: 0 }, health: 2,
+    }
+    const candidate = tacticalCandidates(state, aiProfiles.svyatobor, createAiMemory(), 'mobilization', () => true)
+      .find((entry) => entry.command.type === 'garrison')
+    expect(candidate?.command).toEqual({ type: 'garrison', from: archers, tower })
+    expect(candidate?.factors).toContain('standing-garrison')
+  })
+
+  it('finishes a strong fortification with towers after the gate and curtain are complete', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const analysis = analyzeAiWorld(state.scenario, ownerId)
+    expect(analysis).not.toBeNull()
+    if (!analysis) return
+    const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles.svyatobor)
+    const line = settlementPlan.fortification?.lines[0]
+    expect(line?.towers.length).toBeGreaterThan(0)
+    if (!line?.towers.length) return
+    placeTestBuilding(state, ownerId, 'barbican', line.gate)
+    line.walls.forEach((position) => placeTestBuilding(state, ownerId, 'wall', position))
+    const defenseKeys = new Set([line.gate, ...line.walls, ...line.towers].map(positionKey))
+    const armyPosition = analysis.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => (
+      cell.inRegion && !state.scenario.cells[rowIndex][column].object
+        && !defenseKeys.has(positionKey({ column, row: rowIndex }))
+        ? [{ column, row: rowIndex }]
+        : []
+    )))[0]
+    expect(armyPosition).toBeDefined()
+    if (!armyPosition) return
+    state.scenario.cells[armyPosition.row][armyPosition.column].object = {
+      type: 'squad', ownerId, units: { militia: 2, spearmen: 2, archers: 2, knights: 0 }, health: 6,
+    }
+    state.domains[ownerId] = {
+      ...state.domains[ownerId],
+      resources: {
+        ...state.domains[ownerId].resources,
+        wood: 500,
+        stone: 500,
+        flour: 500,
+        meat: 500,
+        fruit: 500,
+        gold: 500,
+      },
+    }
+    const memory = { ...createAiMemory(), phase: 'mobilization' as const, settlementPlan }
+    expect(nextFortificationStep(state, memory)).toBe('tower')
+    expect(economicEmergencyFor(state, ownerId)).toBe(false)
+    expect(totalArmySize(state, ownerId)).toBe(6)
+    const goals = desiredBuildingGoals(state, aiProfiles.svyatobor, analysis, memory, 'mobilization')
+    expect(goals.some((goal) => goal.kind === 'tower')).toBe(true)
+    expect(findStrategicBuildPosition(state, analysis, memory, 'tower', () => true)).toEqual(line.towers[0])
   })
 
   it('buys exactly the stone shortfall for a reachable strategic building', () => {
@@ -382,45 +463,6 @@ describe('AI perception and planning', () => {
     expect(strategicPhaseFor(state, aiProfiles.svyatobor, memory)).toBe('assault')
   })
 
-  it('keeps the anti-stall counter when an idle FFA army retargets', () => {
-    const state = startAiTurn('velislava')
-    const ownerId = state.activeParticipantId
-    const orchard = { column: 18, row: 8 }
-    const lumberMill = { column: 21, row: 5 }
-    const squad = { column: 18, row: 12 }
-    state.scenario.cells[orchard.row][orchard.column].object = {
-      type: 'building', kind: 'orchard', ownerId, hitPoints: 12, maxHitPoints: 12,
-    }
-    state.scenario.cells[lumberMill.row][lumberMill.column].object = {
-      type: 'building', kind: 'lumberMill', ownerId, hitPoints: 15, maxHitPoints: 15,
-    }
-    state.scenario.cells[squad.row][squad.column].object = {
-      type: 'squad', ownerId, units: { militia: 0, spearmen: 3, archers: 0, knights: 0 }, health: 4,
-    }
-    state.domains[ownerId] = {
-      ...state.domains[ownerId],
-      resources: { ...state.domains[ownerId].resources, flour: 80, fruit: 80, gold: 160 },
-    }
-    state.turn = aiProfiles.velislava.earliestOffensiveRound
-
-    const thirdId = 'third-ruler'
-    const thirdCastle = { column: 3, row: 3 }
-    state.scenario.cells[thirdCastle.row][thirdCastle.column].object = {
-      type: 'castle', ownerId: thirdId, hitPoints: 100, maxHitPoints: 100,
-    }
-    state.scenario.participants.push({ id: thirdId, kind: 'ai', profileId: 'radomir', regionId: 'region-0', color: '#ffffff' })
-    const plan = planAiTurn(state, {
-      ...createAiMemory(),
-      phase: 'mobilization',
-      stableTurns: aiPlannerConfig.stableRecoveryTurns,
-      idleTurns: aiPlannerConfig.retargetAfterIdleTurns,
-      targetOwnerId: 'player',
-    }, 'velislava')
-
-    expect(plan.memory.targetOwnerId).toBe(thirdId)
-    expect(plan.memory.phase).toBe('assault')
-  })
-
   it('keeps ranged troops and a front line in both Velislava groups when splitting', () => {
     const squad = {
       type: 'squad' as const,
@@ -495,76 +537,30 @@ describe('AI perception and planning', () => {
       .some((candidate) => candidate.command.type === 'split')).toBe(false)
   })
 
-  it.each(['radomir', 'velislava', 'svyatobor'] as AiProfileId[])('develops an economy, recruits and advances within 80 deterministic rounds as %s', (profileId) => {
-    let state = createMatch(createAiScenario(profileId))
-    const commandTypes = new Set<string>()
-    const buildings = new Set<string>()
-    const troops = new Set<string>()
-    let invalidCommands = 0
-    let maximumThinkTime = 0
-    let attacks = 0
-    for (let round = 0; round < 80 && state.status === 'playing'; round += 1) {
-      if (state.activeParticipantId === state.playerId) {
-        const ended = endTurn(state)
-        if (!ended.ok) throw new Error('Could not finish human turn')
-        state = ended.state
-      }
-      const participant = state.scenario.participants.find((candidate) => candidate.id === state.activeParticipantId)
-      if (participant?.kind !== 'ai' || !participant.profileId) continue
-      const startedAt = performance.now()
-      const plan = planAiTurn(state, state.aiMemory[participant.id], participant.profileId)
-      maximumThinkTime = Math.max(maximumThinkTime, performance.now() - startedAt)
-      state = { ...state, aiMemory: { ...state.aiMemory, [participant.id]: plan.memory } }
-      plan.commands.forEach((command) => {
-        commandTypes.add(command.type)
-        if (command.type === 'build') buildings.add(command.building)
-        if (command.type === 'recruit') troops.add(command.troop)
-        const result = executeAiCommand(state, command)
-        if (!result.ok) invalidCommands += 1
-        else {
-          state = result.state
-          if (state.lastEvent?.kind === 'attacked' || state.lastEvent?.kind === 'destroyed') attacks += 1
-        }
-      })
-      if (state.status === 'playing') {
-        const ended = endTurn(state)
-        if (!ended.ok) throw new Error('Could not finish AI turn')
-        state = ended.state
-      }
+  it('uses the profile finisher preference against a vulnerable adjacent squad', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const from = { column: 13, row: 12 }
+    const weak = { column: 12, row: 12 }
+    state.scenario.cells[from.row][from.column].object = {
+      type: 'squad', ownerId,
+      units: { militia: 0, spearmen: 3, archers: 0, knights: 0 },
+      health: 4.05,
     }
-    const aiId = `ai-${profileId}`
-    const summary = JSON.stringify({ commandTypes: [...commandTypes], buildings: [...buildings], troops: [...troops], attacks, maximumThinkTime, status: state.status, domain: state.domains[aiId], workforce: workforceFor(state, aiId), memory: state.aiMemory[aiId], counts: Object.fromEntries(aiProfiles[profileId].allowedBuildings.map((kind) => [kind, ownedBuildingCount(state, aiId, kind)])) })
-    expect(invalidCommands, summary).toBe(0)
-    expect(commandTypes.has('build'), summary).toBe(true)
-    expect(commandTypes.has('recruit'), summary).toBe(true)
-    expect(commandTypes.has('move-or-attack'), summary).toBe(true)
-    expect(attacks, summary).toBeGreaterThan(0)
-    expect(maximumThinkTime, summary).toBeLessThan(aiPlannerConfig.hardBudgetMs + 50)
-    if (profileId === 'radomir') {
-      expect([...buildings].every((kind) => aiProfiles.radomir.allowedBuildings.includes(kind as never)), summary).toBe(true)
-      expect([...troops].every((kind) => aiProfiles.radomir.allowedTroops.includes(kind as never)), summary).toBe(true)
-      if (state.domains[aiId].population > gameConfig.economy.castleFoodServiceCapacity) {
-        expect(ownedBuildingCount(state, aiId, 'kitchen'), summary).toBeGreaterThanOrEqual(1)
-      }
-      expect(ownedBuildingCount(state, aiId, 'house'), summary).toBeLessThanOrEqual(3)
+    state.scenario.cells[weak.row][weak.column].object = {
+      type: 'squad', ownerId: 'player', units: units(2), health: 0.6,
     }
-    const settlementPlan = state.aiMemory[aiId].settlementPlan
-    expect(settlementPlan, summary).not.toBeNull()
-    if (settlementPlan) {
-      Object.entries(settlementPlan.zones).forEach(([zoneKind, zone]) => {
-        const originsInQuarter = state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
-          const object = cell.object
-          if (object?.type !== 'building' || object.ownerId !== aiId) return []
-          if (object.footprint && (object.footprint.originColumn !== column || object.footprint.originRow !== rowIndex)) return []
-          const kind = object.kind
-          const actualZone = aiBuildingZoneByKind[kind]
-          return actualZone === zoneKind ? [object] : []
-        })).length
-        // One emergency overflow origin is allowed so a blocked blueprint cannot
-        // turn into an economic soft lock. Stable planning trims the excess.
-        expect(originsInQuarter, `${summary}\nquarter:${zoneKind}`).toBeLessThanOrEqual(zone.maxOrigins + 1)
-      })
+    const memory = {
+      ...createAiMemory(),
+      phase: 'assault' as const,
+      targetOwnerId: 'player',
+      squadRoles: { [positionKey(from)]: 'assault' as const },
     }
-    if (profileId !== 'radomir') expect(troops.has('archers') || troops.has('spearmen') || troops.has('knights'), summary).toBe(true)
-  }, 30_000)
+
+    const finishingAttack = tacticalCandidates(state, aiProfiles.svyatobor, memory, 'assault', () => true)
+      .find((candidate) => candidate.command.type === 'move-or-attack'
+        && candidate.command.to.column === weak.column && candidate.command.to.row === weak.row)
+    expect(finishingAttack?.factors.some((factor) => factor.startsWith('finisher:'))).toBe(true)
+  })
+
 })

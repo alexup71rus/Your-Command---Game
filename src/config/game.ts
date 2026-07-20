@@ -105,6 +105,7 @@ export const gameConfig = {
     foodServiceRadius: 5,
   },
   visibility: {
+    enabled: false,
     buildingRadius: 8,
     squadRadius: 10,
     elevatedSquadRadius: 12,
@@ -123,6 +124,7 @@ export const gameConfig = {
     musicVolumeStorageKey: storageKey('music-volume'),
     musicCrossfadeMs: 1_800,
     combatMusicHoldMs: 12_000,
+    combatThreatRadius: 12,
     musicTracks: {
       menu: 'assets/music/the-old-tower-inn.mp3',
       settlement: 'assets/music/woodland-fantasy.mp3',

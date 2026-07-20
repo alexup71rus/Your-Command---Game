@@ -56,7 +56,7 @@ import { mapPresets } from './game/presets'
 import { createSavedMap, defaultMapSelection, loadSavedMapsResult, persistSavedMaps, savedSelection, type MapSelection, type SavedMapDraft } from './game/savedMaps'
 import { deleteSavedGame, listSavedGames, loadSavedGame, saveGame, type SavedGameSummary } from './game/savedGames'
 import { assignOpponentRegions, foundMatch, isCastleSiteValid, type CellPosition, type MapScenario } from './game/scenario'
-import { calculateVisibility, createVisibilitySelector, hasVisibleEnemyThreat, isCellVisible, visibleObjectAt } from './game/visibility'
+import { calculateVisibility, createVisibilitySelector, hasNearbyEnemyThreat, isCellVisible, visibleObjectAt } from './game/visibility'
 import { aiProfileIds, createAiMemory } from './game/ai/model'
 import type { AiProfileId } from './game/scenario'
 import { calculateAiPlan, resetAiPlanner } from './game/ai/workerClient'
@@ -159,13 +159,15 @@ export function App() {
   const matchCells = match?.scenario.cells
   const matchPlayerId = match?.playerId
   const visibility = useMemo(
-    () => matchCells && matchPlayerId ? visibilitySelector(matchCells, matchPlayerId) : null,
+    () => gameConfig.visibility.enabled && matchCells && matchPlayerId
+      ? visibilitySelector(matchCells, matchPlayerId)
+      : null,
     [matchCells, matchPlayerId, visibilitySelector],
   )
   const visibleEnemyNearby = useMemo(() => {
-    if (phase !== 'playing' || !matchCells || !matchPlayerId || !visibility) return false
-    return hasVisibleEnemyThreat(matchCells, visibility, matchPlayerId)
-  }, [matchCells, matchPlayerId, phase, visibility])
+    if (phase !== 'playing' || !matchCells || !matchPlayerId) return false
+    return hasNearbyEnemyThreat(matchCells, matchPlayerId, gameConfig.audio.combatThreatRadius)
+  }, [matchCells, matchPlayerId, phase])
   const musicScene: MusicScene = phase !== 'playing' || overlay !== null
     ? 'menu'
     : visibleEnemyNearby || recentCombat
@@ -883,12 +885,18 @@ export function App() {
           }
           working = result.state
           const targetPosition = aiCommandTargetPosition(command)
-          const playerVisibilityBefore = calculateVisibility(before.scenario.cells, before.playerId)
-          const playerVisibilityAfter = calculateVisibility(working.scenario.cells, working.playerId)
-          const visibleAction = Boolean(targetPosition && (isCellVisible(playerVisibilityBefore, targetPosition) || isCellVisible(playerVisibilityAfter, targetPosition)))
+          const playerVisibilityBefore = gameConfig.visibility.enabled
+            ? calculateVisibility(before.scenario.cells, before.playerId, true)
+            : null
+          const playerVisibilityAfter = gameConfig.visibility.enabled
+            ? calculateVisibility(working.scenario.cells, working.playerId, true)
+            : null
+          const visibleAction = Boolean(targetPosition && (!gameConfig.visibility.enabled
+            || isCellVisible(playerVisibilityBefore, targetPosition)
+            || isCellVisible(playerVisibilityAfter, targetPosition)))
           const targetBefore = targetPosition ? objectAt(before, targetPosition) : null
           const threatensPlayer = Boolean(targetBefore?.ownerId === before.playerId && (working.lastEvent?.kind === 'attacked' || working.lastEvent?.kind === 'destroyed'))
-          const enteredSight = command.type === 'move-or-attack'
+          const enteredSight = gameConfig.visibility.enabled && command.type === 'move-or-attack'
             && !isCellVisible(playerVisibilityBefore, command.from)
             && isCellVisible(playerVisibilityAfter, command.to)
           if (visibleAction) {

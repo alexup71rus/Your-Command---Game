@@ -4,6 +4,7 @@ import type { BuildingKind, GameMap, MapObject } from '../map'
 import { buildingFootprintPositions } from '../match'
 import { clockwiseCardinalDirections } from '../geometry'
 import { findMovementPath } from '../pathfinding'
+import { terrainMovementOrderMultiplier } from '../movement'
 import type { CellPosition, MapScenario } from '../scenario'
 import type { AiLayoutKind, AiOpeningKind, AiProfileRules, AiSettlementPlan, AiSettlementZoneKind } from './model'
 
@@ -23,7 +24,7 @@ export interface AiCellAnalysis {
   adjacentForest: number
   passableNeighbors: number
   chokeScore: number
-  visibilityScore: number
+  lineOfFireScore: number
   plainOpportunity: number
   hillOpportunity: number
 }
@@ -165,10 +166,10 @@ export function analyzeAiWorld(scenario: MapScenario, ownerId: string): AiWorldA
     }).length
     const adjacentForest = clockwiseCardinalDirections.reduce((total, direction) => total + Number(scenario.cells[rowIndex + direction.row]?.[column + direction.column]?.vegetation), 0)
     const distanceToFrontLine = Math.abs((front.column - castle.column) * (rowIndex - castle.row) - (front.row - castle.row) * (column - castle.column))
-    const visibilityScore = inRegion && cell.landform !== 'peak'
+    const lineOfFireScore = inRegion && cell.landform !== 'peak'
       ? clockwiseCardinalDirections.reduce((total, direction) => {
         let length = 0
-        for (let step = 1; step <= aiSpatialConfig.visibilityRayLength; step += 1) {
+        for (let step = 1; step <= aiSpatialConfig.lineOfFireRayLength; step += 1) {
           const target = scenario.cells[rowIndex + direction.row * step]?.[column + direction.column * step]
           if (!target || target.landform === 'peak' || target.vegetation) break
           length += 1
@@ -190,7 +191,7 @@ export function analyzeAiWorld(scenario: MapScenario, ownerId: string): AiWorldA
         ? Math.max(0, aiSpatialConfig.choke.blockedNeighborBase - neighbors) * aiSpatialConfig.choke.blockedNeighborWeight
           + Math.max(0, aiSpatialConfig.choke.frontLineBase - distanceToFrontLine * aiSpatialConfig.choke.frontLineDistanceWeight)
         : 0,
-      visibilityScore,
+      lineOfFireScore,
       plainOpportunity: inRegion && cell.landform === 'plain' && !cell.vegetation ? 1 : 0,
       hillOpportunity: inRegion && cell.landform === 'hill' && !cell.vegetation ? 1 : 0,
     }
@@ -252,9 +253,9 @@ function strippedMap(map: GameMap): GameMap {
   return map.map((row) => row.map((cell) => ({ ...cell, object: undefined })))
 }
 
-function corridorToFront(analysis: AiWorldAnalysis, scenario: MapScenario) {
+function corridorToTarget(analysis: AiWorldAnalysis, scenario: MapScenario, target: CellPosition) {
   const regionTargets = borderCells(scenario, analysis.regionId)
-    .sort((first, second) => positionDistance(first, analysis.front) - positionDistance(second, analysis.front)
+    .sort((first, second) => positionDistance(first, target) - positionDistance(second, target)
       || first.row - second.row || first.column - second.column)
   const map = strippedMap(scenario.cells)
   for (const target of regionTargets) {
@@ -276,13 +277,198 @@ function bestSiteNear(analysis: AiWorldAnalysis, predicate: (position: CellPosit
   return candidates[0]?.position
 }
 
+function fortificationLineFor(
+  analysis: AiWorldAnalysis,
+  scenario: MapScenario,
+  corridor: CellPosition[],
+  wallLimit: number,
+  towerLimit: number,
+): NonNullable<AiSettlementPlan['fortification']>['lines'][number] | null {
+  if (wallLimit < aiSpatialConfig.settlementPlan.fortification.minimumWalls) return null
+  const config = aiSpatialConfig.settlementPlan.fortification
+  const approach = corridor.at(-1)
+  if (!approach) return null
+  const desiredIndex = Math.min(corridor.length - 1, Math.max(
+    config.minimumCastleDistance,
+    Math.floor(corridor.length * aiSpatialConfig.gateCorridorShare),
+  ))
+  const maximumIndex = Math.min(corridor.length - 1, Math.max(
+    config.minimumCastleDistance,
+    Math.floor(corridor.length * config.maximumCorridorShare),
+  ))
+  const startIndex = config.minimumCastleDistance
+  const endIndex = maximumIndex
+  const isOpen = (position: CellPosition) => {
+    const cell = scenario.cells[position.row]?.[position.column]
+    return Boolean(cell && cell.landform !== 'peak' && !cell.vegetation
+      && scenario.territories[position.row]?.[position.column] === analysis.regionId
+      && !cell.object)
+  }
+  const isNaturalAnchor = (position: CellPosition) => {
+    const cell = scenario.cells[position.row]?.[position.column]
+    return !cell || cell.landform === 'peak'
+      || scenario.territories[position.row]?.[position.column] !== analysis.regionId
+  }
+  const routeLength = (blocked: Set<string>) => {
+    const path = findMovementPath(stripped, approach, analysis.castle, {
+      cellCost: (position, cell) => blocked.has(positionKey(position))
+        || scenario.territories[position.row]?.[position.column] !== analysis.regionId
+        ? Number.POSITIVE_INFINITY
+        : terrainMovementOrderMultiplier(cell),
+    })
+    return path?.slice(1).reduce((sum, position) => {
+      const cell = scenario.cells[position.row]?.[position.column]
+      return sum + (cell ? terrainMovementOrderMultiplier(cell) : 0)
+    }, 0) ?? Number.POSITIVE_INFINITY
+  }
+  const stripped = strippedMap(scenario.cells)
+  const baselineRouteLength = routeLength(new Set())
+  const candidates: Array<{
+    gate: CellPosition
+    walls: CellPosition[]
+    towers: CellPosition[]
+    naturalAnchors: number
+    score: number
+  }> = []
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const gate = corridor[index]
+    if (!gate || !isOpen(gate)) continue
+    const previous = corridor[Math.max(0, index - 1)] ?? analysis.castle
+    const next = corridor[Math.min(corridor.length - 1, index + 1)] ?? analysis.front
+    const rowDelta = next.row - previous.row
+    const columnDelta = next.column - previous.column
+    const perpendicular = Math.abs(columnDelta) >= Math.abs(rowDelta)
+      ? { column: 0, row: 1 }
+      : { column: 1, row: 0 }
+    const sides = [-1, 1] as const
+    const walls: CellPosition[] = []
+    const sideWalls: Record<(typeof sides)[number], CellPosition[]> = { '-1': [], '1': [] }
+    const sideOpen: Record<(typeof sides)[number], boolean> = { '-1': true, '1': true }
+    let naturalAnchors = 0
+    for (let offset = 1; walls.length < wallLimit && (sideOpen[-1] || sideOpen[1]); offset += 1) {
+      for (const side of sides) {
+        if (!sideOpen[side] || walls.length >= wallLimit) continue
+        const position = {
+          column: gate.column + perpendicular.column * offset * side,
+          row: gate.row + perpendicular.row * offset * side,
+        }
+        if (!isOpen(position)) {
+          sideOpen[side] = false
+          if (isNaturalAnchor(position)) naturalAnchors += 1
+          continue
+        }
+        walls.push(position)
+        sideWalls[side].push(position)
+      }
+    }
+    for (const side of sides) {
+      const offset = sideWalls[side].length + 1
+      const endpoint = {
+        column: gate.column + perpendicular.column * offset * side,
+        row: gate.row + perpendicular.row * offset * side,
+      }
+      if (sideOpen[side] && isNaturalAnchor(endpoint)) naturalAnchors += 1
+    }
+    if (walls.length < config.minimumWalls) continue
+    const towers = sides.flatMap((side) => {
+      if (towerLimit <= 0 || sideWalls[side].length === 0) return []
+      const offset = sideWalls[side].length + 1
+      const position = {
+        column: gate.column + perpendicular.column * offset * side,
+        row: gate.row + perpendicular.row * offset * side,
+      }
+      return isOpen(position) ? [position] : []
+    }).slice(0, towerLimit)
+    const friendlyRouteLength = routeLength(new Set([...walls, ...towers].map(positionKey)))
+    if (!Number.isFinite(friendlyRouteLength)) continue
+    const fortifiedRouteLength = routeLength(new Set([gate, ...walls, ...towers].map(positionKey)))
+    const pathDelay = Number.isFinite(fortifiedRouteLength)
+      ? Math.max(0, fortifiedRouteLength - baselineRouteLength)
+      : Number.POSITIVE_INFINITY
+    const cell = analysis.cells[gate.row]?.[gate.column]
+    const weakLinePenalty = Number.isFinite(pathDelay)
+      ? Math.max(0, config.minimumPathDelay - pathDelay) * config.weakLinePenalty
+      : 0
+    const score = (cell?.chokeScore ?? 0) * config.chokeWeight
+      + naturalAnchors * config.naturalAnchorBonus
+      + walls.length * config.wallCountBonus
+      + (Number.isFinite(pathDelay) ? pathDelay * config.pathDelayWeight : config.sealedApproachBonus)
+      - Math.abs(index - desiredIndex) * config.preferredDistanceWeight
+      - weakLinePenalty
+    candidates.push({ gate, walls, towers, naturalAnchors, score })
+  }
+  candidates.sort((first, second) => second.score - first.score
+    || first.gate.row - second.gate.row || first.gate.column - second.gate.column)
+  const best = candidates[0]
+  if (!best) return null
+  const kind = best.naturalAnchors > 0 ? 'terrain-gate' : towerLimit > 0 ? 'bastion' : 'curtain'
+  return { kind, approach, gate: best.gate, walls: best.walls, towers: best.towers }
+}
+
+function fortificationPlanFor(
+  analysis: AiWorldAnalysis,
+  scenario: MapScenario,
+  profile: AiProfileRules,
+): AiSettlementPlan['fortification'] {
+  const totalWallLimit = profile.settlement.buildingLimits.wall ?? 0
+  const totalTowerLimit = profile.settlement.buildingLimits.tower ?? 0
+  const lineLimit = Math.min(
+    profile.settlement.buildingLimits.barbican ?? 0,
+    Math.floor(totalWallLimit / aiSpatialConfig.settlementPlan.fortification.minimumWalls),
+  )
+  if (!profile.allowedBuildings.includes('barbican') || lineLimit <= 0) return null
+  const targets = scenario.participants
+    .filter((participant) => participant.id !== analysis.ownerId)
+    .flatMap((participant) => {
+      const castle = castlePositionFor(scenario, participant.id)
+      return castle ? [{ castle, distance: positionDistance(analysis.castle, castle) }] : []
+    })
+    .sort((first, second) => first.distance - second.distance
+      || first.castle.row - second.castle.row || first.castle.column - second.castle.column)
+  const effectiveLineLimit = Math.min(lineLimit, targets.length)
+  const provisionalWallLimit = Math.max(
+    aiSpatialConfig.settlementPlan.fortification.minimumWalls,
+    Math.floor(totalWallLimit / Math.max(1, effectiveLineLimit)),
+  )
+  const provisionalTowerLimit = Math.floor(totalTowerLimit / Math.max(1, effectiveLineLimit))
+  const acceptedCorridors: Array<{ corridor: CellPosition[]; provisional: NonNullable<AiSettlementPlan['fortification']>['lines'][number] }> = []
+  for (const target of targets) {
+    if (acceptedCorridors.length >= effectiveLineLimit) break
+    const corridor = corridorToTarget(analysis, scenario, target.castle)
+    if (corridor.length === 0) continue
+    const provisional = fortificationLineFor(
+      analysis,
+      scenario,
+      corridor,
+      provisionalWallLimit,
+      provisionalTowerLimit,
+    )
+    if (!provisional || acceptedCorridors.some((existing) => positionDistance(existing.provisional.gate, provisional.gate)
+      < aiSpatialConfig.settlementPlan.fortification.minimumLineSpacing)) continue
+    acceptedCorridors.push({ corridor, provisional })
+  }
+  const lines = acceptedCorridors.map(({ corridor, provisional }, index) => {
+    const wallLimit = Math.floor(totalWallLimit / acceptedCorridors.length)
+      + Number(index < totalWallLimit % acceptedCorridors.length)
+    const towerLimit = Math.floor(totalTowerLimit / acceptedCorridors.length)
+      + Number(index < totalTowerLimit % acceptedCorridors.length)
+    return fortificationLineFor(analysis, scenario, corridor, wallLimit, towerLimit) ?? provisional
+  })
+  return lines.length > 0 ? { lines } : null
+}
+
 export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapScenario, profile: AiProfileRules): AiSettlementPlan {
   const layout = chooseAllowed(analysis.layoutScores, profile.allowedLayouts, profile.allowedLayouts, scenario.seed + analysis.regionId.length)
   const opening = chooseAllowed(analysis.openingScores, profile.preferredOpenings, profile.preferredOpenings,
     scenario.seed + profile.id.length * aiSpatialConfig.settlementPlan.profileSeedMultiplier)
-  const corridor = corridorToFront(analysis, scenario)
+  const corridor = corridorToTarget(analysis, scenario, analysis.front)
+  const fortification = fortificationPlanFor(analysis, scenario, profile)
   const corridorSet = new Set(corridor.map(positionKey))
-  const ordinary = (position: CellPosition, cell: AiCellAnalysis) => cell.passable && !corridorSet.has(positionKey(position))
+  const fortificationSet = new Set(fortification
+    ? fortification.lines.flatMap((line) => [line.gate, ...line.walls, ...line.towers]).map(positionKey)
+    : [])
+  const ordinary = (position: CellPosition, cell: AiCellAnalysis) => cell.passable
+    && !corridorSet.has(positionKey(position)) && !fortificationSet.has(positionKey(position))
   const rearward = (position: CellPosition) => positionDistance(position, analysis.front) > positionDistance(analysis.castle, analysis.front)
   const clear = (position: CellPosition) => !scenario.cells[position.row]?.[position.column]?.vegetation
   const preferredDistance = aiSpatialConfig.preferredSiteDistance
@@ -298,7 +484,8 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     && cell.adjacentForest >= (buildingRules.lumberMill.minimumAdjacentForestCells ?? 0), preferredDistance.industryFallback)
   const military = bestSiteNear(analysis, (position, cell) => ordinary(position, cell) && clear(position) && !rearward(position), preferredDistance.military)
     ?? bestSiteNear(analysis, (position, cell) => ordinary(position, cell) && clear(position), preferredDistance.military)
-  const gate = corridor[Math.min(corridor.length - 1, Math.max(0, Math.floor(corridor.length * aiSpatialConfig.gateCorridorShare)))]
+  const primaryFortification = fortification?.lines[0]
+  const gate = primaryFortification?.gate
   const passableCount = analysis.cells.flat().filter((cell) => cell.inRegion && cell.passable).length
   const regionScale = Math.max(aiSpatialConfig.regionScale.minimum,
     Math.min(aiSpatialConfig.regionScale.maximum, Math.sqrt(passableCount / aiSpatialConfig.regionScale.referenceCells)))
@@ -343,12 +530,15 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     const limit = profile.settlement.buildingLimits[kind]
     return limit === undefined ? [] : [[kind, limit]]
   })) as Partial<Record<BuildingKind, number>>
+  const fortificationOrigins = fortification?.lines.reduce((sum, line) => (
+    sum + 1 + line.walls.length + line.towers.length
+  ), 0) ?? 0
   const zones: AiSettlementPlan['zones'] = {
     housing: { centers: centers.housing, cells: cells.housing, maxOrigins: originLimit('housing'), maxBuildings: limitsFor([...aiBuildingKindsByZone.housing]), overflowRadius: profile.settlement.overflowRadius.housing },
     food: { centers: centers.food, cells: cells.food, maxOrigins: originLimit('food'), maxBuildings: limitsFor([...aiBuildingKindsByZone.food]), overflowRadius: profile.settlement.overflowRadius.food },
     industry: { centers: centers.industry, cells: cells.industry, maxOrigins: originLimit('industry'), maxBuildings: limitsFor([...aiBuildingKindsByZone.industry]), overflowRadius: profile.settlement.overflowRadius.industry },
     military: { centers: centers.military, cells: cells.military, maxOrigins: originLimit('military'), maxBuildings: limitsFor([...aiBuildingKindsByZone.military]), overflowRadius: profile.settlement.overflowRadius.military },
-    defense: { centers: centers.defense, cells: cells.defense, maxOrigins: originLimit('defense'), maxBuildings: limitsFor([...aiBuildingKindsByZone.defense]), overflowRadius: profile.settlement.overflowRadius.defense },
+    defense: { centers: centers.defense, cells: cells.defense, maxOrigins: Math.max(originLimit('defense'), fortificationOrigins), maxBuildings: limitsFor([...aiBuildingKindsByZone.defense]), overflowRadius: profile.settlement.overflowRadius.defense },
   }
   return {
     layout,
@@ -361,9 +551,10 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
       military,
       industry,
       gate,
-      leftTower: gate ? { column: gate.column + (analysis.front.row === analysis.castle.row ? 0 : 1), row: gate.row + (analysis.front.row === analysis.castle.row ? 1 : 0) } : undefined,
-      rightTower: gate ? { column: gate.column - (analysis.front.row === analysis.castle.row ? 0 : 1), row: gate.row - (analysis.front.row === analysis.castle.row ? 1 : 0) } : undefined,
+      leftTower: primaryFortification?.towers[0],
+      rightTower: primaryFortification?.towers[1],
     },
+    fortification,
     zones,
   }
 }

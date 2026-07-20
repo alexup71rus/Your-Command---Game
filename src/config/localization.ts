@@ -134,7 +134,6 @@ export interface LocaleDictionary {
     garrisonExit: string
     towerAttack: string
     towerRange: string
-    towerSight: string
     towerCapacity: string
     armyLimit: string
     endTurn: string
