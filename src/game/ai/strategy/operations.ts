@@ -75,7 +75,7 @@ import {
   minimumFieldArmySize,
   plannedBuildingLimit,
 } from './shared'
-import type { StrategicCandidate } from './types'
+import type { StrategicCandidate, StrategicCandidateMetrics } from './types'
 import { projectedStrategicScore } from './scoring'
 
 const foodResources = gameConfig.economy.foodResources
@@ -817,24 +817,39 @@ export function strategicCandidates(
   phase: AiStrategicPhase,
   countNode: () => boolean,
   diagnostics?: AiPlanTraceEntry[],
+  metrics?: StrategicCandidateMetrics,
 ): StrategicCandidate[] {
+  const measure = <T>(key: keyof StrategicCandidateMetrics, operation: () => T) => {
+    const startedAt = performance.now()
+    try {
+      return operation()
+    } finally {
+      if (metrics) metrics[key] += performance.now() - startedAt
+    }
+  }
   const candidates: StrategicCandidate[] = []
-  const tax = taxCandidate(state, profile, phase, memory)
-  if (tax) candidates.push(tax)
-  const market = marketCandidate(state, profile, phase, memory, analysis, countNode)
-  if (market) candidates.push(market)
-  const dismiss = dismissalCandidate(state, profile, memory, phase)
-  if (dismiss) candidates.push(dismiss)
-  const demolition = demolitionCandidate(state, profile, memory, phase)
-  if (demolition) candidates.push(demolition)
-  const recruitment = recruitmentCandidate(state, profile, phase, countNode, memory)
-  if (recruitment) candidates.push(recruitment)
-  const buildingGoals = desiredBuildingGoals(state, profile, analysis, memory, phase, countNode)
+  measure('otherCandidatesMs', () => {
+    const tax = taxCandidate(state, profile, phase, memory)
+    if (tax) candidates.push(tax)
+    const market = marketCandidate(state, profile, phase, memory, analysis, countNode)
+    if (market) candidates.push(market)
+    const dismiss = dismissalCandidate(state, profile, memory, phase)
+    if (dismiss) candidates.push(dismiss)
+    const demolition = demolitionCandidate(state, profile, memory, phase)
+    if (demolition) candidates.push(demolition)
+    const recruitment = recruitmentCandidate(state, profile, phase, countNode, memory)
+    if (recruitment) candidates.push(recruitment)
+  })
+  const buildingGoals = measure('buildingGoalsMs', () => (
+    desiredBuildingGoals(state, profile, analysis, memory, phase, countNode)
+  ))
   for (const goal of buildingGoals.slice(0, aiStrategicConfig.maximumBuildingGoalsPerSearch)) {
     if (!countNode()) break
     const cost = buildingResourceCostFor(state, state.activeParticipantId, goal.kind)
     if (!canAfford(state.domains[state.activeParticipantId].resources, cost)) {
-      const reachable = reachableBuildPositionFor(state, analysis, memory, goal.kind, countNode)
+      const reachable = measure('buildingPlacementMs', () => (
+        reachableBuildPositionFor(state, analysis, memory, goal.kind, countNode)
+      ))
       diagnostics?.push({
         goal: phase,
         score: goal.utility,
@@ -847,7 +862,9 @@ export function strategicCandidates(
       if (reachable) break
       continue
     }
-    const position = findStrategicBuildPosition(state, analysis, memory, goal.kind, countNode)
+    const position = measure('buildingPlacementMs', () => (
+      findStrategicBuildPosition(state, analysis, memory, goal.kind, countNode)
+    ))
     if (position) {
       const simulated = build(state, goal.kind, position)
       const postBuildForecast = simulated.ok

@@ -6,7 +6,7 @@ import {
 } from '../../../config/ai'
 import { gameConfig } from '../../../config/game'
 import { buildingRules, resourceIds } from '../../../config/rules'
-import type { BuildingKind } from '../../map'
+import type { BuildingKind, GameMap } from '../../map'
 import {
   buildingFootprintPositions,
   buildingPlacementFailure,
@@ -52,6 +52,116 @@ import {
 import type { BuildingGoal } from './types'
 
 const foodResources = gameConfig.economy.foodResources
+
+interface PlacementSpatialMetrics {
+  footprint: CellPosition[]
+  opportunityCost: number
+  tier: number
+  zoneCoverage: number
+  zoneDistance: number
+}
+
+interface PlacementGeometry {
+  local: CellPosition[]
+  regional: CellPosition[]
+  metricsByPosition: Map<string, PlacementSpatialMetrics>
+}
+
+let activePlacementGeometryCache: WeakMap<AiSettlementPlan, WeakMap<AiWorldAnalysis, Map<string, PlacementGeometry>>> | null = null
+let activeAccessPathCache: WeakMap<GameMap, Map<string, CellPosition[] | null>> | null = null
+
+export function withStrategicPlacementCache<T>(run: () => T): T {
+  const previousCache = activePlacementGeometryCache
+  const previousAccessPathCache = activeAccessPathCache
+  activePlacementGeometryCache = new WeakMap()
+  activeAccessPathCache = new WeakMap()
+  try {
+    return run()
+  } finally {
+    activePlacementGeometryCache = previousCache
+    activeAccessPathCache = previousAccessPathCache
+  }
+}
+
+function placementGeometryFor(
+  analysis: AiWorldAnalysis,
+  memory: AiMemory,
+  kind: BuildingKind,
+  adaptiveShiftRadius: number,
+): PlacementGeometry {
+  const plan = memory.settlementPlan
+  const zone = plan?.zones[settlementZoneKindFor(kind)]
+  const create = () => {
+    const localByKey = new Map<string, CellPosition>()
+    if (zone?.cells.length) {
+      zone.cells.forEach((origin) => {
+        for (let deltaRow = -adaptiveShiftRadius; deltaRow <= adaptiveShiftRadius; deltaRow += 1) {
+          const remaining = adaptiveShiftRadius - Math.abs(deltaRow)
+          for (let deltaColumn = -remaining; deltaColumn <= remaining; deltaColumn += 1) {
+            const position = { column: origin.column + deltaColumn, row: origin.row + deltaRow }
+            const key = positionKey(position)
+            if (!localByKey.has(key)) localByKey.set(key, position)
+          }
+        }
+      })
+    } else {
+      analysis.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
+        if (!cell.inRegion) return
+        const position = { column, row: rowIndex }
+        localByKey.set(positionKey(position), position)
+      }))
+    }
+    const regional: CellPosition[] = []
+    analysis.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
+      if (!cell.inRegion) return
+      const position = { column, row: rowIndex }
+      if (!localByKey.has(positionKey(position))) regional.push(position)
+    }))
+    const zoneCells = zone?.cells ?? []
+    const zoneKeys = new Set(zoneCells.map(positionKey))
+    const metricsByPosition = new Map<string, PlacementSpatialMetrics>()
+    const metricsFor = (position: CellPosition) => {
+      const footprint = buildingFootprintPositions(kind, position)
+      const zoneCoverage = footprint.length > 0
+        ? footprint.filter((candidate) => zoneKeys.has(positionKey(candidate))).length / footprint.length
+        : 0
+      const zoneDistance = zoneCells.length > 0
+        ? Math.min(...zoneCells.map((candidate) => positionDistance(position, candidate)))
+        : 0
+      const tier = zoneCoverage >= aiStrategicConfig.placement.preferredZoneCoverage
+        ? 0
+        : zoneDistance <= (zone?.overflowRadius ?? 0) ? 1 : 2
+      metricsByPosition.set(positionKey(position), {
+        footprint,
+        opportunityCost: footprintOpportunityCost(analysis, kind, position),
+        tier,
+        zoneCoverage,
+        zoneDistance,
+      })
+    }
+    localByKey.forEach(metricsFor)
+    regional.forEach(metricsFor)
+    return { local: [...localByKey.values()], regional, metricsByPosition }
+  }
+  if (!plan || !activePlacementGeometryCache) return create()
+  let byAnalysis = activePlacementGeometryCache.get(plan)
+  if (!byAnalysis) {
+    byAnalysis = new WeakMap()
+    activePlacementGeometryCache.set(plan, byAnalysis)
+  }
+  let byKindAndRadius = byAnalysis.get(analysis)
+  if (!byKindAndRadius) {
+    byKindAndRadius = new Map()
+    byAnalysis.set(analysis, byKindAndRadius)
+  }
+  const key = `${kind}:${adaptiveShiftRadius}`
+  let geometry = byKindAndRadius.get(key)
+  if (!geometry) {
+    geometry = create()
+    byKindAndRadius.set(key, geometry)
+  }
+  return geometry
+}
 
 function seededSiteRank(seed: number, kind: BuildingKind, position: CellPosition) {
   const value = `${kind}:${position.column}:${position.row}`
@@ -625,6 +735,34 @@ function reservedFutureFarmCells(state: MatchState, memory: AiMemory) {
   return reserved
 }
 
+function baselineAccessPath(
+  state: MatchState,
+  from: CellPosition,
+  to: CellPosition,
+  capabilityReservations: ReadonlySet<string>,
+) {
+  const calculate = () => findMovementPath(state.scenario.cells, from, to, {
+    ownerId: state.activeParticipantId,
+    canEnterOccupiedCell: (pathPosition) => {
+      const object = state.scenario.cells[pathPosition.row]?.[pathPosition.column]?.object
+      return object?.type === 'squad' && object.ownerId === state.activeParticipantId
+    },
+    cellCost: (pathPosition) => capabilityReservations.has(positionKey(pathPosition))
+      ? Number.POSITIVE_INFINITY
+      : 1,
+  })
+  if (!activeAccessPathCache) return calculate()
+  let pathsForMap = activeAccessPathCache.get(state.scenario.cells)
+  if (!pathsForMap) {
+    pathsForMap = new Map()
+    activeAccessPathCache.set(state.scenario.cells, pathsForMap)
+  }
+  const key = `${state.activeParticipantId}:${positionKey(from)}>${positionKey(to)}:${[...capabilityReservations].join(',')}`
+  if (!pathsForMap.has(key)) pathsForMap.set(key, calculate())
+  const path = pathsForMap.get(key)
+  return path?.map((position) => ({ ...position })) ?? null
+}
+
 function preservesAccess(
   state: MatchState,
   kind: BuildingKind,
@@ -674,7 +812,11 @@ function preservesAccess(
     return !destinations.some((destination) => {
       const cell = state.scenario.cells[destination.row]?.[destination.column]
       if (!cell || cell.landform === 'peak' || routeBlocked(destination)) return false
-      return samePosition(castle, destination) || Boolean(findMovementPath(
+      if (samePosition(castle, destination)) return true
+      const baseline = baselineAccessPath(state, castle, destination, capabilityReservations)
+      if (!baseline) return false
+      if (baseline.every((pathPosition) => !footprint.has(positionKey(pathPosition)))) return true
+      return Boolean(findMovementPath(
         state.scenario.cells,
         castle,
         destination,
@@ -712,15 +854,14 @@ function preservesAccess(
   })
 }
 
-function viableFutureFarmSitesForMill(
+function hasViableFutureFarmSiteForMill(
   state: MatchState,
   mill: CellPosition,
   memory: AiMemory,
   accessSources: ReturnType<typeof aiObjectEntries>,
 ) {
   return potentialFutureFarmSitesForMill(state, mill, memory)
-    .filter((candidate) => preservesAccess(state, 'farm', candidate.origin, memory, accessSources))
-    .map((candidate) => candidate.origin)
+    .some((candidate) => preservesAccess(state, 'farm', candidate.origin, memory, accessSources))
 }
 
 interface BuildingPositionContext {
@@ -737,19 +878,15 @@ function buildingPositionScore(
   kind: BuildingKind,
   position: CellPosition,
   context: BuildingPositionContext,
+  spatial: PlacementSpatialMetrics,
 ) {
   const scoring = aiStrategicConfig.placement
   const cell = analysis.cells[position.row]?.[position.column]
   if (!cell?.inRegion) return Number.NEGATIVE_INFINITY
   const target = context.target
   const targetDistance = target ? positionDistance(position, target) : cell.distanceToCastle
-  const zone = memory.settlementPlan?.zones[settlementZoneKindFor(kind)]
-  const zoneKeys = new Set(zone?.cells.map(positionKey) ?? [])
-  const footprint = buildingFootprintPositions(kind, position)
-  const zoneCoverage = footprint.length > 0 ? footprint.filter((candidate) => zoneKeys.has(positionKey(candidate))).length / footprint.length : 0
-  const zoneDistance = zone?.cells.length ? Math.min(...zone.cells.map((candidate) => positionDistance(candidate, position))) : 0
-  let score = -targetDistance * scoring.targetDistanceWeight - footprintOpportunityCost(analysis, kind, position)
-    + zoneCoverage * scoring.zoneCoverageWeight - zoneDistance * scoring.zoneDistanceWeight
+  let score = -targetDistance * scoring.targetDistanceWeight - spatial.opportunityCost
+    + spatial.zoneCoverage * scoring.zoneCoverageWeight - spatial.zoneDistance * scoring.zoneDistanceWeight
   if (kind === 'lumberMill' || kind === 'huntingLodge') {
     score += cell.adjacentForest * scoring.forestAdjacencyWeight - cell.distanceToForest * scoring.forestDistanceWeight
   }
@@ -845,73 +982,52 @@ export function findStrategicBuildPosition(
     aiStrategicConfig.placement.adaptiveShiftMinimum,
     Math.ceil(Math.sqrt(zone?.cells.length ?? 0) / aiStrategicConfig.placement.adaptiveShiftAreaDivisor),
   ) + stalledExpansion
-  const localKeys = new Set<string>()
-  if (zone?.cells.length) {
-    zone.cells.forEach((origin) => {
-      for (let deltaRow = -adaptiveShiftRadius; deltaRow <= adaptiveShiftRadius; deltaRow += 1) {
-        const remaining = adaptiveShiftRadius - Math.abs(deltaRow)
-        for (let deltaColumn = -remaining; deltaColumn <= remaining; deltaColumn += 1) {
-          localKeys.add(positionKey({ column: origin.column + deltaColumn, row: origin.row + deltaRow }))
-        }
-      }
-    })
-  } else {
-    analysis.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-      if (cell.inRegion) localKeys.add(positionKey({ column, row: rowIndex }))
-    }))
-  }
-  const zoneKeys = new Set(zone?.cells.map(positionKey) ?? [])
-  const coverage = (position: CellPosition) => {
-    const footprint = buildingFootprintPositions(kind, position)
-    return footprint.length > 0 ? footprint.filter((candidate) => zoneKeys.has(positionKey(candidate))).length / footprint.length : 0
-  }
-  const distanceToZone = (position: CellPosition) => zone?.cells.length
-    ? Math.min(...zone.cells.map((candidate) => positionDistance(position, candidate)))
-    : 0
-  const tryKeys = (keys: Iterable<string>) => {
-    const candidates: Array<{ position: CellPosition; score: number }> = []
+  const geometry = placementGeometryFor(analysis, memory, kind, adaptiveShiftRadius)
+  const tryPositions = (positions: readonly CellPosition[]) => {
+    const candidates: Array<{ position: CellPosition; score: number; tier: number }> = []
     let scanned = 0
-    for (const key of keys) {
+    for (const position of positions) {
       if (scanned % aiStrategicConfig.placement.scanCheckInterval === 0 && !countNode()) break
       scanned += 1
-      const [column, row] = key.split(':').map(Number)
-      const position = { column, row }
-      if (!analysis.cells[row]?.[column]?.inRegion) continue
-      const cell = state.scenario.cells[row]?.[column]
+      if (!analysis.cells[position.row]?.[position.column]?.inRegion) continue
+      const cell = state.scenario.cells[position.row]?.[position.column]
       if (!cell || cell.object || cell.landform === 'peak') continue
       if (buildingSiteFailure(state, kind, position) !== null) continue
-      if (kind === 'mill' && viableFutureFarmSitesForMill(state, position, memory, accessSources).length === 0) continue
-      const score = buildingPositionScore(state, analysis, memory, kind, position, context)
-      if (Number.isFinite(score)) candidates.push({ position, score })
+      const spatial = geometry.metricsByPosition.get(positionKey(position))
+      if (!spatial) continue
+      const score = buildingPositionScore(state, analysis, memory, kind, position, context, spatial)
+      if (Number.isFinite(score)) candidates.push({ position, score, tier: spatial.tier })
     }
     candidates.sort((first, second) => {
-      const firstTier = coverage(first.position) >= aiStrategicConfig.placement.preferredZoneCoverage ? 0 : distanceToZone(first.position) <= (zone?.overflowRadius ?? 0) ? 1 : 2
-      const secondTier = coverage(second.position) >= aiStrategicConfig.placement.preferredZoneCoverage ? 0 : distanceToZone(second.position) <= (zone?.overflowRadius ?? 0) ? 1 : 2
       const scoreDifference = second.score - first.score
-      if (firstTier !== secondTier) return firstTier - secondTier
+      if (first.tier !== second.tier) return first.tier - second.tier
       if (Math.abs(scoreDifference) > aiSpatialConfig.settlementPlan.scoreTieEpsilon) return scoreDifference
       return seededSiteRank(state.scenario.seed, kind, first.position)
         - seededSiteRank(state.scenario.seed, kind, second.position)
         || first.position.row - second.position.row
         || first.position.column - second.position.column
     })
-    const shortlist = candidates.slice(0, aiStrategicConfig.buildingPlacementShortlist)
-    for (const candidate of shortlist) {
+    let viableCandidates = 0
+    for (const candidate of candidates) {
       if (!countNode()) break
-      if (buildingFootprintPositions(kind, candidate.position).some((position) => isTemporarilyBlocked(memory, position, state.turn))) continue
+      if (kind === 'mill' && !hasViableFutureFarmSiteForMill(
+        state,
+        candidate.position,
+        memory,
+        accessSources,
+      )) continue
+      viableCandidates += 1
+      if (viableCandidates > aiStrategicConfig.buildingPlacementShortlist) break
+      const spatial = geometry.metricsByPosition.get(positionKey(candidate.position))
+      if (!spatial || spatial.footprint.some((position) => isTemporarilyBlocked(memory, position, state.turn))) continue
       if (!preservesAccess(state, kind, candidate.position, memory, accessSources)) continue
       if (buildingPlacementFailure(state, kind, candidate.position) === null) return candidate.position
     }
     return null
   }
-  const local = tryKeys(localKeys)
+  const local = tryPositions(geometry.local)
   if (local) return local
-  const regionalKeys: string[] = []
-  analysis.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const key = positionKey({ column, row: rowIndex })
-    if (cell.inRegion && !localKeys.has(key)) regionalKeys.push(key)
-  }))
-  return tryKeys(regionalKeys)
+  return tryPositions(geometry.regional)
 }
 
 export function fundedStoneGoalFor(

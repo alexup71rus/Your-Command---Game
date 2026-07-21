@@ -11,7 +11,27 @@ export interface MovementPathOptions {
 
 const samePosition = (first: CellPosition, second: CellPosition) => first.column === second.column && first.row === second.row
 
-export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions = {}): CellPosition[] | null {
+type CachedPath = CellPosition[] | null
+
+let activePathCache: WeakMap<GameMap, Map<string, CachedPath>> | null = null
+
+const clonePath = (path: CachedPath): CachedPath => path?.map((position) => ({ ...position })) ?? null
+
+/**
+ * Keeps callback-free path searches local to one synchronous planning request.
+ * The scope prevents stale routes from surviving state changes between turns.
+ */
+export function withMovementPathCache<T>(run: () => T): T {
+  const previousCache = activePathCache
+  activePathCache = new WeakMap()
+  try {
+    return run()
+  } finally {
+    activePathCache = previousCache
+  }
+}
+
+function findMovementPathUncached(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions): CellPosition[] | null {
   const rows = map.length
   const columns = map[0]?.length ?? 0
   const insideMap = (position: CellPosition) => position.column >= 0 && position.column < columns && position.row >= 0 && position.row < rows
@@ -116,4 +136,22 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
     if (index === sourceIndex) break
   }
   return path.reverse()
+}
+
+export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions = {}): CellPosition[] | null {
+  if (!activePathCache || options.canEnterOccupiedCell || options.cellCost) {
+    return findMovementPathUncached(map, from, to, options)
+  }
+
+  let pathsForMap = activePathCache.get(map)
+  if (!pathsForMap) {
+    pathsForMap = new Map()
+    activePathCache.set(map, pathsForMap)
+  }
+  const key = `${options.ownerId ?? ''}:${from.column},${from.row}>${to.column},${to.row}`
+  if (pathsForMap.has(key)) return clonePath(pathsForMap.get(key) ?? null)
+
+  const path = findMovementPathUncached(map, from, to, options)
+  pathsForMap.set(key, clonePath(path))
+  return path
 }

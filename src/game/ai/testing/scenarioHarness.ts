@@ -17,6 +17,7 @@ import {
   createAiMemory,
   type AiCommand,
   type AiMemory,
+  type AiPlanTimings,
   type AiPlanTraceEntry,
   type AiStrategicPhase,
   type AiWaveKind,
@@ -48,6 +49,7 @@ export interface ScenarioTurn {
   failures: ScenarioCommandFailure[]
   trace: AiPlanTraceEntry[]
   exploredNodes: number
+  timings: AiPlanTimings
   report: TurnReport
   buildingCounts: Record<BuildingKind, number>
   armySize: number
@@ -74,6 +76,7 @@ export interface SkirmishTurn {
   failures: ScenarioCommandFailure[]
   trace: AiPlanTraceEntry[]
   exploredNodes: number
+  timings: AiPlanTimings
   report: TurnReport | null
   snapshot: SkirmishSnapshot
 }
@@ -159,6 +162,26 @@ export interface FrozenTacticalRun {
   exploredNodes: number
 }
 
+const emptyPlanTimings = (): AiPlanTimings => ({
+  perceptionMs: 0,
+  worldAnalysisMs: 0,
+  settlementPlanMs: 0,
+  tacticalCandidatesMs: 0,
+  strategicSearchMs: 0,
+  strategicCandidatesMs: 0,
+  strategicEvaluationMs: 0,
+  strategicEconomyProjectionMs: 0,
+  strategicSimulationMs: 0,
+  strategicOtherCandidatesMs: 0,
+  strategicBuildingGoalsMs: 0,
+  strategicBuildingPlacementMs: 0,
+  totalMs: 0,
+})
+
+const addPlanTimings = (total: AiPlanTimings, addition: AiPlanTimings) => {
+  for (const key of Object.keys(total) as Array<keyof AiPlanTimings>) total[key] += addition[key]
+}
+
 export function buildingCountsFor(state: MatchState, ownerId: string) {
   return Object.fromEntries(buildingKinds.map((kind) => [
     kind,
@@ -237,6 +260,7 @@ export function runAiScenario(
     const failures: ScenarioCommandFailure[] = []
     const trace: AiPlanTraceEntry[] = []
     let exploredNodes = 0
+    const timings = emptyPlanTimings()
     for (let attempt = 0; attempt < aiPlannerConfig.maximumPlanAttempts && state.status === 'playing'; attempt += 1) {
       if (attempt > 0) {
         planned = planAiTurn(state, state.aiMemory[participantId] ?? createAiMemory(), profileId, {
@@ -247,6 +271,7 @@ export function runAiScenario(
       plannedCommands.push(...planned.commands)
       trace.push(...planned.trace)
       exploredNodes += planned.exploredNodes
+      addPlanTimings(timings, planned.timings)
       let commandFailed = false
       for (const command of planned.commands) {
         const result = executeAiCommand(state, command)
@@ -284,6 +309,7 @@ export function runAiScenario(
       failures,
       trace,
       exploredNodes,
+      timings,
       report,
       buildingCounts: buildingCountsFor(state, participantId),
       armySize: aiObjectEntries(state.scenario, participantId).reduce((sum, entry) => (
@@ -332,6 +358,7 @@ export function runAiSkirmish(initialState: MatchState, options: SkirmishOptions
     const failures: ScenarioCommandFailure[] = []
     const trace: AiPlanTraceEntry[] = []
     let exploredNodes = 0
+    const timings = emptyPlanTimings()
     for (let attempt = 0; attempt < aiPlannerConfig.maximumPlanAttempts && state.status === 'playing'; attempt += 1) {
       if (attempt > 0) {
         planned = planAiTurn(state, state.aiMemory[ownerId] ?? createAiMemory(), participant.profileId, {
@@ -341,6 +368,7 @@ export function runAiSkirmish(initialState: MatchState, options: SkirmishOptions
       plannedCommands.push(...planned.commands)
       trace.push(...planned.trace)
       exploredNodes += planned.exploredNodes
+      addPlanTimings(timings, planned.timings)
       let commandFailed = false
       for (const command of planned.commands) {
         const previousEvent = state.lastEvent
@@ -368,6 +396,7 @@ export function runAiSkirmish(initialState: MatchState, options: SkirmishOptions
         phase: planned.memory.phase, wave: planned.memory.wave,
         planned: plannedCommands, executed, events, cancellations, failures, trace,
         exploredNodes,
+        timings,
         report: null,
         snapshot: skirmishSnapshotFor(state),
       })
@@ -383,7 +412,7 @@ export function runAiSkirmish(initialState: MatchState, options: SkirmishOptions
       round, ownerId, profileId: participant.profileId,
       phase: planned.memory.phase, wave: planned.memory.wave,
       planned: plannedCommands, executed, events, cancellations, failures, trace,
-      exploredNodes, report,
+      exploredNodes, timings, report,
       snapshot: skirmishSnapshotFor(state),
     })
   }

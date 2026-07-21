@@ -1,6 +1,5 @@
-import { aiBuildingZoneByKind, aiPlannerConfig, aiProfiles } from '../../config/ai'
+import { aiPlannerConfig, aiProfiles } from '../../config/ai'
 import { gameConfig } from '../../config/game'
-import { economyBuildingKinds, resourceIds } from '../../config/rules'
 import { executeAiCommand } from './commands'
 import {
   aiObjectEntries,
@@ -10,6 +9,7 @@ import {
   createSettlementPlan,
   positionDistance,
   positionKey,
+  withAiObjectIndexCache,
   type AiWorldAnalysis,
 } from './analysis'
 import { createAiPerception } from './perception'
@@ -18,12 +18,9 @@ import {
   economySnapshotFor,
   immediateCriticalAssetAttackFor,
   marketCandidate,
-  projectedStrategicScore,
   recruitmentCandidate,
-  nextFortificationStep,
-  strategicCandidates,
   strategicPhaseFor,
-  type StrategicCandidate,
+  withStrategicPlacementCache,
 } from './strategy'
 import {
   assignSquadRoles,
@@ -32,306 +29,27 @@ import {
   tacticalMovementEdgeKey,
   waveFor,
 } from './tactics'
-import { createAiMemory, type AiCommand, type AiMemory, type AiPlan, type AiPlanTraceEntry, type AiSettlementPlan } from './model'
+import type { AiCommand, AiMemory, AiPlan, AiPlanTimings, AiPlanTraceEntry } from './model'
+import { normalizeAiMemory, preserveCommittedFortification } from './planning/memory'
+import {
+  commandAllowed,
+  openingTacticalOrderReserve,
+  strategicOrderReserve,
+  type AiPlanningMode,
+} from './planning/policy'
+import { searchStrategicSequence } from './planning/strategicSearch'
 import type { AiProfileId } from '../scenario'
-import { buildingResourceCostFor, objectAt, projectOwnerEconomy, type MatchState } from '../match'
+import { objectAt, withMatchObjectIndexCache, type MatchState } from '../match'
+import { withMovementPathCache } from '../pathfinding'
 
-interface SearchNode {
-  state: MatchState
-  candidates: StrategicCandidate[]
-  bonus: number
-  utility: number
-}
-
-export type AiPlanningMode = 'full' | 'development-only' | 'economy-only' | 'combat-only'
+export type { AiPlanningMode } from './planning/policy'
 
 export interface AiPlanningOptions {
   cachedAnalysis?: AiWorldAnalysis | null
   mode?: AiPlanningMode
 }
 
-interface StrategicSearchOptions {
-  diagnostics?: AiPlanTraceEntry[]
-  orderReserve?: number
-  mode?: AiPlanningMode
-}
-
-const engagementCommandTypes = new Set<AiCommand['type']>([
-  'move-or-attack',
-  'split',
-  'garrison',
-  'ungarrison',
-  'tower-attack',
-])
-
-function commandAllowed(state: MatchState, command: AiCommand, mode: AiPlanningMode) {
-  if (mode === 'full') return true
-  const engagement = engagementCommandTypes.has(command.type)
-  if (mode === 'combat-only') return engagement
-  if (engagement) return false
-  if (mode === 'development-only') return true
-  if (command.type === 'build') {
-    return command.building !== 'barracks' && economyBuildingKinds.includes(command.building)
-  }
-  if (command.type === 'demolish') {
-    const object = objectAt(state, command.position)
-    return object?.type === 'building'
-      && object.kind !== 'barracks'
-      && economyBuildingKinds.includes(object.kind)
-  }
-  return command.type === 'tax' || command.type === 'trade' || command.type === 'dismiss'
-}
-
-const commandKey = (command: AiCommand) => JSON.stringify(command)
-
-function strategicBranchFamily(candidate: StrategicCandidate | undefined) {
-  if (!candidate) return 'wait'
-  const command = candidate.command
-  if (command.type === 'build') return `build:${aiBuildingZoneByKind[command.building]}`
-  if (command.type === 'trade') return `trade:${command.direction}`
-  if (command.type === 'recruit') return 'recruit'
-  return command.type
-}
-
-function strategicOrderReserve(phase: AiMemory['phase']) {
-  if (phase === 'defense') return aiPlannerConfig.defenseStrategicOrderReserve
-  if (phase === 'assault') return aiPlannerConfig.assaultOrderReserve
-  if (phase === 'mobilization' || phase === 'regroup') return aiPlannerConfig.ordinaryTacticalOrderReserve
-  return 0
-}
-
-function openingTacticalOrderReserve(state: MatchState, memory: AiMemory) {
-  const ordinary = strategicOrderReserve(memory.phase)
-  if (memory.phase === 'defense'
-    && immediateCriticalAssetAttackFor(state, state.activeParticipantId).threatened) return 0
-  if (memory.phase !== 'defense' || nextFortificationStep(state, memory, true) !== 'tower') return ordinary
-  const resources = state.domains[state.activeParticipantId]?.resources
-  const cost = buildingResourceCostFor(state, state.activeParticipantId, 'tower')
-  const towerAffordable = resources && resourceIds.every((resource) => resources[resource] >= (cost[resource] ?? 0))
-  return towerAffordable ? aiPlannerConfig.defenseTowerOrderReserve : ordinary
-}
-
-function searchStrategicSequence(
-  state: MatchState,
-  profile: (typeof aiProfiles)[AiProfileId],
-  analysis: AiWorldAnalysis,
-  memory: AiMemory,
-  countNode: () => boolean,
-  options: StrategicSearchOptions = {},
-) {
-  const branchesForTurn = (
-    turnState: MatchState,
-    branchOptions: StrategicSearchOptions,
-  ) => {
-    const branchReserve = branchOptions.orderReserve ?? strategicOrderReserve(memory.phase)
-    const branchMode = branchOptions.mode ?? 'full'
-    const rootScore = projectedStrategicScore(turnState, profile, memory.phase)
-    const root: SearchNode = { state: turnState, candidates: [], bonus: 0, utility: rootScore }
-    let beam: SearchNode[] = [root]
-    const explored: SearchNode[] = [root]
-    for (let depth = 0; depth < aiPlannerConfig.strategicSearchDepth; depth += 1) {
-      const expanded: SearchNode[] = []
-      for (const node of beam) {
-        const candidates = strategicCandidates(node.state, profile, analysis, memory, memory.phase, countNode,
-          depth === 0 && node === beam[0] ? branchOptions.diagnostics : undefined)
-          .filter((candidate) => commandAllowed(node.state, candidate.command, branchMode))
-        for (const candidate of candidates) {
-          if (!countNode()) break
-          if (node.candidates.some((selected) => commandKey(selected.command) === commandKey(candidate.command))) continue
-          if (candidate.command.type === 'tax' && node.candidates.some((selected) => selected.command.type === 'tax')) continue
-          if (candidate.command.type === 'trade') {
-            const tradeCommand = candidate.command
-            if (node.candidates.some((selected) => (
-              selected.command.type === 'trade'
-              && selected.command.resource === tradeCommand.resource
-              && selected.command.direction !== tradeCommand.direction
-            ))) continue
-          }
-          if (candidate.command.type === 'demolish') {
-            const position = candidate.command.position
-            if (node.candidates.some((selected) => selected.command.type === 'build'
-              && selected.command.position.column === position.column
-              && selected.command.position.row === position.row)) continue
-            if (node.candidates.some((selected) => selected.command.type === 'build')) continue
-          }
-          if (candidate.command.type === 'build') {
-            const position = candidate.command.position
-            if (node.candidates.some((selected) => selected.command.type === 'demolish'
-              && selected.command.position.column === position.column
-              && selected.command.position.row === position.row)) continue
-            if (node.candidates.some((selected) => selected.command.type === 'demolish')) continue
-          }
-          const result = executeAiCommand(node.state, candidate.command)
-          if (!result.ok) continue
-          const spentOrders = node.state.ordersRemaining - result.state.ordersRemaining
-          if (spentOrders > 0 && result.state.ordersRemaining < branchReserve) continue
-          const projected = projectedStrategicScore(result.state, profile, memory.phase)
-          const prior = Math.max(-aiPlannerConfig.candidatePriorLimit,
-            Math.min(aiPlannerConfig.candidatePriorLimit, candidate.utility * aiPlannerConfig.candidatePriorScale))
-          const bonus = node.bonus + prior
-          expanded.push({
-            state: result.state,
-            candidates: [...node.candidates, candidate],
-            bonus,
-            utility: projected + bonus,
-          })
-        }
-      }
-      if (expanded.length === 0) break
-      expanded.sort((first, second) => second.utility - first.utility || JSON.stringify(first.candidates.map(({ command }) => command)).localeCompare(JSON.stringify(second.candidates.map(({ command }) => command))))
-      explored.push(...expanded)
-      beam = expanded.slice(0, aiPlannerConfig.strategicBeamWidth)
-    }
-    const ordered = explored.slice(1).sort((first, second) => second.utility - first.utility
-      || JSON.stringify(first.candidates.map(({ command }) => command)).localeCompare(JSON.stringify(second.candidates.map(({ command }) => command))))
-    // A pure top-N cut keeps several near-identical cheap economy branches and
-    // drops an enabling action such as a barracks or market before lookahead
-    // can observe the commands it unlocks next turn. Preserve the best branch
-    // from each broad strategic intent, then fill remaining slots by value.
-    const familyBest = new Map<string, SearchNode>()
-    ordered.forEach((branch) => {
-      const family = strategicBranchFamily(branch.candidates[0])
-      if (!familyBest.has(family)) familyBest.set(family, branch)
-    })
-    const representatives = [...familyBest.values()].sort((first, second) => (
-      (second.candidates[0]?.utility ?? 0) - (first.candidates[0]?.utility ?? 0)
-      || second.utility - first.utility
-    ))
-    const selected: SearchNode[] = []
-    ;[...representatives, ...ordered].forEach((branch) => {
-      if (selected.length >= aiPlannerConfig.strategicBeamWidth) return
-      if (!selected.includes(branch)) selected.push(branch)
-    })
-    return [root, ...selected]
-  }
-
-  const reserve = options.orderReserve ?? strategicOrderReserve(memory.phase)
-  const mode = options.mode ?? 'full'
-  const currentBranches = branchesForTurn(state, { ...options, orderReserve: reserve, mode })
-    .slice(0, aiPlannerConfig.strategicCurrentForecastWidth)
-  const futureBranchesForTurn = (futureState: MatchState) => {
-    const root: SearchNode = {
-      state: futureState,
-      candidates: [],
-      bonus: 0,
-      utility: projectedStrategicScore(futureState, profile, memory.phase),
-    }
-    const candidates = strategicCandidates(
-      futureState,
-      profile,
-      analysis,
-      memory,
-      memory.phase,
-      countNode,
-    ).filter((candidate) => commandAllowed(futureState, candidate.command, mode))
-      .slice(0, aiPlannerConfig.strategicFutureCandidateWidth)
-    const branches = candidates.flatMap((candidate): SearchNode[] => {
-      if (!countNode()) return []
-      const result = executeAiCommand(futureState, candidate.command)
-      if (!result.ok) return []
-      const spentOrders = futureState.ordersRemaining - result.state.ordersRemaining
-      if (spentOrders > 0 && result.state.ordersRemaining < reserve) return []
-      const prior = Math.max(-aiPlannerConfig.candidatePriorLimit,
-        Math.min(aiPlannerConfig.candidatePriorLimit, candidate.utility * aiPlannerConfig.candidatePriorScale))
-      return [{
-        state: result.state,
-        candidates: [candidate],
-        bonus: prior,
-        utility: projectedStrategicScore(result.state, profile, memory.phase) + prior,
-      }]
-    }).sort((first, second) => second.utility - first.utility
-      || JSON.stringify(first.candidates.map(({ command }) => command)).localeCompare(JSON.stringify(second.candidates.map(({ command }) => command))))
-    return [root, ...branches]
-  }
-  const forecast = (forecastState: MatchState, turnsRemaining: number): number => {
-    if (turnsRemaining <= 0 || !countNode()) {
-      return projectedStrategicScore(forecastState, profile, memory.phase)
-    }
-    const advanced = projectOwnerEconomy(
-      forecastState,
-      forecastState.activeParticipantId,
-      1,
-    ).state
-    const futureBranches = futureBranchesForTurn(advanced)
-    return Math.max(...futureBranches.map((branch) => (
-      branch.bonus + aiPlannerConfig.strategicFutureDiscount
-        * forecast(branch.state, turnsRemaining - 1)
-    )))
-  }
-  const evaluated = currentBranches.map((branch) => ({
-    branch,
-    value: branch.bonus + aiPlannerConfig.strategicFutureDiscount
-      * forecast(branch.state, aiPlannerConfig.strategicLookaheadTurns - 1),
-  })).sort((first, second) => second.value - first.value
-    || JSON.stringify(first.branch.candidates.map(({ command }) => command)).localeCompare(JSON.stringify(second.branch.candidates.map(({ command }) => command))))
-  const selected = evaluated[0]
-  if (!selected) return currentBranches[0]
-  const wait = evaluated.find((entry) => entry.branch.candidates.length === 0)
-  if (selected.branch.candidates.length === 0 || !wait) return selected.branch
-  const [first, ...rest] = selected.branch.candidates
-  const forecastDelta = selected.value - wait.value
-  return {
-    ...selected.branch,
-    candidates: [{
-      ...first,
-      factors: [
-        ...first.factors,
-        `lookahead:${aiPlannerConfig.strategicLookaheadTurns}`,
-        `forecast-delta:${forecastDelta.toFixed(1)}`,
-      ],
-    }, ...rest],
-  }
-}
-
-function normalizeMemory(previous: AiMemory) {
-  return {
-    ...createAiMemory(),
-    ...previous,
-    squadRoles: previous.squadRoles ?? {},
-    contacts: previous.contacts ?? [],
-    blockedCells: previous.blockedCells ?? [],
-    recentMovements: previous.recentMovements ?? [],
-  }
-}
-
-function fortificationCommitted(state: MatchState, plan: AiSettlementPlan) {
-  return plan.fortification?.lines.some((line) => (
-    [line.gate, ...line.walls, ...line.towers].some((position) => {
-      const object = objectAt(state, position)
-      return object?.type === 'building' && object.ownerId === state.activeParticipantId
-        && (object.kind === 'barbican' || object.kind === 'wall' || object.kind === 'tower')
-    })
-  )) ?? false
-}
-
-function preserveCommittedFortification(
-  state: MatchState,
-  previous: AiSettlementPlan,
-  refreshed: AiSettlementPlan,
-) {
-  if (!fortificationCommitted(state, previous)) return refreshed
-  const primary = previous.fortification?.lines[0]
-  return {
-    ...refreshed,
-    // A started castle is a commitment, not a suggestion. Replanning the
-    // economy around it must not redraw half-built walls into another shape.
-    fortification: previous.fortification,
-    reservedCorridors: previous.reservedCorridors,
-    reservedSites: {
-      ...refreshed.reservedSites,
-      gate: primary?.gate,
-      leftTower: primary?.towers[0],
-      rightTower: primary?.towers[1],
-      outpostTower: previous.reservedSites.outpostTower,
-    },
-    zones: {
-      ...refreshed.zones,
-      defense: previous.zones.defense,
-    },
-  }
-}
-
-export function planAiTurn(
+function planAiTurnInternal(
   authoritativeState: MatchState,
   previousMemory: AiMemory,
   profileId: AiProfileId,
@@ -340,25 +58,70 @@ export function planAiTurn(
   const profile = aiProfiles[profileId]
   const mode = options.mode ?? 'full'
   const startedAt = performance.now()
+  const timings: AiPlanTimings = {
+    perceptionMs: 0,
+    worldAnalysisMs: 0,
+    settlementPlanMs: 0,
+    tacticalCandidatesMs: 0,
+    strategicSearchMs: 0,
+    strategicCandidatesMs: 0,
+    strategicEvaluationMs: 0,
+    strategicEconomyProjectionMs: 0,
+    strategicSimulationMs: 0,
+    strategicOtherCandidatesMs: 0,
+    strategicBuildingGoalsMs: 0,
+    strategicBuildingPlacementMs: 0,
+    totalMs: 0,
+  }
+  type TimedPhase = Exclude<keyof AiPlanTimings, 'totalMs'>
+  const measure = <T>(phaseName: TimedPhase, operation: () => T) => {
+    const phaseStartedAt = performance.now()
+    try {
+      return operation()
+    } finally {
+      timings[phaseName] += performance.now() - phaseStartedAt
+    }
+  }
+  const strategicMetrics = {
+    candidatesMs: 0,
+    evaluationMs: 0,
+    economyProjectionMs: 0,
+    simulationMs: 0,
+    otherCandidatesMs: 0,
+    buildingGoalsMs: 0,
+    buildingPlacementMs: 0,
+  }
   let exploredNodes = 0
   const countNode = () => {
     exploredNodes += 1
     return true
   }
 
-  const perception = createAiPerception(authoritativeState, authoritativeState.activeParticipantId, normalizeMemory(previousMemory))
+  const perception = measure('perceptionMs', () => createAiPerception(
+    authoritativeState,
+    authoritativeState.activeParticipantId,
+    normalizeAiMemory(previousMemory),
+  ))
   let state = perception.state
   let memory = perception.memory
   const analysis = options.cachedAnalysis?.ownerId === state.activeParticipantId
     && options.cachedAnalysis.key === aiWorldAnalysisKey(state.scenario, state.activeParticipantId)
     ? options.cachedAnalysis
-    : analyzeAiWorld(state.scenario, state.activeParticipantId)
-  if (!analysis) return { commands: [], memory, exploredNodes, elapsedMs: performance.now() - startedAt, trace: [] }
+    : measure('worldAnalysisMs', () => analyzeAiWorld(state.scenario, state.activeParticipantId))
+  if (!analysis) {
+    const elapsedMs = performance.now() - startedAt
+    timings.totalMs = elapsedMs
+    return { commands: [], memory, exploredNodes, elapsedMs, timings, trace: [] }
+  }
 
   let settlementPlan = memory.settlementPlan
   let planReviewReason: 'initial' | 'terrain-change' | 'stalled' | 'periodic' | null = null
   if (!settlementPlan) {
-    settlementPlan = createSettlementPlan(analysis, state.scenario, profile)
+    settlementPlan = measure('settlementPlanMs', () => createSettlementPlan(
+      analysis,
+      state.scenario,
+      profile,
+    ))
     planReviewReason = 'initial'
   } else {
     const terrainChanged = memory.settlementPlanAnalysisKey !== null
@@ -368,7 +131,11 @@ export function planAiTurn(
     const periodicReview = state.turn - memory.lastSettlementPlanReviewTurn
       >= aiPlannerConfig.settlementPlanReviewInterval
     if (terrainChanged || stalledReview || periodicReview) {
-      const refreshed = createSettlementPlan(analysis, state.scenario, profile)
+      const refreshed = measure('settlementPlanMs', () => createSettlementPlan(
+        analysis,
+        state.scenario,
+        profile,
+      ))
       settlementPlan = preserveCommittedFortification(state, settlementPlan, refreshed)
       planReviewReason = terrainChanged ? 'terrain-change' : stalledReview ? 'stalled' : 'periodic'
     }
@@ -504,7 +271,13 @@ export function planAiTurn(
       && commands.length < aiPlannerConfig.maximumCommands && tacticalCountNode()
       && guard < gameConfig.turn.maxOrders * aiPlannerConfig.tacticalGuardMultiplier) {
       guard += 1
-      const generatedCandidates = tacticalCandidates(state, profile, memory, phase, tacticalCountNode)
+      const generatedCandidates = measure('tacticalCandidatesMs', () => tacticalCandidates(
+        state,
+        profile,
+        memory,
+        phase,
+        tacticalCountNode,
+      ))
       const candidate = selectTacticalCandidate(generatedCandidates, {
         phase,
         idleTurns: memory.idleTurns,
@@ -556,11 +329,12 @@ export function planAiTurn(
     // A threatened settlement must still execute a viable recovery prefix.
     // The strategic search keeps the combat order reserve intact, so tactics
     // cannot consume every order while the economy collapses underneath it.
-    const recovery = searchStrategicSequence(state, profile, analysis, memory, countNode, {
+    const recovery = measure('strategicSearchMs', () => searchStrategicSequence(state, profile, analysis, memory, countNode, {
       diagnostics: trace,
+      metrics: strategicMetrics,
       orderReserve: strategicOrderReserve(memory.phase),
       mode,
-    })
+    }))
     for (const candidate of recovery.candidates) {
       // Execute the legal prefix selected by the model without a separate
       // eligibility gate between planning and authoritative simulation.
@@ -591,7 +365,7 @@ export function planAiTurn(
   }
 
   if (state.ordersRemaining > 0 && commands.length < aiPlannerConfig.maximumCommands && countNode()) {
-    const strategic = searchStrategicSequence(
+    const strategic = measure('strategicSearchMs', () => searchStrategicSequence(
       state,
       profile,
       analysis,
@@ -599,6 +373,7 @@ export function planAiTurn(
       countNode,
       {
         diagnostics: trace,
+        metrics: strategicMetrics,
         // These phases already spent their tactical slice before this search.
         // Keeping a second "tactical reserve" here made six-order towers
         // impossible whenever even one combat command had been issued.
@@ -607,7 +382,7 @@ export function planAiTurn(
           : strategicOrderReserve(phase),
         mode,
       },
-    )
+    ))
     for (const candidate of strategic.candidates) {
       if (commands.length >= aiPlannerConfig.maximumCommands) break
       if (!apply(candidate.command, candidate.factors, candidate.utility, candidate.goal)) break
@@ -616,7 +391,15 @@ export function planAiTurn(
 
   if (phase !== 'defense' && phase !== 'assault' && phase !== 'regroup') runTactics()
 
+  timings.strategicCandidatesMs = strategicMetrics.candidatesMs
+  timings.strategicEvaluationMs = strategicMetrics.evaluationMs
+  timings.strategicEconomyProjectionMs = strategicMetrics.economyProjectionMs
+  timings.strategicSimulationMs = strategicMetrics.simulationMs
+  timings.strategicOtherCandidatesMs = strategicMetrics.otherCandidatesMs
+  timings.strategicBuildingGoalsMs = strategicMetrics.buildingGoalsMs
+  timings.strategicBuildingPlacementMs = strategicMetrics.buildingPlacementMs
   const elapsedMs = performance.now() - startedAt
+  timings.totalMs = elapsedMs
   const closingEconomy = economySnapshotFor(state, state.activeParticipantId)
   // Walking is campaign progress only when the front reaches a new best
   // distance against the current target. Local "advance" scores and muster
@@ -666,6 +449,18 @@ export function planAiTurn(
     memory,
     exploredNodes,
     elapsedMs,
+    timings,
     trace,
   }
+}
+
+export function planAiTurn(
+  authoritativeState: MatchState,
+  previousMemory: AiMemory,
+  profileId: AiProfileId,
+  options: AiPlanningOptions = {},
+): AiPlan {
+  return withMatchObjectIndexCache(() => withAiObjectIndexCache(() => withMovementPathCache(() => (
+    withStrategicPlacementCache(() => planAiTurnInternal(authoritativeState, previousMemory, profileId, options))
+  ))))
 }

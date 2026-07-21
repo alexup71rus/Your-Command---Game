@@ -66,6 +66,7 @@ const frames = [{
 }, ...run.turns.map((turn) => ({
   ...compactSnapshot(turn.snapshot), owner: turn.ownerId, phase: turn.phase, wave: turn.wave,
   nodes: turn.exploredNodes,
+  timings: turn.timings,
   commands: [...turn.executed.map((command) => {
     const trace = turn.trace.find((entry) => entry.command
       && JSON.stringify(entry.command) === JSON.stringify(command) && !entry.rejectedReason)

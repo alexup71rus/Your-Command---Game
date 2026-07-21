@@ -171,6 +171,73 @@ function isPrimaryObjectCell(object: MapObject, column: number, row: number) {
   return object.type !== 'building' || !object.footprint || (object.footprint.originColumn === column && object.footprint.originRow === row)
 }
 
+interface IndexedMapObject {
+  object: MapObject
+  position: CellPosition
+}
+
+interface MatchObjectIndex {
+  all: IndexedMapObject[]
+  allByOwner: Map<string, IndexedMapObject[]>
+  primary: IndexedMapObject[]
+  primaryByOwner: Map<string, IndexedMapObject[]>
+}
+
+let activeMatchObjectIndexes: WeakMap<GameMap, MatchObjectIndex> | null = null
+
+function createMatchObjectIndex(cells: GameMap): MatchObjectIndex {
+  const all: IndexedMapObject[] = []
+  const allByOwner = new Map<string, IndexedMapObject[]>()
+  const primary: IndexedMapObject[] = []
+  const primaryByOwner = new Map<string, IndexedMapObject[]>()
+  cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
+    if (!cell.object) return
+    const entry = { object: cell.object, position: { column, row: rowIndex } }
+    all.push(entry)
+    const ownerObjects = allByOwner.get(cell.object.ownerId) ?? []
+    ownerObjects.push(entry)
+    allByOwner.set(cell.object.ownerId, ownerObjects)
+    if (!isPrimaryObjectCell(cell.object, column, rowIndex)) return
+    primary.push(entry)
+    const ownerPrimaryObjects = primaryByOwner.get(cell.object.ownerId) ?? []
+    ownerPrimaryObjects.push(entry)
+    primaryByOwner.set(cell.object.ownerId, ownerPrimaryObjects)
+  }))
+  return { all, allByOwner, primary, primaryByOwner }
+}
+
+function indexedMapObjects(
+  state: Pick<MatchState, 'scenario'>,
+  ownerId?: string,
+  primaryOnly = true,
+): readonly IndexedMapObject[] {
+  if (!activeMatchObjectIndexes) {
+    const index = createMatchObjectIndex(state.scenario.cells)
+    return ownerId
+      ? (primaryOnly ? index.primaryByOwner : index.allByOwner).get(ownerId) ?? []
+      : primaryOnly ? index.primary : index.all
+  }
+  let index = activeMatchObjectIndexes.get(state.scenario.cells)
+  if (!index) {
+    index = createMatchObjectIndex(state.scenario.cells)
+    activeMatchObjectIndexes.set(state.scenario.cells, index)
+  }
+  return ownerId
+    ? (primaryOnly ? index.primaryByOwner : index.allByOwner).get(ownerId) ?? []
+    : primaryOnly ? index.primary : index.all
+}
+
+/** Reuses immutable map-object indexes only within one synchronous command/planning request. */
+export function withMatchObjectIndexCache<T>(run: () => T): T {
+  const previousIndexes = activeMatchObjectIndexes
+  activeMatchObjectIndexes = new WeakMap()
+  try {
+    return run()
+  } finally {
+    activeMatchObjectIndexes = previousIndexes
+  }
+}
+
 export function squadSize(squad: Pick<SquadObject, 'units'>) {
   return troopKinds.reduce((total, kind) => total + (squad.units[kind] ?? 0), 0)
 }
@@ -191,9 +258,7 @@ export function squadHealth(squad: Pick<SquadObject, 'units' | 'health'>) {
 }
 
 export function troopTotals(state: MatchState, ownerId: string): TroopComposition {
-  return state.scenario.cells.flat().reduce((totals, cell) => {
-    const object = cell.object
-    if (!object || object.ownerId !== ownerId) return totals
+  return indexedMapObjects(state, ownerId, false).reduce((totals, { object }) => {
     if (object.type === 'squad') troopKinds.forEach((kind) => { totals[kind] += object.units[kind] ?? 0 })
     if (object.type === 'building' && object.kind === 'tower' && object.garrison) totals.archers += object.garrison.archers
     return totals
@@ -206,11 +271,11 @@ interface OwnedBuildingEntry {
 }
 
 function ownedBuildingEntries(state: MatchState, ownerId: string, kind?: BuildingKind): OwnedBuildingEntry[] {
-  return state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
-    const object = cell.object
-    if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex) || (kind && object.kind !== kind)) return []
-    return [{ kind: object.kind, position: { column, row: rowIndex } }]
-  }))
+  return indexedMapObjects(state, ownerId).flatMap(({ object, position }) => (
+    object.type === 'building' && (!kind || object.kind === kind)
+      ? [{ kind: object.kind, position }]
+      : []
+  ))
 }
 
 export function ownedBuildingCount(state: MatchState, ownerId: string, kind: BuildingKind) {
@@ -310,19 +375,17 @@ export function workforceFor(state: MatchState, ownerId: string): WorkforceSumma
   const population = Math.max(0, state.domains[ownerId]?.population ?? 0)
   const supports = farmSupportAssignments(state, ownerId)
   const usedMills = new Set([...supports.values()].map(positionKey))
-  const assignments: WorkerAssignment[] = state.scenario.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
-    const object = cell.object
-    if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return []
+  const assignments: WorkerAssignment[] = indexedMapObjects(state, ownerId).flatMap(({ object, position }) => {
+    if (object.type !== 'building') return []
     const required = buildingRules[object.kind].workersRequired ?? 0
     if (required <= 0) return []
-    const position = { column, row: rowIndex }
     const blockedReason = object.kind === 'farm' && !supports.has(positionKey(position))
       ? 'missing-support' as const
       : object.kind === 'mill' && !usedMills.has(positionKey(position))
         ? 'idle-support' as const
         : undefined
     return [{ kind: object.kind, position, required, assigned: 0, blockedReason }]
-  })).sort((first, second) => {
+  }).sort((first, second) => {
     const kindOrder = workerBuildingKinds.indexOf(first.kind) - workerBuildingKinds.indexOf(second.kind)
     return kindOrder || first.position.row - second.position.row || first.position.column - second.position.column
   })
@@ -348,27 +411,28 @@ export function workerAssignmentAt(state: MatchState, position: CellPosition): W
 export function civilianHousingCapacityFor(state: MatchState, ownerId: string) {
   const domain = state.domains[ownerId]
   if (!domain) return 0
-  const houses = state.scenario.cells.reduce((capacity, row) => capacity + row.reduce((rowCapacity, cell) => {
-    const object = cell.object
-    if (object?.type !== 'building' || object.kind !== 'house' || object.ownerId !== ownerId) return rowCapacity
-    return rowCapacity + (buildingRules.house.housingCapacity ?? 0)
-  }, 0), 0)
+  const houses = indexedMapObjects(state, ownerId, false).reduce((capacity, { object }) => (
+    object.type === 'building' && object.kind === 'house'
+      ? capacity + (buildingRules.house.housingCapacity ?? 0)
+      : capacity
+  ), 0)
   return Math.max(0, gameConfig.turn.basePopulationCapacity + houses - totalArmySize(state, ownerId))
 }
 
 export function foodServiceCapacityFor(state: MatchState, ownerId: string, workforce = workforceFor(state, ownerId)) {
   const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
-  const hasLivingCastle = state.scenario.cells.some((row) => row.some((cell) => cell.object?.type === 'castle' && cell.object.ownerId === ownerId))
-  let capacity = hasLivingCastle ? gameConfig.economy.castleFoodServiceCapacity : 0
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
+  const ownerObjects = indexedMapObjects(state, ownerId)
+  let capacity = ownerObjects.some(({ object }) => object.type === 'castle')
+    ? gameConfig.economy.castleFoodServiceCapacity
+    : 0
+  ownerObjects.forEach(({ object, position }) => {
+    if (object.type !== 'building') return
     const service = buildingRules[object.kind].foodServiceCapacity ?? 0
     if (!service) return
-    const assignment = assignments.get(`${column}:${rowIndex}`)
+    const assignment = assignments.get(positionKey(position))
     const workerRatio = assignment ? assignment.assigned / assignment.required : 1
     capacity += Math.floor(service * workerRatio)
-  }))
+  })
   return capacity
 }
 
@@ -557,12 +621,13 @@ export function buildingSiteFailure(state: MatchState, kind: BuildingKind, posit
   const regionId = activeRegionId(state)
   if (positions.some((candidate) => state.scenario.territories[candidate.row]?.[candidate.column] !== regionId)) return 'outside-domain'
   if (rule.requiresFoodServiceAccess) {
-    const inRange = state.scenario.cells.some((row, rowIndex) => row.some((cell, column) => {
-      const object = cell.object
-      if (!object || object.ownerId !== state.activeParticipantId || !isPrimaryObjectCell(object, column, rowIndex)) return false
+    const inRange = indexedMapObjects(state, state.activeParticipantId).some(({ object, position: source }) => {
       const isServiceSource = object.type === 'castle' || (object.type === 'building' && (buildingRules[object.kind].foodServiceCapacity ?? 0) > 0)
-      return isServiceSource && positions.some((candidate) => Math.abs(candidate.column - column) + Math.abs(candidate.row - rowIndex) <= gameConfig.economy.foodServiceRadius)
-    }))
+      return isServiceSource && positions.some((candidate) => (
+        Math.abs(candidate.column - source.column) + Math.abs(candidate.row - source.row)
+          <= gameConfig.economy.foodServiceRadius
+      ))
+    })
     if (!inRange) return 'outside-food-service'
   }
   const placement = rule.placement
@@ -623,13 +688,12 @@ export function build(state: MatchState, kind: BuildingKind, position: CellPosit
 }
 
 function recruitmentSourcePositions(state: MatchState, troop: TroopKind) {
-  const positions: CellPosition[] = []
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (object?.ownerId !== state.activeParticipantId) return
-    if ((troop === 'militia' && object.type === 'castle') || (object.type === 'building' && object.kind === 'barracks')) positions.push({ column, row: rowIndex })
-  }))
-  return positions
+  return indexedMapObjects(state, state.activeParticipantId, false).flatMap(({ object, position }) => (
+    (troop === 'militia' && object.type === 'castle')
+      || (object.type === 'building' && object.kind === 'barracks')
+      ? [position]
+      : []
+  ))
 }
 
 export function hasRecruitmentSource(state: MatchState, troop: TroopKind) {
@@ -722,7 +786,7 @@ export function rangedDamageTakenMultiplierFor(squad: Pick<SquadObject, 'units'>
 }
 
 export function hasLivingCastle(state: Pick<MatchState, 'scenario'>, ownerId: string) {
-  return state.scenario.cells.some((row) => row.some((cell) => cell.object?.type === 'castle' && cell.object.ownerId === ownerId))
+  return indexedMapObjects(state, ownerId, false).some(({ object }) => object.type === 'castle')
 }
 
 function collapseDefeatedOwner(state: MatchState, ownerId: string) {
@@ -1196,12 +1260,10 @@ export function productionFor(state: MatchState, ownerId: string, workforce = wo
   const taxRule = taxRates[state.domains[ownerId]?.taxRate ?? defaultTaxRate]
   const production = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
   const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (object?.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
+  indexedMapObjects(state, ownerId).forEach(({ object, position }) => {
     const amount = object.type === 'castle' ? castleProduction : object.type === 'building' ? buildingRules[object.kind].production : null
     if (!amount) return
-    const assignment = object.type === 'building' ? assignments.get(`${column}:${rowIndex}`) : undefined
+    const assignment = object.type === 'building' ? assignments.get(positionKey(position)) : undefined
     const workerRatio = assignment ? assignment.assigned / assignment.required : 1
     resourceIds.forEach((resource) => {
       const produced = amount[resource] ?? 0
@@ -1210,15 +1272,13 @@ export function productionFor(state: MatchState, ownerId: string, workforce = wo
         ? staffedProduction > 0 ? Math.max(0, staffedProduction + taxRule.productionAdjustment) : 0
         : produced
     })
-  }))
+  })
   return production
 }
 
 export function upkeepFor(state: MatchState, ownerId: string) {
   const upkeep = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (!object || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
+  indexedMapObjects(state, ownerId).forEach(({ object }) => {
     if (object.type === 'building') {
       const amount = buildingRules[object.kind].upkeep
       if (amount) resourceIds.forEach((resource) => { upkeep[resource] += amount[resource] ?? 0 })
@@ -1232,18 +1292,15 @@ export function upkeepFor(state: MatchState, ownerId: string) {
         resourceIds.forEach((resource) => { upkeep[resource] += (troopRules[kind].upkeep[resource] ?? 0) * (object.units[kind] ?? 0) })
       })
     }
-  }))
+  })
   resourceIds.forEach((resource) => { upkeep[resource] = Math.ceil(upkeep[resource]) })
   return upkeep
 }
 
 function populationGrowthFor(state: MatchState, ownerId: string) {
-  let growth = 0
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (object?.type === 'building' && object.ownerId === ownerId && isPrimaryObjectCell(object, column, rowIndex)) growth += buildingRules[object.kind].populationGrowth ?? 0
-  }))
-  return growth
+  return indexedMapObjects(state, ownerId).reduce((growth, { object }) => (
+    object.type === 'building' ? growth + (buildingRules[object.kind].populationGrowth ?? 0) : growth
+  ), 0)
 }
 
 export function foodDemandBreakdownFor(state: MatchState, ownerId: string, workforce = workforceFor(state, ownerId)): FoodDemand {
@@ -1319,12 +1376,11 @@ export function processingFor(
   const processed = Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>
   let resources = { ...available }
   const assignments = new Map(workforce.assignments.map((assignment) => [`${assignment.position.column}:${assignment.position.row}`, assignment]))
-  state.scenario.cells.forEach((row, rowIndex) => row.forEach((cell, column) => {
-    const object = cell.object
-    if (object?.type !== 'building' || object.ownerId !== ownerId || !isPrimaryObjectCell(object, column, rowIndex)) return
+  indexedMapObjects(state, ownerId).forEach(({ object, position }) => {
+    if (object.type !== 'building') return
     const rule = buildingRules[object.kind].processing
     if (!rule) return
-    const assignment = assignments.get(`${column}:${rowIndex}`)
+    const assignment = assignments.get(positionKey(position))
     const workerRatio = assignment ? assignment.assigned / assignment.required : 1
     const staffedCapacity = Math.floor(rule.maximumPerTurn * workerRatio)
     const processingCapacity = staffedCapacity > 0
@@ -1335,7 +1391,7 @@ export function processingFor(
     resources = { ...resources, [rule.input]: resources[rule.input] - amount, [rule.output]: resources[rule.output] + amount }
     processed[rule.input] -= amount
     processed[rule.output] += amount
-  }))
+  })
   return processed
 }
 

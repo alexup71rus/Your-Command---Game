@@ -29,6 +29,7 @@ export {
   fundedStoneGoalFor,
   minimumFortificationCostFor,
   nextFortificationStep,
+  withStrategicPlacementCache,
 } from './development'
 
 export {

@@ -14,6 +14,12 @@ export interface BuildingGoal {
   factors: string[]
 }
 
+export interface StrategicCandidateMetrics {
+  otherCandidatesMs: number
+  buildingGoalsMs: number
+  buildingPlacementMs: number
+}
+
 export interface AiEconomySnapshot {
   foodStock: number
   foodDemand: number

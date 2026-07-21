@@ -163,7 +163,24 @@ export interface AiPlan {
   memory: AiMemory
   exploredNodes: number
   elapsedMs: number
+  timings: AiPlanTimings
   trace: AiPlanTraceEntry[]
+}
+
+export interface AiPlanTimings {
+  perceptionMs: number
+  worldAnalysisMs: number
+  settlementPlanMs: number
+  tacticalCandidatesMs: number
+  strategicSearchMs: number
+  strategicCandidatesMs: number
+  strategicEvaluationMs: number
+  strategicEconomyProjectionMs: number
+  strategicSimulationMs: number
+  strategicOtherCandidatesMs: number
+  strategicBuildingGoalsMs: number
+  strategicBuildingPlacementMs: number
+  totalMs: number
 }
 
 export interface AiCapabilities {
