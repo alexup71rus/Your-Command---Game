@@ -1,12 +1,14 @@
 import { gameConfig } from '../../config/game'
-import { aiPlannerConfig, aiTacticalConfig } from '../../config/ai'
+import { aiPlannerConfig, aiStrategicConfig, aiTacticalConfig } from '../../config/ai'
 import { buildingRules, combatRules, troopKinds, troopRules } from '../../config/rules'
 import type { BuildingKind, BuildingObject, GameMap, MapObject, SquadObject, TroopComposition, TroopKind } from '../map'
 import {
   buildingFootprintPositions,
+  garrisonFailure,
   isRangedAttack,
   moveOrAttackFailure,
   objectAt,
+  rangedDamageTakenMultiplierFor,
   squadHealth,
   squadSize,
   splitFailure,
@@ -21,9 +23,9 @@ import { clockwiseCardinalDirections } from '../geometry'
 import { areOwnersHostile, type CellPosition } from '../scenario'
 import { aiObjectEntries, castlePositionFor, positionDistance, positionKey, samePosition } from './analysis'
 import { executeAiCommand } from './commands'
-import { armyPowerFor, estimatedTargetPower, fortificationReadyFor, homeThreatFor, stagingAnchorsFor, troopCompositionPower } from './strategy'
+import { armyPowerFor, estimatedTargetPower, fortificationLineActivated, fortificationReadyFor, homeThreatFor, stagingAnchorsFor, troopCompositionPower } from './strategy'
 import { raidObjectivesFor, type RaidObjective } from './strategy/raids'
-import { forceTargetFor, isPlannedFortification } from './strategy/shared'
+import { forceTargetFor, isPlannedFortification, isPlannedFortificationGate } from './strategy/shared'
 import type { AiCommand, AiMemory, AiProfileRules, AiSquadRole, AiStrategicPhase, AiWaveKind } from './model'
 
 export interface TacticalCandidate {
@@ -44,6 +46,24 @@ export const tacticalMovementEdgeKey = (from: CellPosition, to: CellPosition) =>
   `${from.column}:${from.row}>${to.column}:${to.row}`
 )
 
+function priorMovementCountFor(position: CellPosition, commands: readonly AiCommand[]) {
+  let cursor = position
+  let count = 0
+  const visited = new Set<string>()
+  for (;;) {
+    const cursorKey = positionKey(cursor)
+    if (visited.has(cursorKey)) break
+    visited.add(cursorKey)
+    const previous = [...commands].reverse().find((command) => (
+      command.type === 'move-or-attack' && samePosition(command.to, cursor)
+    ))
+    if (!previous || previous.type !== 'move-or-attack') break
+    count += 1
+    cursor = previous.from
+  }
+  return count
+}
+
 /** Keeps tactical execution and focused scenario tests on the same selection policy. */
 export function selectTacticalCandidate(
   candidates: readonly TacticalCandidate[],
@@ -58,11 +78,45 @@ export function selectTacticalCandidate(
     // fresh positive damage result is safe to repeat while the target changes.
     if (repeatsCommand && !candidate.factors.some((factor) => factor.startsWith('damage:'))) return false
     if (candidate.command.type !== 'move-or-attack') return true
+    const dealsDamage = candidate.factors.some((factor) => factor.startsWith('damage:'))
+    const revisitsThisTurn = options.previousCommands.some((command) => command.type === 'move-or-attack'
+      && (samePosition(command.from, candidate.command.type === 'move-or-attack' ? candidate.command.to : command.from)
+        || samePosition(command.to, candidate.command.type === 'move-or-attack' ? candidate.command.to : command.to)))
+    if (!dealsDamage && revisitsThisTurn) return false
     return !options.traversedEdges.has(tacticalMovementEdgeKey(candidate.command.to, candidate.command.from))
   })
-  return eligible.find((candidate) => candidate.score > 0)
+  // During a home response, spend movement orders on forming a line before
+  // letting the nearest squad consume the whole turn by walking eight cells
+  // alone. Actual attacks, tower fire and garrison orders remain free to take
+  // precedence; only undamaging response movement is coordinated this way.
+  // Archer withdrawals and their screen's positioning are one formation
+  // action, so they compete by utility instead of being round-robined apart.
+  const defensiveResponseMoves = options.phase === 'defense'
+    ? eligible.filter((candidate) => candidate.command.type === 'move-or-attack'
+      && candidate.factors.includes('defense-response')
+      && !candidate.factors.includes('committed-defense-contact')
+      && !candidate.factors.includes('ranged-withdrawal')
+      && !candidate.factors.includes('screen-ranged')
+      && !candidate.factors.some((factor) => factor.startsWith('damage:')))
+    : []
+  const minimumResponseMoves = Math.min(...defensiveResponseMoves.map((candidate) => (
+    candidate.command.type === 'move-or-attack'
+      ? priorMovementCountFor(candidate.command.from, options.previousCommands)
+      : Number.POSITIVE_INFINITY
+  )), Number.POSITIVE_INFINITY)
+  const coordinated = Number.isFinite(minimumResponseMoves)
+    ? eligible.filter((candidate) => candidate.command.type !== 'move-or-attack'
+      || candidate.factors.some((factor) => factor.startsWith('damage:'))
+      || candidate.factors.includes('committed-defense-contact')
+      || candidate.factors.includes('consolidate-force')
+      || candidate.factors.includes('ranged-withdrawal')
+      || candidate.factors.includes('screen-ranged')
+      || (candidate.factors.includes('defense-response')
+        && priorMovementCountFor(candidate.command.from, options.previousCommands) === minimumResponseMoves))
+    : eligible
+  return coordinated.find((candidate) => candidate.score > 0)
     ?? (options.phase === 'assault' && options.idleTurns >= aiPlannerConfig.forcedAdvanceAfterIdleTurns
-      ? eligible.find((candidate) => (
+      ? coordinated.find((candidate) => (
           candidate.command.type === 'move-or-attack'
           && candidate.score > aiPlannerConfig.forcedAdvanceMinimumScore
         ))
@@ -72,6 +126,23 @@ export function selectTacticalCandidate(
 const isTemporarilyBlocked = (memory: AiMemory, position: CellPosition, turn: number) => memory.blockedCells.some((entry) => (
   entry.expiresTurn >= turn && positionKey(entry.position) === positionKey(position)
 ))
+
+function revisitsRecentFormationTrail(memory: AiMemory, from: CellPosition, to: CellPosition, turn: number) {
+  const recent = memory.recentMovements.filter((entry) => (
+    turn - entry.turn <= aiPlannerConfig.movementHistoryTurns
+  ))
+  const trail = new Set<string>()
+  let cursor = from
+  for (let guard = 0; guard < recent.length; guard += 1) {
+    const prior = [...recent].reverse().find((entry) => samePosition(entry.to, cursor))
+    if (!prior) break
+    const key = positionKey(prior.from)
+    if (trail.has(key)) break
+    trail.add(key)
+    cursor = prior.from
+  }
+  return trail.has(positionKey(to))
+}
 
 const squadEntries = (state: MatchState, ownerId: string) => aiObjectEntries(state.scenario, ownerId)
   .flatMap((entry) => entry.object.type === 'squad' ? [{ ...entry, object: entry.object }] : [])
@@ -194,6 +265,88 @@ function worstReplyPenalty(state: MatchState, ownerId: string, countNode: () => 
   return penalty
 }
 
+function immediateReplyPowerLossForSquad(
+  state: MatchState,
+  ownerId: string,
+  position: CellPosition,
+  enemies: ReturnType<typeof squadEntries>,
+  countNode: () => boolean,
+) {
+  const squad = objectAt(state, position)
+  if (squad?.type !== 'squad' || squad.ownerId !== ownerId) return 0
+  const before = troopCompositionPower(squad.units, squadHealth(squad))
+  let worstLoss = 0
+  for (const enemy of enemies) {
+    if (!countNode()) break
+    const replyState = {
+      ...state,
+      activeParticipantId: enemy.object.ownerId,
+      ordersRemaining: gameConfig.turn.maxOrders,
+    }
+    if (moveOrAttackFailure(replyState, enemy.position, position) !== null) continue
+    const reply = executeAiCommand(replyState, {
+      type: 'move-or-attack', from: enemy.position, to: position,
+    })
+    if (!reply.ok) continue
+    const after = objectAt(reply.state, position)
+    const afterPower = after?.type === 'squad' && after.ownerId === ownerId
+      ? troopCompositionPower(after.units, squadHealth(after))
+      : 0
+    worstLoss = Math.max(worstLoss, before - afterPower)
+  }
+  return worstLoss
+}
+
+function projectedDefensiveContact(
+  state: MatchState,
+  profile: AiProfileRules,
+  squad: ReturnType<typeof squadEntries>[number],
+  path: CellPosition[],
+  target: CellPosition,
+  countNode: () => boolean,
+) {
+  const targetBefore = objectAt(state, target)
+  if (targetBefore?.type !== 'squad'
+    || !areOwnersHostile(state.scenario.participants, squad.object.ownerId, targetBefore.ownerId)) return null
+  let projected = state
+  let cursor = squad.position
+  for (const destination of path.slice(1)) {
+    if (!countNode()) return null
+    const movement = executeAiCommand(projected, {
+      type: 'move-or-attack', from: cursor, to: destination,
+    })
+    if (!movement.ok) return null
+    projected = movement.state
+    cursor = destination
+  }
+  if (!countNode()) return null
+  const contact = executeAiCommand(projected, {
+    type: 'move-or-attack', from: cursor, to: target,
+  })
+  if (!contact.ok) return null
+  const attackerAfter = objectAt(contact.state, cursor)
+  const targetAfter = objectAt(contact.state, target)
+  const attackerPowerBefore = troopCompositionPower(squad.object.units, squadHealth(squad.object))
+  const targetPowerBefore = troopCompositionPower(targetBefore.units, squadHealth(targetBefore))
+  const attackerPowerAfter = attackerAfter?.type === 'squad' && attackerAfter.ownerId === squad.object.ownerId
+    ? troopCompositionPower(attackerAfter.units, squadHealth(attackerAfter))
+    : 0
+  const targetPowerAfter = targetAfter?.type === 'squad' && targetAfter.ownerId === targetBefore.ownerId
+    ? troopCompositionPower(targetAfter.units, squadHealth(targetAfter))
+    : 0
+  const targetDestroyed = targetPowerAfter <= 0
+  const survivesExchange = attackerPowerAfter > 0
+  const viable = targetDestroyed || (survivesExchange
+    && attackerPowerAfter >= targetPowerAfter * profile.riskThreshold)
+  return {
+    viable,
+    survivesExchange,
+    attackerPowerBefore,
+    targetPowerBefore,
+    exchange: (targetPowerBefore - targetPowerAfter) - (attackerPowerBefore - attackerPowerAfter),
+  }
+}
+
 function baseMeleeDamage(squad: SquadObject) {
   return troopKinds.reduce((sum, troop) => sum + squad.units[troop] * troopRules[troop].damage, 0)
 }
@@ -227,21 +380,55 @@ function towerThreatsFor(state: MatchState, ownerId: string): TowerThreat[] {
   ))
 }
 
-function towerExposureAt(state: MatchState, position: CellPosition, threats: TowerThreat[]) {
+function towerExposureAt(state: MatchState, position: CellPosition, threats: TowerThreat[], squad: SquadObject) {
   const cover = state.scenario.cells[position.row]?.[position.column]?.vegetation
     ? combatRules.ranged.forestCoverMultiplier
     : 1
+  const protection = rangedDamageTakenMultiplierFor(squad)
   return threats.reduce((sum, tower) => {
     if (samePosition(tower.position, position)
       || !towerHasLineOfFire(state.scenario.cells, tower.position, position)) return sum
     return sum + tower.archers
-      * aiTacticalConfig.siege.towerExposureOrderCostPerArcher * cover
+      * aiTacticalConfig.siege.towerExposureOrderCostPerArcher * cover * protection
   }, 0)
 }
 
-function towerExposureAlong(state: MatchState, path: CellPosition[], threats: TowerThreat[]) {
+function towerExposureAlong(state: MatchState, path: CellPosition[], threats: TowerThreat[], squad: SquadObject) {
   return path.slice(1, aiTacticalConfig.siege.towerExposureLookahead + 1)
-    .reduce((sum, position) => sum + towerExposureAt(state, position, threats), 0)
+    .reduce((sum, position) => sum + towerExposureAt(state, position, threats, squad), 0)
+}
+
+function hostileArcherExposureAt(
+  state: MatchState,
+  position: CellPosition,
+  movingFrom: CellPosition,
+  squad: SquadObject,
+  threats: ReturnType<typeof squadEntries>,
+) {
+  const targetCell = state.scenario.cells[position.row]?.[position.column]
+  if (!targetCell) return 0
+  return threats.reduce((sum, enemy) => {
+    if (enemy.object.units.archers <= 0) return sum
+    const columnDistance = Math.abs(position.column - enemy.position.column)
+    const rowDistance = Math.abs(position.row - enemy.position.row)
+    const distance = columnDistance + rowDistance
+    if ((columnDistance !== 0 && rowDistance !== 0)
+      || distance < gameConfig.turn.archerMinimumRange
+      || distance > gameConfig.turn.archerRange) return sum
+    const columnStep = Math.sign(position.column - enemy.position.column)
+    const rowStep = Math.sign(position.row - enemy.position.row)
+    for (let step = 1; step < distance; step += 1) {
+      const ray = {
+        column: enemy.position.column + columnStep * step,
+        row: enemy.position.row + rowStep * step,
+      }
+      const cell = state.scenario.cells[ray.row]?.[ray.column]
+      if (!cell || cell.landform === 'peak' || cell.vegetation
+        || (cell.object && !samePosition(ray, movingFrom))) return sum
+    }
+    const cover = targetCell.vegetation ? combatRules.ranged.forestCoverMultiplier : 1
+    return sum + enemy.object.units.archers * cover * rangedDamageTakenMultiplierFor(squad)
+  }, 0)
 }
 
 function assaultCellCost(
@@ -255,7 +442,7 @@ function assaultCellCost(
     if (!cell) return Number.POSITIVE_INFINITY
     const terrainCost = squadMovementOrderCost(squad, cell)
     const object = cell.object
-    const exposureCost = towerExposureAt(state, position, towerThreats)
+    const exposureCost = towerExposureAt(state, position, towerThreats, squad)
     if (!targetOwnerId || !object || object.ownerId !== targetOwnerId
       || (object.type !== 'building' && object.type !== 'castle')) return terrainCost + exposureCost
     const incomingDamageMultiplier = object.type === 'building'
@@ -447,6 +634,7 @@ function attackCandidates(
   countNode: () => boolean,
 ) {
   const ownerId = state.activeParticipantId
+  const ownCastle = castlePositionFor(state.scenario, ownerId)
   const squads = squadEntries(state, ownerId)
   const enemies = attackTargetsFor(state, ownerId)
   const candidates: TacticalCandidate[] = []
@@ -481,6 +669,16 @@ function attackCandidates(
       const opportunityAttack = phase === 'assault' && isOpportunisticStructureAttack(
         state, profile, squad, enemy, routeIntent, damage,
       )
+      const defensiveIncursion = phase === 'defense' && enemy.object.type === 'squad'
+        && state.scenario.territories[enemy.position.row]?.[enemy.position.column]
+          === state.scenario.participants.find((participant) => participant.id === ownerId)?.regionId
+      const coreBreach = phase === 'defense' && enemy.object.type === 'squad' && Boolean(
+        ownCastle && positionDistance(enemy.position, ownCastle) <= aiTacticalConfig.defense.coreBreachRadius,
+      )
+      const sourceAfter = objectAt(evaluation.state, squad.position)
+      const targetSurvives = targetAfter?.type === 'squad' && targetAfter.ownerId === enemy.object.ownerId
+      const certainDestruction = phase === 'defense' && enemy.object.type === 'squad' && targetSurvives
+        && !(sourceAfter?.type === 'squad' && sourceAfter.ownerId === ownerId)
       if (phase === 'assault' && isStructure && enemy.object.type !== 'castle'
         && !blocksRoute && !isRaidTarget && !threatensRoute && !opportunityAttack) continue
       const routeAdjustment = blocksRoute ? aiTacticalConfig.siege.routeBlockerPriorityBonus
@@ -490,9 +688,15 @@ function attackCandidates(
               : 0
       candidates.push({
         command,
-        score: evaluation.score - penalty + routeAdjustment + finisherAdjustment,
+        score: evaluation.score - penalty + routeAdjustment + finisherAdjustment
+          + (defensiveIncursion ? aiTacticalConfig.movement.defenseEngagementUtility : 0)
+          + (coreBreach ? aiTacticalConfig.defense.coreBreachEngagementUtility : 0)
+          - (certainDestruction ? aiTacticalConfig.defense.certainDestructionPenalty : 0),
         factors: [...evaluation.factors, `reply:${penalty.toFixed(1)}`,
           ...(finishableSquad ? [`finisher:${finisherAdjustment.toFixed(1)}`] : []),
+          ...(defensiveIncursion ? ['defend-domain'] : []),
+          ...(coreBreach ? ['core-breach-response'] : []),
+          ...(certainDestruction ? ['certain-destruction'] : []),
           ...(blocksRoute
             ? ['route-blocker']
             : isRaidTarget
@@ -506,9 +710,12 @@ function attackCandidates(
 }
 
 function mergeCandidates(state: MatchState, profile: AiProfileRules, memory: AiMemory, phase: AiStrategicPhase) {
-  if (memory.lastArmyReorganizationTurn > 0
+  if (phase !== 'defense' && memory.lastArmyReorganizationTurn > 0
     && state.turn - memory.lastArmyReorganizationTurn < aiPlannerConfig.armyReorganizationCooldownTurns) return []
   const squads = squadEntries(state, state.activeParticipantId)
+  const defensiveThreatPower = phase === 'defense'
+    ? homeThreatFor(state, state.activeParticipantId, memory).power
+    : 0
   const needsTowerGarrison = aiObjectEntries(state.scenario, state.activeParticipantId).some((entry) => (
     entry.object.type === 'building' && entry.object.kind === 'tower'
       && (entry.object.garrison?.archers ?? 0) < aiTacticalConfig.tower.minimumPeacetimeArchers
@@ -537,11 +744,32 @@ function mergeCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
       const marchingGroupValue = phase === 'mobilization'
         ? formation.mobilizationBaseUtility + profile.doctrine.marchingGroupBias * formation.mobilizationBiasUtility
         : 0
+      const firstPower = troopCompositionPower(first.object.units, squadHealth(first.object))
+      const secondPower = troopCompositionPower(second.object.units, squadHealth(second.object))
+      const combinedPower = firstPower + secondPower
+      // Concentration is valued by the amount of the known defensive power
+      // gap it closes. There is no fixed "wait for N soldiers" rule: two tiny
+      // groups merge eagerly against a strong incursion, while already useful
+      // formations remain separate when that gives the defense more coverage.
+      const independentFormationTarget = Math.min(
+        defensiveThreatPower,
+        profile.doctrine.forceTargets.defense.minimum,
+      )
+      const concentrationGain = phase === 'defense'
+        ? Math.max(0,
+            Math.min(independentFormationTarget, combinedPower)
+              - Math.min(independentFormationTarget, Math.max(firstPower, secondPower)))
+          * aiTacticalConfig.defense.concentrationPowerUtility
+        : 0
       candidates.push({
         command,
         score: formation.mergeBaseUtility + regroupValue + marchingGroupValue + fragility * formation.fragileMergeUtility
-          + Math.max(0, formation.smallGroupSize - combined) * formation.smallGroupUtility,
-        factors: ['consolidate-force', ...(marchingGroupValue > 0 ? ['form-marching-group'] : [])],
+          + Math.max(0, formation.smallGroupSize - combined) * formation.smallGroupUtility + concentrationGain,
+        factors: [
+          'consolidate-force',
+          ...(concentrationGain > 0 ? [`defense-concentration:${concentrationGain.toFixed(1)}`] : []),
+          ...(marchingGroupValue > 0 ? ['form-marching-group'] : []),
+        ],
       })
     }
   }
@@ -638,6 +866,96 @@ function retreatDestination(state: MatchState, from: CellPosition, ownerId: stri
   return null
 }
 
+function frontLineUnitCount(squad: SquadObject) {
+  return aiTacticalConfig.formation.frontLineTroops.reduce((sum, troop) => sum + squad.units[troop], 0)
+}
+
+function hostileFrontLineSquads(state: MatchState, ownerId: string) {
+  return aiObjectEntries(state.scenario).flatMap((entry) => (
+    entry.object.type === 'squad'
+      && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+      && frontLineUnitCount(entry.object) > 0
+      ? [{ ...entry, object: entry.object }]
+      : []
+  ))
+}
+
+function rangedSquadCanClearImmediateThreats(
+  state: MatchState,
+  rangedPosition: CellPosition,
+  threats: ReturnType<typeof hostileFrontLineSquads>,
+) {
+  const immediateThreats = threats
+    .filter((entry) => positionDistance(rangedPosition, entry.position)
+      <= aiTacticalConfig.formation.rangedWithdrawalThreatDistance)
+    .sort((first, second) => positionDistance(first.position, rangedPosition) - positionDistance(second.position, rangedPosition)
+      || first.position.row - second.position.row || first.position.column - second.position.column)
+  if (immediateThreats.length === 0) return true
+  let projected = state
+  for (const threat of immediateThreats) {
+    for (;;) {
+      const target = objectAt(projected, threat.position)
+      if (target?.type !== 'squad'
+        || !areOwnersHostile(projected.scenario.participants, projected.activeParticipantId, target.ownerId)
+        || frontLineUnitCount(target) <= 0) break
+      // This short authoritative rollout spends only the current turn's
+      // remaining orders. It answers the tactical question directly: can the
+      // archers remove every nearby melee threat before the enemy acts?
+      const result = executeAiCommand(projected, {
+        type: 'move-or-attack', from: rangedPosition, to: threat.position,
+      })
+      if (!result.ok) return false
+      projected = result.state
+    }
+  }
+  return true
+}
+
+function rangedSquadHasScreen(
+  friendlySquads: ReturnType<typeof squadEntries>,
+  ranged: ReturnType<typeof squadEntries>[number],
+  threatPosition: CellPosition,
+) {
+  const rangedThreatDistance = positionDistance(ranged.position, threatPosition)
+  return friendlySquads.some((candidate) => candidate !== ranged
+    && frontLineUnitCount(candidate.object) > 0
+    && positionDistance(candidate.position, ranged.position) === 1
+    && positionDistance(candidate.position, threatPosition) < rangedThreatDistance)
+}
+
+function screenAnchorFor(
+  state: MatchState,
+  screen: ReturnType<typeof squadEntries>[number],
+  rangedSquads: ReturnType<typeof squadEntries>,
+  threats: ReturnType<typeof hostileFrontLineSquads>,
+  navigationMap: GameMap,
+) {
+  const protectedRanged = rangedSquads
+    .filter((candidate) => positionDistance(candidate.position, screen.position) <= aiTacticalConfig.formation.screenRadius)
+    .sort((first, second) => positionDistance(first.position, screen.position) - positionDistance(second.position, screen.position)
+      || first.position.row - second.position.row || first.position.column - second.position.column)[0]
+  if (!protectedRanged) return null
+  const threat = [...threats].sort((first, second) => (
+    positionDistance(first.position, protectedRanged.position) - positionDistance(second.position, protectedRanged.position)
+      || first.position.row - second.position.row || first.position.column - second.position.column
+  ))[0]
+  if (!threat) return null
+  const rangedThreatDistance = positionDistance(protectedRanged.position, threat.position)
+  const anchor = adjacentDestinations(protectedRanged.position)
+    .flatMap((position) => {
+      const cell = state.scenario.cells[position.row]?.[position.column]
+      if (!cell || cell.landform === 'peak'
+        || (cell.object && !samePosition(position, screen.position))
+        || positionDistance(position, threat.position) >= rangedThreatDistance) return []
+      const path = findMovementPath(navigationMap, screen.position, position, { ownerId: screen.object.ownerId })
+      return path ? [{ position, pathLength: path.length }] : []
+    })
+    .sort((first, second) => first.pathLength - second.pathLength
+      || positionDistance(first.position, threat.position) - positionDistance(second.position, threat.position)
+      || first.position.row - second.position.row || first.position.column - second.position.column)[0]?.position
+  return anchor ? { position: anchor, rangedPosition: protectedRanged.position } : null
+}
+
 function nearbyFriendlyCount(squads: ReturnType<typeof squadEntries>, position: CellPosition, ignored: CellPosition) {
   return squads.reduce((sum, squad) => sum + Number(
     positionKey(squad.position) !== positionKey(ignored)
@@ -703,17 +1021,27 @@ function routeScore(
   memory: AiMemory,
   phase: AiStrategicPhase,
   towerThreats: TowerThreat[],
+  archerThreats: ReturnType<typeof squadEntries>,
 ) {
   const next = path[1]
   const nearby = nearbyFriendlyCount(squads, next, squad.position)
   const route = aiTacticalConfig.route
   const forests = path.slice(1, route.forestLookahead + 1)
     .reduce((sum, position) => sum + Number(state.scenario.cells[position.row]?.[position.column]?.vegetation), 0)
-  const spreadValue = role === 'scout' || role === 'assault'
-    ? profile.doctrine.maneuverBias * (route.spreadNeighborCap - Math.min(route.spreadNeighborCap, nearby)) * route.spreadUtility : 0
-  const cohesionValue = (role === 'screen' || role === 'ranged' || role === 'reserve')
-    ? profile.doctrine.concentrationBias * Math.min(route.spreadNeighborCap, nearby) * route.cohesionUtility
-    : 0
+  const spreadBias = role === 'scout'
+    ? profile.doctrine.maneuverBias
+    : role === 'assault'
+      ? profile.doctrine.maneuverBias * (1 - profile.doctrine.concentrationBias)
+      : 0
+  const cohesionBias = role === 'assault'
+    ? profile.doctrine.concentrationBias
+    : role === 'screen' || role === 'ranged' || role === 'reserve'
+      ? profile.doctrine.concentrationBias
+      : 0
+  const spreadValue = spreadBias
+    * (route.spreadNeighborCap - Math.min(route.spreadNeighborCap, nearby)) * route.spreadUtility
+  const cohesionValue = cohesionBias
+    * Math.min(route.spreadNeighborCap, nearby) * route.cohesionUtility
   const knightForestPenalty = squad.object.units.knights > 0 ? forests * route.knightForestPenalty : 0
   const rememberedDanger = phase === 'defense' ? 0 : memory.contacts.reduce((sum, contact) => {
     if (contact.kind !== 'squad'
@@ -727,10 +1055,17 @@ function routeScore(
       * Math.max(0, gameConfig.ai.memoryRouteAvoidanceTurns - age) * route.rememberedDangerUtility
   }, 0)
   const towerExposure = phase === 'assault'
-    ? towerExposureAlong(state, path, towerThreats)
+    ? towerExposureAlong(state, path, towerThreats, squad.object)
+    : 0
+  const rangedExposure = phase === 'defense'
+    ? path.slice(1, aiTacticalConfig.defense.rangedExposureLookahead + 1)
+      .reduce((sum, position) => sum + hostileArcherExposureAt(
+        state, position, squad.position, squad.object, archerThreats,
+      ), 0)
     : 0
   return -path.length * route.pathLengthPenalty + spreadValue + cohesionValue - knightForestPenalty
     - rememberedDanger - towerExposure * aiTacticalConfig.siege.towerExposureRoutePenalty
+    - rangedExposure * aiTacticalConfig.defense.rangedExposureRoutePenalty
 }
 
 function movementCandidates(
@@ -746,23 +1081,48 @@ function movementCandidates(
   const ownerId = state.activeParticipantId
   const participant = state.scenario.participants.find((candidate) => candidate.id === ownerId)
   const targetCastle = targetOwnerId ? castlePositionFor(state.scenario, targetOwnerId) : null
+  const ownCastle = castlePositionFor(state.scenario, ownerId)
   const threat = homeThreatFor(state, ownerId, memory)
   const defensiveAssets = defensiveAssetsFor(state, ownerId)
+  const threatensHome = (position: CellPosition) => {
+    const inside = participant
+      && state.scenario.territories[position.row]?.[position.column] === participant.regionId
+    const assetDistance = Math.min(
+      ...defensiveAssets.map((asset) => positionDistance(position, asset.position)),
+      Number.POSITIVE_INFINITY,
+    )
+    const coreDistance = ownCastle ? positionDistance(position, ownCastle) : Number.POSITIVE_INFINITY
+    return Boolean(inside)
+      || assetDistance <= aiStrategicConfig.threat.immediateRadius
+      || Math.ceil(coreDistance / aiStrategicConfig.threat.assumedOrdersPerTurn)
+        <= aiStrategicConfig.threat.maximumArrivalTurns
+  }
   const threateningSquads = aiObjectEntries(state.scenario)
     .flatMap((entry) => entry.object.type === 'squad'
       && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+      && threatensHome(entry.position)
       ? [{ ...entry, object: entry.object }] : [])
     .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
       || first.position.row - second.position.row || first.position.column - second.position.column)
   const rememberedThreats = memory.contacts
     .filter((contact) => contact.kind === 'squad'
-      && areOwnersHostile(state.scenario.participants, ownerId, contact.ownerId))
+      && state.turn - contact.lastSeenTurn <= aiPlannerConfig.targetMemoryTurns
+      && areOwnersHostile(state.scenario.participants, ownerId, contact.ownerId)
+      && threatensHome(contact.position)
+      && !threateningSquads.some((entry) => samePosition(entry.position, contact.position)))
     .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
       || first.position.row - second.position.row || first.position.column - second.position.column)
   const squads = squadEntries(state, ownerId)
     .sort((first, second) => first.position.row - second.position.row || first.position.column - second.position.column)
+  const hostileSquads = aiObjectEntries(state.scenario)
+    .flatMap((entry) => entry.object.type === 'squad'
+      && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+      ? [{ ...entry, object: entry.object }]
+      : [])
+  const archerThreats = hostileSquads.filter((entry) => entry.object.units.archers > 0)
+  const frontLineThreats = hostileFrontLineSquads(state, ownerId)
+  const rangedSquads = squads.filter((entry) => memory.squadRoles[positionKey(entry.position)] === 'ranged')
   const candidates: TacticalCandidate[] = []
-  const ownCastle = castlePositionFor(state.scenario, ownerId)
   const stagingAnchors = stagingAnchorsFor(state, ownerId, memory)
   const homeAnchor = memory.settlementPlan?.reservedSites.military ?? ownCastle
   const fortressAnchors = [
@@ -784,6 +1144,49 @@ function movementCandidates(
   ))
   const threatTargets = [...threateningSquads.map((entry) => entry.position), ...rememberedThreats.map((entry) => entry.position)]
     .filter((position, index, all) => all.findIndex((candidate) => positionKey(candidate) === positionKey(position)) === index)
+  const coreBreachTargets = ownCastle ? threateningSquads
+    .filter((entry) => positionDistance(entry.position, ownCastle) <= aiTacticalConfig.defense.coreBreachRadius)
+    .map((entry) => entry.position) : []
+  const coreBreach = coreBreachTargets.length > 0
+  if (coreBreach) threatTargets.sort((first, second) => (
+    Number(!coreBreachTargets.some((position) => samePosition(position, first)))
+      - Number(!coreBreachTargets.some((position) => samePosition(position, second)))
+      || threatPriority(second, defensiveAssets) - threatPriority(first, defensiveAssets)
+      || first.row - second.row || first.column - second.column
+  ))
+  // High-concentration doctrines must mass on the most dangerous incursion.
+  // Round-robin assignment sent each squad after a different contact, so an
+  // enemy already hitting the gate could be ignored while defenders chased a
+  // weaker group near a peripheral asset.
+  const activeDefenseTargets = Math.max(1, Math.round(
+    threatTargets.length * (1 - profile.doctrine.concentrationBias),
+  ))
+  const responsePowerTarget = Math.min(
+    squads.reduce((sum, squad) => sum + troopCompositionPower(squad.object.units, squadHealth(squad.object)), 0),
+    Math.max(profile.doctrine.forceTargets.defense.minimum, threat.power * profile.riskThreshold),
+  )
+  const respondingSquadKeys = new Set<string>()
+  let respondingPower = 0
+  if (threat.threatened && threatTargets.length > 0) {
+    const responders = [...squads].sort((first, second) => {
+      const distance = (position: CellPosition) => Math.min(
+        ...threatTargets.map((target) => positionDistance(position, target)),
+      )
+      return distance(first.position) - distance(second.position)
+        || second.object.units.archers - first.object.units.archers
+        || first.position.row - second.position.row || first.position.column - second.position.column
+    })
+    for (const responder of responders) {
+      respondingSquadKeys.add(positionKey(responder.position))
+      respondingPower += troopCompositionPower(responder.object.units, squadHealth(responder.object))
+      // A proportional response is useful against probes at the frontier. An
+      // enemy adjacent to the castle is already attacking the defeat
+      // condition, so every field formation must break its previous mission
+      // and join the relief instead of treating one large archer group as a
+      // sufficient mathematical answer.
+      if (!coreBreach && respondingPower >= responsePowerTarget) break
+    }
+  }
   const reachableStagingAnchor = (from: CellPosition) => stagingAnchors
     .flatMap((anchor) => {
       const path = findMovementPath(navigationMap, from, anchor, { ownerId })
@@ -831,6 +1234,7 @@ function movementCandidates(
   for (const [squadIndex, squad] of squads.entries()) {
     if (!countNode()) break
     const role = memory.squadRoles[positionKey(squad.position)] ?? 'assault'
+    const respondsToThreat = respondingSquadKeys.has(positionKey(squad.position))
     const rangedIndex = squads.slice(0, squadIndex).filter((entry) => (
       memory.squadRoles[positionKey(entry.position)] === 'ranged'
     )).length
@@ -847,8 +1251,9 @@ function movementCandidates(
       && role !== 'reserve'
       && !fielded
       && !supportReady
+      && memory.idleTurns < aiPlannerConfig.forcedAdvanceAfterIdleTurns
     const raidObjective = fielded || supportReady
-      ? raidObjectives[positionKey(squad.position)]
+      ? role === 'screen' ? undefined : raidObjectives[positionKey(squad.position)]
       : undefined
     if (healthShare(squad.object) <= profile.doctrine.retreatHealthShare && phase !== 'defense') {
       const retreat = retreatDestination(state, squad.position, ownerId, navigationMap)
@@ -863,13 +1268,63 @@ function movementCandidates(
       }
       continue
     }
+    const nearestFrontLineThreat = [...frontLineThreats].sort((first, second) => (
+      positionDistance(first.position, squad.position) - positionDistance(second.position, squad.position)
+        || first.position.row - second.position.row || first.position.column - second.position.column
+    ))[0]
+    const alreadyRepositionedThisTurn = memory.recentMovements.some((entry) => (
+      entry.turn === state.turn && samePosition(entry.to, squad.position)
+    ))
+    if (role === 'ranged' && nearestFrontLineThreat
+      && positionDistance(squad.position, nearestFrontLineThreat.position)
+        <= aiTacticalConfig.formation.rangedWithdrawalThreatDistance
+      && !alreadyRepositionedThisTurn
+      && !rangedSquadCanClearImmediateThreats(state, squad.position, frontLineThreats)
+      && !rangedSquadHasScreen(squads, squad, nearestFrontLineThreat.position)) {
+      const currentThreatDistance = Math.min(...frontLineThreats.map((entry) => (
+        positionDistance(squad.position, entry.position)
+      )))
+      for (const destination of adjacentDestinations(squad.position)) {
+        if (!countNode()) break
+        const cell = state.scenario.cells[destination.row]?.[destination.column]
+        if (!cell || cell.landform === 'peak' || cell.object
+          || isTemporarilyBlocked(memory, destination, state.turn)) continue
+        if (isPlannedFortification(memory, destination) && !isPlannedFortificationGate(memory, destination)) continue
+        const sourceInsideDomain = participant
+          && state.scenario.territories[squad.position.row]?.[squad.position.column] === participant.regionId
+        const destinationInsideDomain = participant
+          && state.scenario.territories[destination.row]?.[destination.column] === participant.regionId
+        if (sourceInsideDomain && !destinationInsideDomain) continue
+        const nextThreatDistance = Math.min(...frontLineThreats.map((entry) => (
+          positionDistance(destination, entry.position)
+        )))
+        const distanceGain = nextThreatDistance - currentThreatDistance
+        if (distanceGain <= 0 || moveOrAttackFailure(state, squad.position, destination) !== null) continue
+        // Kiting remains valid in field combat, but never at the price of
+        // walking away from the castle while an enemy is adjacent to it.
+        if (coreBreach && ownCastle
+          && positionDistance(destination, ownCastle) > positionDistance(squad.position, ownCastle)) continue
+        const command: AiCommand = { type: 'move-or-attack', from: squad.position, to: destination }
+        const evaluation = evaluateCommand(state, command, phase, targetOwnerId)
+        if (!evaluation) continue
+        candidates.push({
+          command,
+          score: evaluation.score + aiTacticalConfig.movement.rangedWithdrawalUtility
+            + distanceGain * aiTacticalConfig.movement.rangedWithdrawalDistanceUtility,
+          factors: [...evaluation.factors, 'ranged-withdrawal', `threat-distance:+${distanceGain}`],
+        })
+      }
+    }
+    const screenAnchor = role === 'screen'
+      ? screenAnchorFor(state, squad, rangedSquads, frontLineThreats, navigationMap)
+      : null
     let strategicTarget: CellPosition | null | undefined
-    if (role === 'ranged' && towerNeedingGarrison) strategicTarget = towerNeedingGarrison
-    else if (phase === 'defense') {
-      strategicTarget = threat.threatened && role !== 'reserve'
-        ? threatTargets[squadIndex % Math.max(1, threatTargets.length)] ?? homeAnchor
-        : guardAnchor
-    } else if (phase === 'mobilization') {
+    if (screenAnchor) strategicTarget = screenAnchor.position
+    else if (phase === 'defense' && respondsToThreat) {
+      strategicTarget = threatTargets[squadIndex % activeDefenseTargets] ?? homeAnchor
+    } else if (role === 'ranged' && towerNeedingGarrison) strategicTarget = towerNeedingGarrison
+    else if (phase === 'defense') strategicTarget = guardAnchor
+    else if (phase === 'mobilization') {
       strategicTarget = role === 'reserve' ? guardAnchor : reachableStagingAnchor(squad.position) ?? homeAnchor
     } else if (phase === 'regroup') {
       strategicTarget = role === 'reserve' || role === 'ranged' ? guardAnchor : homeAnchor
@@ -895,25 +1350,92 @@ function movementCandidates(
     const addDestinations = (destinations: CellPosition[], movementTarget: CellPosition) => {
       for (const destination of destinations) {
         if (!countNode()) break
-        const path = raidObjective
-          ? findMovementPath(navigationMap, squad.position, destination, {
-              ownerId,
-              cellCost: (_position, cell) => squadMovementOrderCost(squad.object, cell),
-            })
-          : phase === 'assault' && targetOwnerId && !waitingForSupport
-            ? assaultPathWithThreats(state, navigationMap, squad.object, squad.position, destination, targetOwnerId, assaultTowerThreats)
-            : findMovementPath(navigationMap, squad.position, destination, { ownerId })
+        let path: CellPosition[] | null
+        if (screenAnchor) {
+          path = findMovementPath(navigationMap, squad.position, destination, {
+            ownerId,
+            cellCost: (position, cell) => squadMovementOrderCost(squad.object, cell)
+              + Math.max(0, positionDistance(position, screenAnchor.rangedPosition)
+                - aiTacticalConfig.formation.screenRadius) * aiTacticalConfig.movement.screenUtility,
+          })
+        } else if (raidObjective) {
+          path = findMovementPath(navigationMap, squad.position, destination, {
+            ownerId,
+            cellCost: (_position, cell) => squadMovementOrderCost(squad.object, cell),
+          })
+        } else if (phase === 'assault' && targetOwnerId && !waitingForSupport) {
+          path = assaultPathWithThreats(
+            state, navigationMap, squad.object, squad.position, destination, targetOwnerId, assaultTowerThreats,
+          )
+        } else if (phase === 'defense' && respondsToThreat) {
+          const directPath = findMovementPath(navigationMap, squad.position, destination, { ownerId })
+          const directContact = directPath
+            ? projectedDefensiveContact(state, profile, squad, directPath, movementTarget, countNode)
+            : null
+          const emergencyContact = Boolean(coreBreach && directContact?.survivesExchange
+            && directContact.attackerPowerBefore >= directContact.targetPowerBefore
+              * aiTacticalConfig.defense.coreBreachMinimumContactPowerRatio)
+          path = directContact?.viable || emergencyContact
+            ? directPath
+            : findMovementPath(navigationMap, squad.position, destination, {
+                ownerId,
+                cellCost: (position, cell) => squadMovementOrderCost(squad.object, cell)
+                  + hostileArcherExposureAt(state, position, squad.position, squad.object, archerThreats)
+                    * aiTacticalConfig.defense.rangedExposureRoutePenalty,
+              })
+        } else path = findMovementPath(navigationMap, squad.position, destination, { ownerId })
         if (!path || path.length < 2) continue
         const to = path[1]
         if (isTemporarilyBlocked(memory, to, state.turn)) continue
-        const crossingBorder = participant && state.scenario.territories[to.row]?.[to.column] !== participant.regionId
-        const allowedCrossing = phase === 'defense' || (phase === 'assault' && state.turn >= profile.earliestOffensiveRound)
-        if (crossingBorder && !allowedCrossing) continue
+        if (!coreBreach && !objectAt(state, to)
+          && revisitsRecentFormationTrail(memory, squad.position, to, state.turn)) continue
+        // Do not park a squad on the next wall/tower/outpost cell. Occupying a
+        // reserved site made an otherwise funded castle step fail placement on
+        // every threatened turn; a squad already standing there may still move
+        // away because this restriction applies only to its destination.
+        if (!coreBreach && isPlannedFortification(memory, to) && !isPlannedFortificationGate(memory, to)
+          && !state.scenario.cells[to.row]?.[to.column]?.object) continue
+        const outsideDomain = participant && state.scenario.territories[to.row]?.[to.column] !== participant.regionId
+        const sourceOutsideDomain = participant
+          && state.scenario.territories[squad.position.row]?.[squad.position.column] !== participant.regionId
+        const exteriorBorderCell = participant && outsideDomain && clockwiseCardinalDirections.some((direction) => (
+          state.scenario.territories[to.row + direction.row]?.[to.column + direction.column] === participant.regionId
+        ))
+        const returningHome = phase === 'defense' && sourceOutsideDomain && ownCastle
+          && positionDistance(to, ownCastle) < positionDistance(squad.position, ownCastle)
+        const borderInterception = phase === 'defense' && exteriorBorderCell
+          && positionDistance(to, strategicTarget) < positionDistance(squad.position, strategicTarget)
+        const allowedCrossing = (phase === 'assault' && state.turn >= profile.earliestOffensiveRound)
+          || (phase === 'defense' && Boolean(returningHome || borderInterception))
+        if (outsideDomain && !allowedCrossing) continue
         if (moveOrAttackFailure(state, squad.position, to) !== null) continue
         const command: AiCommand = { type: 'move-or-attack', from: squad.position, to }
         const evaluation = evaluateCommand(state, command, phase, targetOwnerId)
         if (!evaluation) continue
-        const situational = routeScore(state, profile, squads, squad, path, role, memory, phase, assaultTowerThreats)
+        const projectedContact = phase === 'defense' && respondsToThreat
+          ? projectedDefensiveContact(state, profile, squad, path, movementTarget, countNode)
+          : null
+        const emergencyContact = Boolean(coreBreach && projectedContact?.survivesExchange
+          && projectedContact.attackerPowerBefore >= projectedContact.targetPowerBefore
+            * aiTacticalConfig.defense.coreBreachMinimumContactPowerRatio)
+        const commitsToContact = Boolean(projectedContact?.viable || emergencyContact)
+        const replyPowerLoss = phase === 'defense' && respondsToThreat && !commitsToContact && !coreBreach
+          ? immediateReplyPowerLossForSquad(evaluation.state, ownerId, to, hostileSquads, countNode)
+          : 0
+        const movedSquad = objectAt(evaluation.state, to)
+        const movedPower = movedSquad?.type === 'squad' && movedSquad.ownerId === ownerId
+          ? troopCompositionPower(movedSquad.units, squadHealth(movedSquad))
+          : 0
+        const certainDestruction = replyPowerLoss > 0 && replyPowerLoss >= movedPower - 0.0001
+        const exposurePenalty = replyPowerLoss * aiTacticalConfig.evaluation.replyPowerLoss
+          + (certainDestruction ? aiTacticalConfig.defense.certainDestructionPenalty : 0)
+        const contactBonus = commitsToContact
+          ? aiTacticalConfig.defense.contactCommitmentUtility
+            + Math.max(0, projectedContact?.exchange ?? 0) * aiTacticalConfig.defense.contactExchangeUtility
+          : 0
+        const situational = routeScore(
+          state, profile, squads, squad, path, role, memory, phase, assaultTowerThreats, archerThreats,
+        )
         const defenseBonus = role === 'defender' && phase === 'defense'
           ? aiTacticalConfig.movement.defenderUtility
           : 0
@@ -935,21 +1457,37 @@ function movementCandidates(
               raidObjective.score * aiTacticalConfig.raid.objectiveScoreUtilityScale,
             )
           : 0
+        const screenProgress = screenAnchor
+          ? Math.max(0, objectiveProgress)
+          : 0
+        const screenBonus = screenAnchor && screenProgress > 0
+          ? aiTacticalConfig.movement.screenUtility
+            + screenProgress * aiTacticalConfig.movement.screenProgressUtility
+          : 0
         candidates.push({
           command,
-          score: evaluation.score + situational + defenseBonus + interceptionBonus + raidBonus,
+          score: evaluation.score + situational + defenseBonus + interceptionBonus + raidBonus + screenBonus
+            + contactBonus - exposurePenalty,
           factors: [
             ...evaluation.factors,
             `role:${role}`,
             `route:${situational.toFixed(1)}`,
             `intercept:${interceptionBonus.toFixed(1)}`,
+            ...(respondsToThreat ? ['defense-response'] : []),
+            ...(respondsToThreat && coreBreach ? ['core-breach-response'] : []),
+            ...(commitsToContact ? ['committed-defense-contact'] : []),
+            ...(replyPowerLoss > 0 ? [`projected-reply-loss:${replyPowerLoss.toFixed(1)}`] : []),
+            ...(certainDestruction ? ['certain-destruction'] : []),
             ...(waitingForSupport ? ['support-muster'] : []),
+            ...(screenBonus > 0 ? ['screen-ranged', `screen-progress:${screenProgress}`] : []),
             ...(raidObjective ? [...raidObjective.factors, `raid-pursuit:${raidBonus.toFixed(1)}`] : []),
           ],
         })
       }
     }
-    addDestinations(raidObjective
+    addDestinations(screenAnchor
+      ? [screenAnchor.position]
+      : raidObjective
       ? [raidObjective.approach]
       : phase === 'defense' && threatTargets.length > 0
       ? adjacentDestinations(strategicTarget)
@@ -1038,6 +1576,7 @@ function splitCandidate(state: MatchState, profile: AiProfileRules, memory: AiMe
   if (troopCompositionPower(splitUnits) < aiTacticalConfig.formation.splitMinimumGroupPower
     || troopCompositionPower(remainingUnits) < aiTacticalConfig.formation.splitMinimumGroupPower) return null
   const navigationMap = mapWithRememberedThreats(state, memory, state.activeParticipantId)
+    .map((row) => [...row])
   const approaches = approachDestinations(state, target, 'assault', navigationMap)
   let best: TacticalCandidate | null = null
   for (const direction of clockwiseCardinalDirections) {
@@ -1133,6 +1672,7 @@ function towerCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
         if (squad?.type === 'squad' && squad.ownerId === ownerId && squad.units.archers > 0) {
           const defensive = phase === 'defense'
           const quantity = Math.min(squad.units.archers, desiredGarrison - garrisonArchers)
+          if (garrisonFailure(state, from, tower.position, quantity) !== null) continue
           candidates.push({
             command: { type: 'garrison', from, tower: tower.position, quantity },
             score: defensive ? aiTacticalConfig.tower.defenseGarrisonUtility : aiTacticalConfig.tower.peacetimeGarrisonUtility,
@@ -1173,13 +1713,37 @@ export function assignSquadRoles(
     ? positionDistance(first.position, castle) - positionDistance(second.position, castle)
     : 0)
   const threatened = phase === 'defense'
+  const rangedRoleKeys = new Set(squads.flatMap((squad) => {
+    const key = positionKey(squad.position)
+    const archerShare = squad.object.units.archers / Math.max(1, squadSize(squad.object))
+    return archerShare >= aiTacticalConfig.formation.rangedRoleShare
+      || (previous[key] === 'ranged' && archerShare >= aiTacticalConfig.formation.retainedRangedRoleShare)
+      ? [key]
+      : []
+  }))
+  // Assign one nearest front-line screen to each ranged detachment. This is a
+  // role relationship, not a permanent unit flag: after casualties, splits or
+  // separation the matching is recalculated from the current formation.
+  const screenSquadKeys = new Set<string>()
+  for (const ranged of squads.filter((squad) => rangedRoleKeys.has(positionKey(squad.position)))) {
+    const screen = squads
+      .filter((candidate) => !rangedRoleKeys.has(positionKey(candidate.position))
+        && !screenSquadKeys.has(positionKey(candidate.position))
+        && frontLineUnitCount(candidate.object) > 0
+        && positionDistance(candidate.position, ranged.position) <= aiTacticalConfig.formation.screenRadius)
+      .sort((first, second) => positionDistance(first.position, ranged.position) - positionDistance(second.position, ranged.position)
+        || frontLineUnitCount(second.object) - frontLineUnitCount(first.object)
+        || first.position.row - second.position.row || first.position.column - second.position.column)[0]
+    if (screen) screenSquadKeys.add(positionKey(screen.position))
+  }
   for (const squad of squads) {
     const key = positionKey(squad.position)
     const size = Math.max(1, squadSize(squad.object))
     const archerShare = squad.object.units.archers / size
     const squadPower = troopCompositionPower(squad.object.units)
     let role: AiSquadRole
-    if (archerShare >= aiTacticalConfig.formation.rangedRoleShare) role = 'ranged'
+    if (rangedRoleKeys.has(key)) role = 'ranged'
+    else if (screenSquadKeys.has(key)) role = 'screen'
     else if (threatened && sortedByHome.indexOf(squad) < Math.ceil(squads.length / 2)) role = 'defender'
     else if (squads.length > 1 && reservedPower < reserveTarget
       && squadPower <= totalPower * Math.max(aiTacticalConfig.formation.minimumReserveSquadShare,
@@ -1187,8 +1751,6 @@ export function assignSquadRoles(
     else if (size <= aiTacticalConfig.formation.scoutMaximumSize
       && profile.doctrine.maneuverBias > aiTacticalConfig.formation.scoutManeuverThreshold
       && (phase === 'assault' || squads.length >= aiTacticalConfig.formation.scoutMinimumGroups)) role = 'scout'
-    else if (squads.some((other) => other !== squad && other.object.units.archers > 0
-      && positionDistance(other.position, squad.position) <= aiTacticalConfig.formation.screenRadius)) role = 'screen'
     else role = 'assault'
     const oldRole = previous[key]
     roles[key] = oldRole === 'ranged' && archerShare >= aiTacticalConfig.formation.retainedRangedRoleShare ? oldRole : role
@@ -1227,6 +1789,32 @@ export function tacticalCandidates(
   countNode: () => boolean,
 ) {
   const navigationMap = mapWithRememberedThreats(state, memory, state.activeParticipantId)
+    .map((row) => [...row])
+  const ownCastle = castlePositionFor(state.scenario, state.activeParticipantId)
+  const coreBreach = Boolean(ownCastle && aiObjectEntries(state.scenario).some((entry) => (
+    entry.object.type === 'squad'
+      && areOwnersHostile(state.scenario.participants, state.activeParticipantId, entry.object.ownerId)
+      && positionDistance(entry.position, ownCastle) <= aiTacticalConfig.defense.coreBreachRadius
+  )))
+  // Route through the planned barbican instead of repeatedly choosing an
+  // empty future wall cell as the first step and rejecting the whole path.
+  // Empty walls/towers are navigation obstacles; the gate deliberately stays
+  // open so troops inside an enclosure are never trapped by the blueprint.
+  if (!coreBreach) memory.settlementPlan?.fortification?.lines.filter((line) => (
+    fortificationLineActivated(state, line)
+  )).forEach((line) => {
+    for (const position of [...line.walls, ...line.towers]) {
+      const cell = navigationMap[position.row]?.[position.column]
+      if (!cell || cell.object) continue
+      navigationMap[position.row][position.column] = {
+        ...cell,
+        object: {
+          type: 'building', kind: 'wall', ownerId: state.activeParticipantId,
+          hitPoints: buildingRules.wall.hitPoints, maxHitPoints: buildingRules.wall.hitPoints,
+        },
+      }
+    }
+  })
   const raidObjectives = raidObjectivesFor(
     state,
     navigationMap,

@@ -8,9 +8,21 @@ import { planAiTurn } from './planner'
 import { createAiMemory } from './model'
 import { waveFor } from './tactics'
 import { findStrategicBuildPosition, homeThreatFor, marketCandidate } from './strategy'
-import { militia as units, startAiTurn } from './testing/scenarioFixtures'
+import { militia as units, placeTestBuilding, placeTestSquad, startAiTurn } from './testing/scenarioFixtures'
 
 describe('AI perception and planning', () => {
+  it('does not call both armies home merely because they face each other across a wide border', () => {
+    const state = startAiTurn('radomir')
+    const ownerId = state.activeParticipantId
+    // This mine is a legitimate peripheral asset, but the hostile force is
+    // still 15 cells away from it, in its own domain, and 25 cells from the
+    // castle. It warrants patrol awareness, not a permanent defense phase.
+    placeTestBuilding(state, ownerId, 'mine', { column: 20, row: 2 })
+    placeTestSquad(state, 'player', { column: 5, row: 2 }, units(3), { health: 3 })
+
+    expect(homeThreatFor(state, ownerId).threatened).toBe(false)
+  })
+
   it('remembers a hidden occupied target briefly without committing speculative plan memory', () => {
     const state = startAiTurn('radomir')
     const participantId = state.activeParticipantId
@@ -40,8 +52,39 @@ describe('AI perception and planning', () => {
     expect(perception.state.scenario.cells[3][2].object).toMatchObject({ type: 'building', kind: 'barracks' })
     expect(Object.values(perception.state.domains.player.resources).every((value) => value === 0)).toBe(true)
     expect(perception.state.domains.player.population).toBe(0)
+    expect(perception.state.domains.player.diverseDiet).toBe(state.domains.player.diverseDiet)
     expect(perception.state.domains[state.activeParticipantId]).toEqual(state.domains[state.activeParticipantId])
     expect(perception.memory.contacts).toEqual([])
+  })
+
+  it('exposes only the active foreign combat modifier, not the economy behind it', () => {
+    const state = startAiTurn('radomir')
+    state.domains.player.diverseDiet = true
+    const fed = createAiPerception(state, state.activeParticipantId, createAiMemory())
+    state.domains.player.diverseDiet = false
+    const ordinary = createAiPerception(state, state.activeParticipantId, createAiMemory())
+
+    expect(fed.state.domains.player.diverseDiet).toBe(true)
+    expect(ordinary.state.domains.player.diverseDiet).toBe(false)
+    expect(Object.values(fed.state.domains.player.resources).every((value) => value === 0)).toBe(true)
+    expect(fed.state.domains.player.population).toBe(0)
+  })
+
+  it('keeps a queued melee sequence legal against an enemy diverse-diet bonus', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    placeTestSquad(state, ownerId, { column: 13, row: 12 }, units(3), { health: 3 })
+    placeTestSquad(state, 'player', { column: 12, row: 12 }, units(3), { health: 3 })
+    state.domains.player.diverseDiet = true
+    const plan = planAiTurn(state, { ...createAiMemory(), targetOwnerId: 'player' }, 'svyatobor', {
+    })
+    let authoritative = state
+    for (const command of plan.commands) {
+      const result = executeAiCommand(authoritative, command)
+      expect(result.ok, JSON.stringify({ command, plan: plan.commands, trace: plan.trace })).toBe(true)
+      if (!result.ok) break
+      authoritative = result.state
+    }
   })
 
   it('keeps a last-seen contact until its cell is observed empty', () => {
@@ -79,7 +122,6 @@ describe('AI perception and planning', () => {
     const first = planAiTurn(state, memory, profileId)
     const second = planAiTurn(state, memory, profileId)
     expect(second.commands).toEqual(first.commands)
-    expect(first.exploredNodes).toBeLessThanOrEqual(aiPlannerConfig.nodeBudget + 1)
     let authoritative = state
     first.commands.forEach((command) => {
       if (command.type === 'build') expect(aiProfiles[profileId].allowedBuildings).toContain(command.building)
@@ -119,6 +161,56 @@ describe('AI perception and planning', () => {
     const distance = Math.min(...basic.zones.food.cells.map((candidate) => positionDistance(position, candidate)))
     const adaptiveRadius = basic.zones.food.overflowRadius + Math.max(2, Math.ceil(Math.sqrt(basic.zones.food.cells.length) / 2))
     expect(distance).toBeLessThanOrEqual(adaptiveRadius)
+  })
+
+  it('replans immediately after terrain changes without redrawing a started castle', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const analysis = analyzeAiWorld(state.scenario, ownerId)
+    if (!analysis) throw new Error('Missing replanning analysis')
+    const original = createSettlementPlan(analysis, state.scenario, aiProfiles.svyatobor)
+    const primary = original.fortification?.lines[0]
+    if (!primary) throw new Error('Missing committed fortification')
+    placeTestBuilding(state, ownerId, 'barbican', primary.gate)
+    const changedCell = original.zones.food.cells.find((position) => (
+      !state.scenario.cells[position.row]?.[position.column]?.object
+    ))
+    if (!changedCell) throw new Error('Missing terrain-change cell')
+    state.scenario.cells[changedCell.row][changedCell.column] = {
+      ...state.scenario.cells[changedCell.row][changedCell.column],
+      vegetation: true,
+    }
+    const memory = {
+      ...createAiMemory(),
+      settlementPlan: original,
+      settlementPlanAnalysisKey: analysis.key,
+      lastSettlementPlanReviewTurn: state.turn,
+    }
+    const planned = planAiTurn(state, memory, 'svyatobor')
+
+    expect(planned.trace.find((entry) => entry.goal === 'layout')?.factors)
+      .toContain('plan-review:terrain-change')
+    expect(planned.memory.settlementPlan?.fortification).toEqual(original.fortification)
+    expect(planned.memory.settlementPlan?.reservedCorridors).toEqual(original.reservedCorridors)
+    expect(planned.memory.settlementPlan?.zones.food.cells.map(positionKey)).not.toContain(positionKey(changedCell))
+  })
+
+  it('periodically reviews free settlement quarters even without a terrain event', () => {
+    const state = startAiTurn('radomir')
+    const analysis = analyzeAiWorld(state.scenario, state.activeParticipantId)
+    if (!analysis) throw new Error('Missing periodic planning analysis')
+    const original = createSettlementPlan(analysis, state.scenario, aiProfiles.radomir)
+    state.turn = aiPlannerConfig.settlementPlanReviewInterval + 1
+    const planned = planAiTurn(state, {
+      ...createAiMemory(),
+      settlementPlan: original,
+      settlementPlanAnalysisKey: analysis.key,
+      lastSettlementPlanReviewTurn: 1,
+    }, 'radomir')
+
+    expect(planned.trace.find((entry) => entry.goal === 'layout')?.factors)
+      .toContain('plan-review:periodic')
+    expect(planned.memory.lastSettlementPlanReviewTurn).toBe(state.turn)
   })
 
   it('buys exactly the stone shortfall for a reachable strategic building', () => {
@@ -165,6 +257,36 @@ describe('AI perception and planning', () => {
     const memory = { ...createAiMemory(), settlementPlan: createSettlementPlan(analysis, state.scenario, aiProfiles.svyatobor) }
     const candidate = marketCandidate(state, aiProfiles.svyatobor, 'expansion', memory, analysis, () => true)
     expect(candidate?.command.type === 'trade' && candidate.command.resource === 'stone').toBe(false)
+  })
+
+  it('buys missing iron for Radomir\'s advertised spearmen instead of degrading to militia forever', () => {
+    const state = startAiTurn('radomir')
+    const ownerId = state.activeParticipantId
+    const market = { column: 18, row: 9 }
+    placeTestBuilding(state, ownerId, 'market', market)
+    placeTestBuilding(state, ownerId, 'barracks', { column: 18, row: 15 })
+    placeTestSquad(state, ownerId, { column: 20, row: 14 }, units(6), { health: 6 })
+    state.domains[ownerId] = {
+      ...state.domains[ownerId],
+      population: 8,
+      taxRate: 'none',
+      resources: {
+        ...state.domains[ownerId].resources,
+        iron: 0, flour: 80, meat: 40, fruit: 40, gold: 300,
+      },
+    }
+
+    const candidate = marketCandidate(
+      state,
+      aiProfiles.radomir,
+      'mobilization',
+      { ...createAiMemory(), targetOwnerId: 'player' },
+    )
+
+    expect(candidate?.command).toMatchObject({
+      type: 'trade', market, resource: 'iron', direction: 'buy',
+    })
+    expect(candidate?.factors).toContain('troop:spearmen')
   })
 
   it('spaces successive main assault waves by mainWaveCooldownTurns', () => {

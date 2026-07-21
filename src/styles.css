@@ -1994,7 +1994,7 @@ small { font-size: max(10px, .833em); }
 .fortification-command-card:focus-visible .fortification-card-emblem { border-color: rgba(227, 197, 112, .42); color: #ead691; background: radial-gradient(circle, rgba(211, 181, 94, .16), rgba(211, 181, 94, .045) 66%, transparent 68%); }
 .troop-card-emblem svg { width: 25px; height: 25px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .troop-card-emblem .troop-icon-fill { fill: currentColor; stroke: none; }
-.troop-card-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.troop-card-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 .troop-card-stats > span { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 4px; padding: 4px 6px; border: 1px solid rgba(211, 181, 94, .09); border-radius: 5px; background: rgba(211, 181, 94, .025); }
 .fortification-card-stats { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
 .fortification-card-stats > span { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 4px; padding: 4px 6px; border: 1px solid rgba(211, 181, 94, .09); border-radius: 5px; background: rgba(211, 181, 94, .025); }
@@ -2159,14 +2159,13 @@ small { font-size: max(10px, .833em); }
 .opponent-setup-header { min-height: 92px; }
 .opponent-setup-header > div { max-width: 700px; }
 .opponent-setup-header h2 { font-size: 27px; }
-.opponent-setup-header p { margin: 6px 0 0; color: #8c968a; font-size: 11px; line-height: 1.45; }
 .opponent-setup-content { display: grid; min-height: 0; overflow-y: auto; gap: 14px; padding: 16px 22px 22px; scrollbar-width: thin; scrollbar-color: rgba(211, 181, 91, .25) transparent; }
 .opponent-roster-heading h3 { margin: 0; color: #aeb8aa; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
 .round-table-layout { position: relative; height: 278px; min-height: 278px; overflow: hidden; border: 1px solid rgba(190, 201, 181, .07); border-radius: 14px; background: radial-gradient(ellipse at 50% 49%, rgba(182, 143, 56, .055), transparent 48%), rgba(4, 9, 6, .18); }
 .round-table { position: absolute; top: 50%; left: 50%; width: 410px; height: 176px; border: 1px solid rgba(214, 182, 94, .26); border-radius: 50%; background: radial-gradient(ellipse, rgba(118, 86, 38, .16), rgba(13, 21, 15, .58) 68%); box-shadow: inset 0 0 45px rgba(0, 0, 0, .55), 0 14px 40px rgba(0, 0, 0, .25); transform: translate(-50%, -50%); }
 .round-table > span { position: absolute; inset: 13px; border: 1px solid rgba(213, 183, 100, .09); border-radius: inherit; }
 .round-table > strong { position: absolute; top: 50%; left: 50%; color: rgba(208, 180, 103, .48); font-size: 9px; letter-spacing: .17em; text-transform: uppercase; transform: translate(-50%, -50%); }
-.round-table-seat { position: absolute; top: var(--seat-y); left: var(--seat-x); display: flex; width: 226px; min-height: 66px; align-items: center; gap: 10px; padding: 8px 44px 8px 9px; border: 1px solid color-mix(in srgb, var(--seat-color) 38%, rgba(190, 201, 181, .12)); border-radius: 12px; background: linear-gradient(135deg, rgba(20, 28, 21, .985), rgba(10, 16, 12, .985)); box-shadow: 0 9px 26px rgba(0, 0, 0, .38), inset 3px 0 var(--seat-color), inset 0 1px rgba(255, 255, 255, .025); transform: translate(-50%, -50%); }
+.round-table-seat { position: absolute; top: var(--seat-y); left: var(--seat-x); display: flex; width: 226px; min-height: 66px; align-items: center; gap: 10px; padding: 8px 44px 8px 9px; border: 1px solid color-mix(in srgb, var(--seat-color) 38%, rgba(190, 201, 181, .12)); border-radius: 12px; background: linear-gradient(135deg, rgba(20, 28, 21, .985), rgba(10, 16, 12, .985)); transform: translate(-50%, -50%); }
 .round-table-seat > span:not(.round-table-avatar) { min-width: 0; flex: 1; }
 .round-table-seat strong { display: block; overflow-wrap: anywhere; color: #e0cd94; font: 500 13px/1.18 Georgia, serif; }
 .round-table-avatar,
@@ -2750,7 +2749,6 @@ small { font-size: max(10px, .833em); }
   .opponent-setup-backdrop { padding: 10px; }
   .opponent-setup-modal { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
   .opponent-setup-header { min-height: 80px; }
-  .opponent-setup-header p { display: none; }
   .opponent-setup-content { padding: 12px; }
   .round-table-layout { height: auto; min-height: 0; overflow: visible; padding: 7px; }
   .round-table { display: none; }

@@ -1,7 +1,7 @@
 import { aiPlannerConfig, aiProfiles } from '../../../config/ai'
 import { gameConfig } from '../../../config/game'
-import { buildingKinds } from '../../../config/rules'
-import type { BuildingKind } from '../../map'
+import { buildingKinds, resourceIds } from '../../../config/rules'
+import type { BuildingKind, MapObject, ResourceId } from '../../map'
 import {
   endTurn,
   objectAt,
@@ -11,7 +11,7 @@ import {
   type TurnReport,
 } from '../../match'
 import type { AiProfileId } from '../../scenario'
-import { analyzeAiWorld, type AiWorldAnalysis } from '../analysis'
+import { aiObjectEntries, analyzeAiWorld, type AiWorldAnalysis } from '../analysis'
 import { executeAiCommand, rememberAiCommandFailure } from '../commands'
 import {
   createAiMemory,
@@ -42,12 +42,15 @@ export interface ScenarioTurn {
   wave: AiWaveKind
   planned: AiCommand[]
   executed: AiCommand[]
+  /** Stale fog-limited suffixes which were discarded before a successful replan. */
+  cancellations: ScenarioCommandFailure[]
+  /** The final command rejection after the runtime replan allowance was exhausted. */
   failures: ScenarioCommandFailure[]
   trace: AiPlanTraceEntry[]
   exploredNodes: number
-  partial: boolean
   report: TurnReport
   buildingCounts: Record<BuildingKind, number>
+  armySize: number
 }
 
 export interface ScenarioRun {
@@ -56,11 +59,87 @@ export interface ScenarioRun {
   turns: ScenarioTurn[]
 }
 
+export interface SkirmishTurn {
+  round: number
+  ownerId: string
+  profileId: AiProfileId
+  phase: AiStrategicPhase
+  wave: AiWaveKind
+  planned: AiCommand[]
+  executed: AiCommand[]
+  events: Array<MatchState['lastEvent']>
+  /** Stale fog-limited suffixes which were discarded before a successful replan. */
+  cancellations: ScenarioCommandFailure[]
+  /** The final command rejection after the runtime replan allowance was exhausted. */
+  failures: ScenarioCommandFailure[]
+  trace: AiPlanTraceEntry[]
+  exploredNodes: number
+  report: TurnReport | null
+  snapshot: SkirmishSnapshot
+}
+
+export interface SkirmishRun {
+  state: MatchState
+  turns: SkirmishTurn[]
+  initialSnapshot: SkirmishSnapshot
+}
+
+export interface SkirmishSnapshot {
+  round: number
+  activeParticipantId: string
+  status: MatchState['status']
+  objects: Array<{
+    position: { column: number; row: number }
+    object: MapObject
+  }>
+  domains: Record<string, {
+    population: number
+    resources: Record<ResourceId, number>
+  }>
+}
+
+export interface SkirmishCheckpoint {
+  targetRound: number
+  reachedRound: number
+  status: MatchState['status']
+  winnerIds: string[]
+  eliminations: Array<{ ownerId: string; defeatedBy: string; round: number }>
+  participants: Array<{
+    ownerId: string
+    profileId: AiProfileId
+    alive: boolean
+    phase: AiStrategicPhase | null
+    wave: AiWaveKind | null
+    population: number
+    resources: Record<ResourceId, number>
+    castle: { column: number; row: number; hitPoints: number; maxHitPoints: number } | null
+    buildings: Partial<Record<BuildingKind, number>>
+    squads: Array<{
+      column: number
+      row: number
+      units: Record<'militia' | 'spearmen' | 'archers' | 'knights', number>
+      health: number | null
+    }>
+    activity: {
+      builds: Partial<Record<BuildingKind, number>>
+      recruits: number
+      moves: number
+      attacks: number
+      destructions: number
+      demolitions: number
+      demolitionReasons: string[]
+    }
+  }>
+}
+
+export interface SkirmishOptions {
+  rounds: number
+}
+
 export interface DevelopmentScenarioOptions {
   turns: number
   mode?: DevelopmentScenarioMode
   cachedAnalysis?: AiWorldAnalysis | null
-  nodeBudget?: number
 }
 
 export interface FrozenTacticalStep {
@@ -85,6 +164,22 @@ export function buildingCountsFor(state: MatchState, ownerId: string) {
     kind,
     ownedBuildingCount(state, ownerId, kind),
   ])) as Record<BuildingKind, number>
+}
+
+function skirmishSnapshotFor(state: MatchState): SkirmishSnapshot {
+  return {
+    round: state.turn,
+    activeParticipantId: state.activeParticipantId,
+    status: state.status,
+    objects: aiObjectEntries(state.scenario).map(({ position, object }) => ({
+      position: { ...position },
+      object: structuredClone(object),
+    })),
+    domains: Object.fromEntries(Object.entries(state.domains).map(([ownerId, domain]) => [ownerId, {
+      population: domain.population,
+      resources: { ...domain.resources },
+    }])),
+  }
 }
 
 function advanceToParticipant(state: MatchState, participantId: string) {
@@ -132,36 +227,46 @@ export function runAiScenario(
   const turns: ScenarioTurn[] = []
 
   for (let index = 0; index < options.turns && state.status === 'playing'; index += 1) {
-    const planned = planAiTurn(
-      state,
-      state.aiMemory[participantId] ?? createAiMemory(),
-      profileId,
-      {
-        cachedAnalysis: analysis,
-        mode,
-        enforceTimeBudget: false,
-        nodeBudget: options.nodeBudget ?? aiPlannerConfig.nodeBudget,
-      },
-    )
+    let planned = planAiTurn(state, state.aiMemory[participantId] ?? createAiMemory(), profileId, {
+      cachedAnalysis: analysis,
+      mode,
+    })
+    const plannedCommands: AiCommand[] = []
     const executed: AiCommand[] = []
+    const cancellations: ScenarioCommandFailure[] = []
     const failures: ScenarioCommandFailure[] = []
-    for (const command of planned.commands) {
-      const result = executeAiCommand(state, command)
-      if (!result.ok) {
-        failures.push({ command, reason: result.reason })
-        state = rememberAiCommandFailure(state, participantId, command, result.reason)
-        break
+    const trace: AiPlanTraceEntry[] = []
+    let exploredNodes = 0
+    for (let attempt = 0; attempt < aiPlannerConfig.maximumPlanAttempts && state.status === 'playing'; attempt += 1) {
+      if (attempt > 0) {
+        planned = planAiTurn(state, state.aiMemory[participantId] ?? createAiMemory(), profileId, {
+          cachedAnalysis: analysis,
+          mode,
+        })
       }
-      else {
+      plannedCommands.push(...planned.commands)
+      trace.push(...planned.trace)
+      exploredNodes += planned.exploredNodes
+      let commandFailed = false
+      for (const command of planned.commands) {
+        const result = executeAiCommand(state, command)
+        if (!result.ok) {
+          const failure = { command, reason: result.reason }
+          if (attempt + 1 < aiPlannerConfig.maximumPlanAttempts) cancellations.push(failure)
+          else failures.push(failure)
+          state = rememberAiCommandFailure(state, participantId, command, result.reason)
+          commandFailed = true
+          break
+        }
         state = result.state
         executed.push(command)
       }
-    }
-    if (failures.length === 0) {
+      if (commandFailed) continue
       state = {
         ...state,
         aiMemory: { ...state.aiMemory, [participantId]: planned.memory },
       }
+      break
     }
     const turn = state.turn
     const ended = endTurn(state)
@@ -173,19 +278,251 @@ export function runAiScenario(
       turn,
       phase: planned.memory.phase,
       wave: planned.memory.wave,
-      planned: planned.commands,
+      planned: plannedCommands,
       executed,
+      cancellations,
       failures,
-      trace: planned.trace,
-      exploredNodes: planned.exploredNodes,
-      partial: planned.partial,
+      trace,
+      exploredNodes,
       report,
       buildingCounts: buildingCountsFor(state, participantId),
+      armySize: aiObjectEntries(state.scenario, participantId).reduce((sum, entry) => (
+        entry.object.type === 'squad'
+          ? sum + Object.values(entry.object.units).reduce((unitSum, count) => unitSum + count, 0)
+          : entry.object.type === 'building' && entry.object.kind === 'tower'
+            ? sum + (entry.object.garrison?.archers ?? 0)
+            : sum
+      ), 0),
     })
     if (state.status === 'playing') state = advanceToParticipant(state, participantId)
   }
 
   return { mode, state, turns }
+}
+
+/**
+ * Runs the real participant cycle for an all-AI match. Unlike the isolated
+ * development and frozen-tactics harnesses, both economies, memories, armies,
+ * destruction and victory conditions remain authoritative throughout.
+ */
+export function runAiSkirmish(initialState: MatchState, options: SkirmishOptions): SkirmishRun {
+  assertScenarioState(initialState)
+  if (initialState.scenario.participants.some((participant) => participant.kind !== 'ai' || !participant.profileId)) {
+    throw new Error('AI skirmish requires only profiled AI participants')
+  }
+  const finalRound = initialState.turn + Math.max(0, Math.floor(options.rounds))
+  const analyses = new Map(initialState.scenario.participants.map((participant) => [
+    participant.id,
+    analyzeAiWorld(initialState.scenario, participant.id),
+  ]))
+  const turns: SkirmishTurn[] = []
+  const initialSnapshot = skirmishSnapshotFor(initialState)
+  let state = initialState
+  while (state.status === 'playing' && state.turn < finalRound) {
+    const participant = state.scenario.participants.find((candidate) => candidate.id === state.activeParticipantId)
+    if (!participant?.profileId) throw new Error(`Missing AI profile for ${state.activeParticipantId}`)
+    const ownerId = participant.id
+    let planned = planAiTurn(state, state.aiMemory[ownerId] ?? createAiMemory(), participant.profileId, {
+      cachedAnalysis: analyses.get(ownerId),
+    })
+    const plannedCommands: AiCommand[] = []
+    const executed: AiCommand[] = []
+    const events: Array<MatchState['lastEvent']> = []
+    const cancellations: ScenarioCommandFailure[] = []
+    const failures: ScenarioCommandFailure[] = []
+    const trace: AiPlanTraceEntry[] = []
+    let exploredNodes = 0
+    for (let attempt = 0; attempt < aiPlannerConfig.maximumPlanAttempts && state.status === 'playing'; attempt += 1) {
+      if (attempt > 0) {
+        planned = planAiTurn(state, state.aiMemory[ownerId] ?? createAiMemory(), participant.profileId, {
+          cachedAnalysis: analyses.get(ownerId),
+        })
+      }
+      plannedCommands.push(...planned.commands)
+      trace.push(...planned.trace)
+      exploredNodes += planned.exploredNodes
+      let commandFailed = false
+      for (const command of planned.commands) {
+        const previousEvent = state.lastEvent
+        const result = executeAiCommand(state, command)
+        if (!result.ok) {
+          const failure = { command, reason: result.reason }
+          if (attempt + 1 < aiPlannerConfig.maximumPlanAttempts) cancellations.push(failure)
+          else failures.push(failure)
+          state = rememberAiCommandFailure(state, ownerId, command, result.reason)
+          commandFailed = true
+          break
+        }
+        state = result.state
+        executed.push(command)
+        events.push(state.lastEvent === previousEvent ? null : state.lastEvent)
+        if (state.status !== 'playing') break
+      }
+      if (commandFailed) continue
+      state = { ...state, aiMemory: { ...state.aiMemory, [ownerId]: planned.memory } }
+      break
+    }
+    if (state.status !== 'playing') {
+      turns.push({
+        round: state.turn, ownerId, profileId: participant.profileId,
+        phase: planned.memory.phase, wave: planned.memory.wave,
+        planned: plannedCommands, executed, events, cancellations, failures, trace,
+        exploredNodes,
+        report: null,
+        snapshot: skirmishSnapshotFor(state),
+      })
+      break
+    }
+    const round = state.turn
+    const ended = endTurn(state)
+    if (!ended.ok) throw new Error(`Could not finish ${ownerId}'s skirmish turn: ${ended.reason}`)
+    state = ended.state
+    const report = state.lastTurnReports[ownerId]
+    if (!report) throw new Error(`Missing economy report for ${ownerId} on round ${round}`)
+    turns.push({
+      round, ownerId, profileId: participant.profileId,
+      phase: planned.memory.phase, wave: planned.memory.wave,
+      planned: plannedCommands, executed, events, cancellations, failures, trace,
+      exploredNodes, report,
+      snapshot: skirmishSnapshotFor(state),
+    })
+  }
+  return { state, turns, initialSnapshot }
+}
+
+/**
+ * Compresses a long authoritative match into fixed windows. A match that ends
+ * early still produces every requested checkpoint: later windows retain the
+ * final position and make the victory round explicit instead of silently
+ * shortening the report.
+ */
+export function skirmishCheckpointsFor(
+  run: SkirmishRun,
+  interval = 50,
+  checkpointCount = 10,
+): SkirmishCheckpoint[] {
+  const participants = run.state.scenario.participants.flatMap((participant) => (
+    participant.profileId ? [{ ownerId: participant.id, profileId: participant.profileId }] : []
+  ))
+  const eliminations: SkirmishCheckpoint['eliminations'] = []
+  let alive = new Set(run.initialSnapshot.objects.flatMap(({ object }) => (
+    object.type === 'castle' ? [object.ownerId] : []
+  )))
+  run.turns.forEach((turn) => {
+    const nextAlive = new Set(turn.snapshot.objects.flatMap(({ object }) => (
+      object.type === 'castle' ? [object.ownerId] : []
+    )))
+    alive.forEach((ownerId) => {
+      if (!nextAlive.has(ownerId)) eliminations.push({ ownerId, defeatedBy: turn.ownerId, round: turn.round })
+    })
+    alive = nextAlive
+  })
+
+  return Array.from({ length: checkpointCount }, (_, index) => {
+    const targetRound = (index + 1) * interval
+    const reachedTurns = run.turns.filter((turn) => turn.round <= targetRound)
+    const latestTurn = reachedTurns.at(-1) ?? run.turns.at(-1)
+    const snapshot = latestTurn?.snapshot ?? run.initialSnapshot
+    const windowStart = targetRound - interval + 1
+    const windowTurns = run.turns.filter((turn) => turn.round >= windowStart && turn.round <= targetRound)
+    const aliveIds = new Set(snapshot.objects.flatMap(({ object }) => object.type === 'castle' ? [object.ownerId] : []))
+    const ended = snapshot.status !== 'playing'
+
+    return {
+      targetRound,
+      reachedRound: snapshot.round,
+      status: snapshot.status,
+      winnerIds: ended ? [...aliveIds].sort() : [],
+      eliminations: eliminations.filter((event) => event.round >= windowStart && event.round <= targetRound),
+      participants: participants.map(({ ownerId, profileId }) => {
+        const ownerObjects = snapshot.objects.filter(({ object }) => object.ownerId === ownerId)
+        const latestOwnerTurn = reachedTurns.filter((turn) => turn.ownerId === ownerId).at(-1)
+        const ownerWindowTurns = windowTurns.filter((turn) => turn.ownerId === ownerId)
+        const builds: Partial<Record<BuildingKind, number>> = {}
+        const buildings: Partial<Record<BuildingKind, number>> = {}
+        ownerObjects.forEach(({ object }) => {
+          if (object.type === 'building') buildings[object.kind] = (buildings[object.kind] ?? 0) + 1
+        })
+        ownerWindowTurns.forEach((turn) => turn.executed.forEach((command) => {
+          if (command.type === 'build') builds[command.building] = (builds[command.building] ?? 0) + 1
+        }))
+        const castleEntry = ownerObjects.find(({ object }) => object.type === 'castle')
+        const castle = castleEntry?.object.type === 'castle' ? {
+          ...castleEntry.position,
+          hitPoints: castleEntry.object.hitPoints,
+          maxHitPoints: castleEntry.object.maxHitPoints,
+        } : null
+        const domain = snapshot.domains[ownerId]
+        return {
+          ownerId,
+          profileId,
+          alive: aliveIds.has(ownerId),
+          phase: latestOwnerTurn?.phase ?? null,
+          wave: latestOwnerTurn?.wave ?? null,
+          population: domain?.population ?? 0,
+          resources: domain?.resources ?? Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as Record<ResourceId, number>,
+          castle,
+          buildings,
+          squads: ownerObjects.flatMap(({ position, object }) => object.type === 'squad' ? [{
+            ...position,
+            units: { ...object.units },
+            health: object.health ?? null,
+          }] : []).sort((first, second) => first.row - second.row || first.column - second.column),
+          activity: {
+            builds,
+            recruits: ownerWindowTurns.reduce((sum, turn) => sum + turn.executed.reduce((turnSum, command) => (
+              turnSum + (command.type === 'recruit' ? command.quantity : 0)
+            ), 0), 0),
+            moves: ownerWindowTurns.reduce((sum, turn) => sum + turn.events.filter((event) => event?.kind === 'moved').length, 0),
+            attacks: ownerWindowTurns.reduce((sum, turn) => sum + turn.events.filter((event) => event?.kind === 'attacked').length, 0),
+            destructions: ownerWindowTurns.reduce((sum, turn) => sum + turn.events.filter((event) => event?.kind === 'destroyed').length, 0),
+            demolitions: ownerWindowTurns.reduce((sum, turn) => sum + turn.events.filter((event) => event?.kind === 'demolished').length, 0),
+            demolitionReasons: ownerWindowTurns.flatMap((turn) => turn.trace.flatMap((entry) => (
+              entry.command?.type === 'demolish' && !entry.rejectedReason
+                ? [`@${entry.command.position.column},${entry.command.position.row}:${entry.factors.join('+')}`]
+                : []
+            ))),
+          },
+        }
+      }),
+    }
+  })
+}
+
+export function formatSkirmishCheckpointReport(title: string, checkpoints: readonly SkirmishCheckpoint[]) {
+  const resourceLabel = (resources: Record<ResourceId, number>) => resourceIds
+    .map((resource) => `${resource}=${Math.round(resources[resource] * 10) / 10}`).join(' ')
+  const buildingLabel = (buildings: Partial<Record<BuildingKind, number>>) => Object.entries(buildings)
+    .filter(([, count]) => count && count > 0).map(([kind, count]) => `${kind}:${count}`).join(' ') || 'none'
+  const squadLabel = (checkpoint: SkirmishCheckpoint['participants'][number]) => checkpoint.squads.map((squad) => (
+    `(${squad.column},${squad.row})[m${squad.units.militia}/s${squad.units.spearmen}/a${squad.units.archers}/k${squad.units.knights}]`
+  )).join(' ') || 'none'
+  const lines = [title]
+  checkpoints.forEach((checkpoint, index) => {
+    const previous = checkpoints[index - 1]
+    lines.push(`\n=== checkpoint ${checkpoint.targetRound} (state round ${checkpoint.reachedRound}, ${checkpoint.status}) ===`)
+    if (previous && checkpoint.status !== 'playing' && previous.status !== 'playing'
+      && checkpoint.reachedRound === previous.reachedRound) {
+      lines.push(`final state unchanged; winner: ${checkpoint.winnerIds.join(', ')}`)
+      return
+    }
+    lines.push(checkpoint.winnerIds.length ? `winner: ${checkpoint.winnerIds.join(', ')}` : 'winner: pending')
+    lines.push(checkpoint.eliminations.length
+      ? `eliminations: ${checkpoint.eliminations.map((event) => `${event.defeatedBy} > ${event.ownerId} @${event.round}`).join(', ')}`
+      : 'eliminations: none')
+    checkpoint.participants.forEach((participant) => lines.push(
+      `- ${participant.ownerId} (${participant.profileId}) ${participant.alive ? 'alive' : 'defeated'} phase=${participant.phase ?? '-'} wave=${participant.wave ?? '-'} population=${participant.population}`,
+      `  castle=${participant.castle ? `${participant.castle.column},${participant.castle.row} hp=${participant.castle.hitPoints}/${participant.castle.maxHitPoints}` : 'destroyed'}`,
+      `  storage: ${resourceLabel(participant.resources)}`,
+      `  buildings: ${buildingLabel(participant.buildings)}`,
+      `  squads: ${squadLabel(participant)}`,
+      `  window activity: builds=${buildingLabel(participant.activity.builds)} recruits=${participant.activity.recruits} moves=${participant.activity.moves} attacks=${participant.activity.attacks} destroys=${participant.activity.destructions} demolitions=${participant.activity.demolitions}`,
+      ...(participant.activity.demolitionReasons.length
+        ? [`  demolition reasons: ${participant.activity.demolitionReasons.join(' | ')}`]
+        : []),
+    ))
+  })
+  return lines.join('\n')
 }
 
 /** Runs only the tactical selector in a fixed phase, without an economy tick. */
@@ -223,10 +560,7 @@ export function runFrozenTacticalRounds(
   const steps: FrozenTacticalStep[] = []
   const failures: ScenarioCommandFailure[] = []
   let exploredNodes = 0
-  let roundExploredNodes = 0
   const countNode = () => {
-    if (roundExploredNodes >= aiPlannerConfig.nodeBudget) return false
-    roundExploredNodes += 1
     exploredNodes += 1
     return true
   }
@@ -234,7 +568,6 @@ export function runFrozenTacticalRounds(
   for (let round = 1; round <= rounds && state.status === 'playing' && failures.length === 0; round += 1) {
     if (round > 1) {
       state = { ...state, turn: state.turn + 1, ordersRemaining: gameConfig.turn.maxOrders }
-      roundExploredNodes = 0
     }
     const roundSteps: FrozenTacticalStep[] = []
     const traversedEdges = new Set<string>()
@@ -262,6 +595,15 @@ export function runFrozenTacticalRounds(
         break
       }
       state = result.state
+      if (candidate.command.type === 'move-or-attack') {
+        currentMemory = {
+          ...currentMemory,
+          recentMovements: [...currentMemory.recentMovements.filter((entry) => (
+            state.turn - entry.turn <= aiPlannerConfig.movementHistoryTurns
+          )), { from: candidate.command.from, to: candidate.command.to, turn: state.turn }]
+            .slice(-aiPlannerConfig.maximumRecentMovements),
+        }
+      }
       if (candidate.command.type === 'move-or-attack') {
         traversedEdges.add(tacticalMovementEdgeKey(candidate.command.from, candidate.command.to))
       }

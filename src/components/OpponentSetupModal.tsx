@@ -98,7 +98,7 @@ export function OpponentSetupModal({ text, hasHumanPlayer, selected, selectedTea
         onPointerDown={(event) => event.stopPropagation()}
       >
         <header className="settings-header opponent-setup-header">
-          <div><span className="settings-kicker">{text.kicker}</span><h2 id="opponent-setup-title">{text.title}</h2><p>{text.description}</p></div>
+          <div><span className="settings-kicker">{text.kicker}</span><h2 id="opponent-setup-title">{text.title}</h2></div>
           <ModalCloseButton label={text.close} onClick={onClose} data-modal-autofocus />
         </header>
 

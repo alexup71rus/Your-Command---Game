@@ -283,6 +283,13 @@ function fortificationLineFor(
   corridor: CellPosition[],
   wallLimit: number,
   towerLimit: number,
+  options: {
+    maximumWingDepth?: number
+    excludedCells?: ReadonlySet<string>
+    minimumGateDistanceFrom?: CellPosition
+    minimumGateSpacing?: number
+    purpose?: 'core' | 'delay' | 'surplus'
+  } = {},
 ): NonNullable<AiSettlementPlan['fortification']>['lines'][number] | null {
   if (wallLimit < aiSpatialConfig.settlementPlan.fortification.minimumWalls) return null
   const config = aiSpatialConfig.settlementPlan.fortification
@@ -302,7 +309,7 @@ function fortificationLineFor(
     const cell = scenario.cells[position.row]?.[position.column]
     return Boolean(cell && cell.landform !== 'peak' && !cell.vegetation
       && scenario.territories[position.row]?.[position.column] === analysis.regionId
-      && !cell.object)
+      && !cell.object && !options.excludedCells?.has(positionKey(position)))
   }
   const isNaturalAnchor = (position: CellPosition) => {
     const cell = scenario.cells[position.row]?.[position.column]
@@ -327,12 +334,16 @@ function fortificationLineFor(
     gate: CellPosition
     walls: CellPosition[]
     towers: CellPosition[]
+    shape: 'straight' | 'winged'
     naturalAnchors: number
     score: number
   }> = []
   for (let index = startIndex; index <= endIndex; index += 1) {
     const gate = corridor[index]
-    if (!gate || !isOpen(gate)) continue
+    if (!gate || !isOpen(gate)
+      || (options.minimumGateDistanceFrom
+        && positionDistance(gate, options.minimumGateDistanceFrom)
+          < (options.minimumGateSpacing ?? config.minimumLineSpacing))) continue
     const previous = corridor[Math.max(0, index - 1)] ?? analysis.castle
     const next = corridor[Math.min(corridor.length - 1, index + 1)] ?? analysis.front
     const rowDelta = next.row - previous.row
@@ -370,48 +381,288 @@ function fortificationLineFor(
       if (sideOpen[side] && isNaturalAnchor(endpoint)) naturalAnchors += 1
     }
     if (walls.length < config.minimumWalls) continue
-    const towers = sides.flatMap((side) => {
-      if (towerLimit <= 0 || sideWalls[side].length === 0) return []
-      const offset = sideWalls[side].length + 1
-      const position = {
-        column: gate.column + perpendicular.column * offset * side,
-        row: gate.row + perpendicular.row * offset * side,
+    const maximumWingDepth = towerLimit > 0 ? 0 : Math.max(0, options.maximumWingDepth ?? 0)
+    for (let wingDepth = 0; wingDepth <= maximumWingDepth; wingDepth += 1) {
+      const frontBudget = wallLimit - wingDepth * 2
+      if (frontBudget < config.minimumWalls) continue
+      const selectedBySide: Record<(typeof sides)[number], CellPosition[]> = { '-1': [], '1': [] }
+      const frontWalls: CellPosition[] = []
+      for (let offset = 0; frontWalls.length < frontBudget; offset += 1) {
+        let added = false
+        for (const side of sides) {
+          const position = sideWalls[side][offset]
+          if (!position || frontWalls.length >= frontBudget) continue
+          frontWalls.push(position)
+          selectedBySide[side].push(position)
+          added = true
+        }
+        if (!added) break
       }
-      if (isOpen(position)) return [position]
-      // At a mountain or regional edge the last curtain cell is the useful
-      // tower position: it keeps the natural anchor, covers the pass, and does
-      // not waste a tower behind an impassable peak.
-      return isNaturalAnchor(position) && sideWalls[side].length > 1
-        ? [sideWalls[side].at(-1)!]
-        : []
-    }).slice(0, towerLimit)
-    const towerKeys = new Set(towers.map(positionKey))
-    const curtainWalls = walls.filter((position) => !towerKeys.has(positionKey(position)))
-    if (curtainWalls.length < config.minimumWalls) continue
-    const friendlyRouteLength = routeLength(new Set([...curtainWalls, ...towers].map(positionKey)))
-    if (!Number.isFinite(friendlyRouteLength)) continue
-    const fortifiedRouteLength = routeLength(new Set([gate, ...curtainWalls, ...towers].map(positionKey)))
-    const pathDelay = Number.isFinite(fortifiedRouteLength)
-      ? Math.max(0, fortifiedRouteLength - baselineRouteLength)
-      : Number.POSITIVE_INFINITY
-    const cell = analysis.cells[gate.row]?.[gate.column]
-    const weakLinePenalty = Number.isFinite(pathDelay)
-      ? Math.max(0, config.minimumPathDelay - pathDelay) * config.weakLinePenalty
-      : 0
-    const score = (cell?.chokeScore ?? 0) * config.chokeWeight
-      + naturalAnchors * config.naturalAnchorBonus
-      + curtainWalls.length * config.wallCountBonus
-      + (Number.isFinite(pathDelay) ? pathDelay * config.pathDelayWeight : config.sealedApproachBonus)
-      - Math.abs(index - desiredIndex) * config.preferredDistanceWeight
-      - weakLinePenalty
-    candidates.push({ gate, walls: curtainWalls, towers, naturalAnchors, score })
+      if (frontWalls.length < config.minimumWalls) continue
+      const wingWalls: CellPosition[] = []
+      if (wingDepth > 0) {
+        const towardCastle = {
+          column: previous.column - gate.column,
+          row: previous.row - gate.row,
+        }
+        if (sides.some((side) => selectedBySide[side].length === 0)) continue
+        const occupied = new Set([gate, ...frontWalls].map(positionKey))
+        let validWings = true
+        for (const side of sides) {
+          const endpoint = selectedBySide[side].at(-1)!
+          for (let step = 1; step <= wingDepth; step += 1) {
+            const position = {
+              column: endpoint.column + towardCastle.column * step,
+              row: endpoint.row + towardCastle.row * step,
+            }
+            if (!isOpen(position) || occupied.has(positionKey(position))) {
+              validWings = false
+              break
+            }
+            occupied.add(positionKey(position))
+            wingWalls.push(position)
+          }
+          if (!validWings) break
+        }
+        if (!validWings || wingWalls.length !== wingDepth * 2) continue
+      }
+      const towers = wingDepth > 0 ? [] : sides.flatMap((side) => {
+        if (towerLimit <= 0 || selectedBySide[side].length === 0) return []
+        const offset = selectedBySide[side].length + 1
+        const position = {
+          column: gate.column + perpendicular.column * offset * side,
+          row: gate.row + perpendicular.row * offset * side,
+        }
+        if (isOpen(position)) return [position]
+        // At a mountain or regional edge the last curtain cell is the useful
+        // tower position: it keeps the natural anchor and covers the pass.
+        return isNaturalAnchor(position) && selectedBySide[side].length > 1
+          ? [selectedBySide[side].at(-1)!]
+          : []
+      }).slice(0, towerLimit)
+      const towerKeys = new Set(towers.map(positionKey))
+      const curtainWalls = [...frontWalls, ...wingWalls]
+        .filter((position) => !towerKeys.has(positionKey(position)))
+      if (curtainWalls.length < config.minimumWalls) continue
+      const friendlyRouteLength = routeLength(new Set([...curtainWalls, ...towers].map(positionKey)))
+      if (!Number.isFinite(friendlyRouteLength)) continue
+      const fortifiedRouteLength = routeLength(new Set([gate, ...curtainWalls, ...towers].map(positionKey)))
+      const pathDelay = Number.isFinite(fortifiedRouteLength)
+        ? Math.max(0, fortifiedRouteLength - baselineRouteLength)
+        : Number.POSITIVE_INFINITY
+      const cell = analysis.cells[gate.row]?.[gate.column]
+      const weakLinePenalty = Number.isFinite(pathDelay)
+        ? Math.max(0, config.minimumPathDelay - pathDelay) * config.weakLinePenalty
+        : 0
+      const shape = wingDepth > 0 ? 'winged' as const : 'straight' as const
+      const prefersWinged = deterministicRank(scenario.seed, 'curtain-doctrine') >= 0.5
+      // Wings buy delay on an open flank; a straight curtain already tied
+      // into peaks or a regional edge spends the same stone more efficiently.
+      // Seeded doctrine remains a competing preference, so terrain changes
+      // probability rather than collapsing every map into one template.
+      const terrainShapeBonus = shape === 'winged' && naturalAnchors === 0
+        ? config.curtainOpenWingBonus
+        : shape === 'straight' && naturalAnchors > 0
+          ? naturalAnchors * config.curtainAnchoredStraightBonus
+          : 0
+      const score = (cell?.chokeScore ?? 0) * config.chokeWeight
+        + naturalAnchors * config.naturalAnchorBonus
+        + curtainWalls.length * config.wallCountBonus
+        + (Number.isFinite(pathDelay) ? pathDelay * config.pathDelayWeight : config.sealedApproachBonus)
+        + wingDepth * config.curtainWingDelayBonus
+        + deterministicRank(scenario.seed, `curtain-shape:${positionKey(gate)}:${wingDepth}`)
+          * config.curtainShapeVariation
+        + Number((shape === 'winged') === prefersWinged) * config.curtainDoctrineBonus
+        + terrainShapeBonus
+        - Math.abs(index - desiredIndex) * config.preferredDistanceWeight
+        - weakLinePenalty
+      candidates.push({ gate, walls: curtainWalls, towers, shape, naturalAnchors, score })
+    }
   }
   candidates.sort((first, second) => second.score - first.score
     || first.gate.row - second.gate.row || first.gate.column - second.gate.column)
   const best = candidates[0]
   if (!best) return null
   const kind = best.naturalAnchors > 0 ? 'terrain-gate' : towerLimit > 0 ? 'bastion' : 'curtain'
-  return { kind, approach, gate: best.gate, walls: best.walls, towers: best.towers }
+  return {
+    kind,
+    shape: best.shape,
+    purpose: options.purpose,
+    approach,
+    gate: best.gate,
+    walls: best.walls,
+    towers: best.towers,
+  }
+}
+
+function rectangularPerimeter(center: CellPosition, halfColumns: number, halfRows: number) {
+  const positions: CellPosition[] = []
+  const left = center.column - halfColumns
+  const right = center.column + halfColumns
+  const top = center.row - halfRows
+  const bottom = center.row + halfRows
+  for (let column = left; column <= right; column += 1) positions.push({ column, row: top })
+  for (let row = top + 1; row <= bottom; row += 1) positions.push({ column: right, row })
+  for (let column = right - 1; column >= left; column -= 1) positions.push({ column, row: bottom })
+  for (let row = bottom - 1; row > top; row -= 1) positions.push({ column: left, row })
+  return positions
+}
+
+/**
+ * Builds a real closed perimeter around the citadel. A 3x5 rectangle uses
+ * twelve defensive cells: one gate, two corner towers and nine walls. It
+ * leaves two cardinal castle exits inside the perimeter, so recruitment and
+ * friendly movement remain legal while every hostile route must cross the
+ * gate, a wall, a tower, or an impassable natural anchor.
+ */
+function citadelEnclosureFor(
+  analysis: AiWorldAnalysis,
+  scenario: MapScenario,
+  corridor: CellPosition[],
+  wallLimit: number,
+  towerLimit: number,
+): NonNullable<AiSettlementPlan['fortification']>['lines'][number] | null {
+  const config = aiSpatialConfig.settlementPlan.fortification
+  const approach = corridor.at(-1)
+  const requiredTowers = config.enclosureTowerCount
+  if (!approach || towerLimit < requiredTowers) return null
+  const isOpen = (position: CellPosition) => {
+    const cell = scenario.cells[position.row]?.[position.column]
+    return Boolean(cell && cell.landform !== 'peak' && !cell.vegetation && !cell.object
+      && scenario.territories[position.row]?.[position.column] === analysis.regionId)
+  }
+  const isNaturalAnchor = (position: CellPosition) => {
+    const cell = scenario.cells[position.row]?.[position.column]
+    return !cell || cell.landform === 'peak'
+      || scenario.territories[position.row]?.[position.column] !== analysis.regionId
+  }
+  const stripped = strippedMap(scenario.cells)
+  const hasRoute = (blocked: Set<string>, target: CellPosition = analysis.castle) => Boolean(findMovementPath(stripped, approach, target, {
+    cellCost: (position, cell) => blocked.has(positionKey(position))
+      || scenario.territories[position.row]?.[position.column] !== analysis.regionId
+      ? Number.POSITIVE_INFINITY
+      : terrainMovementOrderMultiplier(cell),
+  }))
+  const frontDelta = {
+    column: analysis.front.column - analysis.castle.column,
+    row: analysis.front.row - analysis.castle.row,
+  }
+  const horizontalApproach = Math.abs(frontDelta.column) >= Math.abs(frontDelta.row)
+  const extents = [...config.enclosureHalfExtents]
+  const candidates: Array<NonNullable<AiSettlementPlan['fortification']>['lines'][number] & { score: number }> = []
+  for (const extent of extents) {
+    const preferredOrientation = horizontalApproach
+      ? extent.columns > extent.rows
+      : extent.rows > extent.columns
+    const perimeter = rectangularPerimeter(analysis.castle, extent.columns, extent.rows)
+    if (perimeter.some((position) => !isOpen(position) && !isNaturalAnchor(position))) continue
+    const open = perimeter.filter(isOpen)
+    if (open.length < 1 + requiredTowers + config.minimumWalls
+      || open.length > 1 + requiredTowers + wallLimit) continue
+    const perimeterKeys = new Set(perimeter.map(positionKey))
+    const corridorGate = corridor.find((position) => perimeterKeys.has(positionKey(position)) && isOpen(position))
+    const gateCandidates = [...open].sort((first, second) => (
+      Number(samePosition(second, corridorGate ?? { column: -1, row: -1 }))
+        - Number(samePosition(first, corridorGate ?? { column: -1, row: -1 }))
+      || positionDistance(first, analysis.front) - positionDistance(second, analysis.front)
+      || deterministicRank(scenario.seed, `enclosure-gate:${positionKey(first)}`)
+        - deterministicRank(scenario.seed, `enclosure-gate:${positionKey(second)}`)
+      || first.row - second.row || first.column - second.column
+    )).slice(0, config.enclosureGateCandidates)
+    const frontSign = horizontalApproach ? Math.sign(frontDelta.column) : Math.sign(frontDelta.row)
+    const towerScore = (position: CellPosition, gate: CellPosition) => {
+      const deltaColumn = position.column - analysis.castle.column
+      const deltaRow = position.row - analysis.castle.row
+      const corner = Math.abs(deltaColumn) === extent.columns && Math.abs(deltaRow) === extent.rows
+      const frontFace = horizontalApproach
+        ? deltaColumn === frontSign * extent.columns
+        : deltaRow === frontSign * extent.rows
+      const cell = analysis.cells[position.row]?.[position.column]
+      return Number(corner) * config.enclosureTowerCornerBonus
+        + Number(corner && frontFace) * config.enclosureTowerFrontBonus
+        + (cell?.lineOfFireScore ?? 0) + (cell?.hillOpportunity ?? 0) * 10
+        + deterministicRank(scenario.seed, `enclosure-tower:${positionKey(gate)}:${positionKey(position)}`)
+          * config.enclosureTowerVariation
+    }
+    for (const gate of gateCandidates) {
+      const towers = open.filter((position) => !samePosition(position, gate))
+        .sort((first, second) => towerScore(second, gate) - towerScore(first, gate)
+          || first.row - second.row || first.column - second.column)
+        .slice(0, requiredTowers)
+      if (towers.length < requiredTowers) continue
+      const towerKeys = new Set(towers.map(positionKey))
+      const gateIndex = perimeter.findIndex((position) => samePosition(position, gate))
+      const cyclicDistanceFromGate = (position: CellPosition) => {
+        const index = perimeter.findIndex((candidate) => samePosition(candidate, position))
+        const clockwise = (index - gateIndex + perimeter.length) % perimeter.length
+        const counterClockwise = (gateIndex - index + perimeter.length) % perimeter.length
+        return Math.min(clockwise, counterClockwise)
+      }
+      const walls = open.filter((position) => !samePosition(position, gate) && !towerKeys.has(positionKey(position)))
+        .sort((first, second) => cyclicDistanceFromGate(first) - cyclicDistanceFromGate(second)
+          || first.row - second.row || first.column - second.column)
+      if (walls.length < config.minimumWalls || walls.length > wallLimit) continue
+      const hostileBlocks = new Set([gate, ...walls, ...towers].map(positionKey))
+      if (hasRoute(hostileBlocks)) continue
+      const friendlyBlocks = new Set([...walls, ...towers].map(positionKey))
+      const interiorMusterCells = clockwiseCardinalDirections
+        .map((direction) => ({
+          column: analysis.castle.column + direction.column,
+          row: analysis.castle.row + direction.row,
+        }))
+        .filter((position) => !perimeterKeys.has(positionKey(position)))
+      if (!interiorMusterCells.some((position) => hasRoute(friendlyBlocks, position))) continue
+      const naturalAnchors = perimeter.length - open.length
+      const gateFrontDistance = positionDistance(gate, analysis.front)
+      const interiorClear = scenario.cells.reduce((sum, row, rowIndex) => {
+        if (rowIndex <= analysis.castle.row - extent.rows || rowIndex >= analysis.castle.row + extent.rows) return sum
+        return sum + row.reduce((rowSum, cell, column) => (
+          column > analysis.castle.column - extent.columns
+            && column < analysis.castle.column + extent.columns
+            && scenario.territories[rowIndex]?.[column] === analysis.regionId
+            && cell.landform !== 'peak' && !cell.vegetation && !cell.object
+            ? rowSum + 1 : rowSum
+        ), 0)
+      }, 0)
+      const extentSpan = extent.columns + extent.rows
+      const maximumExtentSpan = Math.max(...config.enclosureHalfExtents.map((candidate) => (
+        candidate.columns + candidate.rows
+      )))
+      // Open, developable ground makes a larger courtyard useful. Natural
+      // anchors instead reward a compact enclosure that connects to terrain
+      // without swallowing unusable space. Random variation still competes
+      // with this fit, producing weighted variants rather than a hard branch.
+      const terrainFit = interiorClear * config.enclosureInteriorDevelopmentWeight
+        + (naturalAnchors === 0 ? perimeter.length * config.enclosureOpenPerimeterWeight : 0)
+        + naturalAnchors * Math.max(0, maximumExtentSpan - extentSpan)
+          * config.enclosureAnchoredCompactWeight
+      const score = Number(preferredOrientation) * config.enclosureAlignedOrientationBonus
+        + naturalAnchors * config.naturalAnchorBonus
+        + terrainFit
+        + towers.reduce((sum, position) => sum + towerScore(position, gate), 0)
+        + Number(Boolean(corridorGate && samePosition(gate, corridorGate))) * config.enclosureCorridorGateBonus
+        - gateFrontDistance * config.enclosureGateFrontDistanceWeight
+        + deterministicRank(scenario.seed, `enclosure-plan:${extent.columns}:${extent.rows}:${positionKey(gate)}`)
+          * config.enclosurePlanVariation
+      candidates.push({
+        kind: 'enclosure', shape: 'enclosure', purpose: 'core',
+        approach, gate, walls, towers, score,
+      })
+    }
+  }
+  candidates.sort((first, second) => second.score - first.score
+    || first.gate.row - second.gate.row || first.gate.column - second.gate.column)
+  const best = candidates[0]
+  if (!best) return null
+  return {
+    kind: best.kind,
+    shape: best.shape,
+    purpose: best.purpose,
+    approach: best.approach,
+    gate: best.gate,
+    walls: best.walls,
+    towers: best.towers,
+  }
 }
 
 function fortificationPlanFor(
@@ -419,22 +670,57 @@ function fortificationPlanFor(
   scenario: MapScenario,
   profile: AiProfileRules,
 ): AiSettlementPlan['fortification'] {
+  if (profile.settlement.fortificationPattern === 'none') return null
   const totalWallLimit = profile.settlement.buildingLimits.wall ?? 0
   const totalTowerLimit = Math.max(0,
     (profile.settlement.buildingLimits.tower ?? 0) - profile.settlement.remoteTowerLimit)
-  const lineLimit = Math.min(
-    profile.settlement.buildingLimits.barbican ?? 0,
-    Math.floor(totalWallLimit / aiSpatialConfig.settlementPlan.fortification.minimumWalls),
-  )
-  if (!profile.allowedBuildings.includes('barbican') || lineLimit <= 0) return null
+  if (!profile.allowedBuildings.includes('barbican')) return null
   const targets = scenario.participants
-    .filter((participant) => participant.id !== analysis.ownerId)
+    .filter((participant) => areOwnersHostile(scenario.participants, analysis.ownerId, participant.id))
     .flatMap((participant) => {
       const castle = castlePositionFor(scenario, participant.id)
       return castle ? [{ castle, distance: positionDistance(analysis.castle, castle) }] : []
     })
     .sort((first, second) => first.distance - second.distance
       || first.castle.row - second.castle.row || first.castle.column - second.castle.column)
+  if (profile.settlement.fortificationPattern === 'citadel-enclosure' && targets[0]) {
+    const corridor = corridorToTarget(analysis, scenario, targets[0].castle)
+    const enclosure = citadelEnclosureFor(
+      analysis,
+      scenario,
+      corridor,
+      totalWallLimit,
+      totalTowerLimit,
+    )
+    if (enclosure) {
+      const remainingWalls = Math.max(0, totalWallLimit - enclosure.walls.length)
+      const remainingTowers = Math.max(0, totalTowerLimit - enclosure.towers.length)
+      const remainingGates = Math.max(0, (profile.settlement.buildingLimits.barbican ?? 0) - 1)
+      const coreCells = new Set([enclosure.gate, ...enclosure.walls, ...enclosure.towers].map(positionKey))
+      const outwork = remainingGates > 0 && remainingWalls >= aiSpatialConfig.settlementPlan.fortification.minimumWalls
+        ? fortificationLineFor(
+            analysis,
+            scenario,
+            corridor,
+            Math.min(aiSpatialConfig.settlementPlan.fortification.maximumWallsPerLine, remainingWalls),
+            remainingTowers,
+            {
+              excludedCells: coreCells,
+              minimumGateDistanceFrom: enclosure.gate,
+              minimumGateSpacing: aiSpatialConfig.settlementPlan.fortification.outworkMinimumLineSpacing,
+              purpose: 'surplus',
+            },
+          )
+        : null
+      if (outwork) outwork.activationStoneReserve = profile.settlement.surplusFortificationStoneReserve
+      return { lines: outwork ? [enclosure, outwork] : [enclosure] }
+    }
+  }
+  const lineLimit = Math.min(
+    profile.settlement.buildingLimits.barbican ?? 0,
+    Math.floor(totalWallLimit / aiSpatialConfig.settlementPlan.fortification.minimumWalls),
+  )
+  if (lineLimit <= 0) return null
   const effectiveLineLimit = Math.min(lineLimit, targets.length)
   const provisionalWallLimit = Math.max(
     aiSpatialConfig.settlementPlan.fortification.minimumWalls,
@@ -452,17 +738,27 @@ function fortificationPlanFor(
       corridor,
       provisionalWallLimit,
       provisionalTowerLimit,
+      {
+        maximumWingDepth: profile.settlement.maximumCurtainWingDepth,
+        purpose: profile.settlement.fortificationPattern === 'curtain' ? 'delay' : 'core',
+      },
     )
     if (!provisional || acceptedCorridors.some((existing) => positionDistance(existing.provisional.gate, provisional.gate)
       < aiSpatialConfig.settlementPlan.fortification.minimumLineSpacing)) continue
     acceptedCorridors.push({ corridor, provisional })
   }
   const lines = acceptedCorridors.map(({ corridor, provisional }, index) => {
-    const wallLimit = Math.floor(totalWallLimit / acceptedCorridors.length)
-      + Number(index < totalWallLimit % acceptedCorridors.length)
+    const wallLimit = Math.min(
+      aiSpatialConfig.settlementPlan.fortification.maximumWallsPerLine,
+      Math.floor(totalWallLimit / acceptedCorridors.length)
+        + Number(index < totalWallLimit % acceptedCorridors.length),
+    )
     const towerLimit = Math.floor(totalTowerLimit / acceptedCorridors.length)
       + Number(index < totalTowerLimit % acceptedCorridors.length)
-    return fortificationLineFor(analysis, scenario, corridor, wallLimit, towerLimit) ?? provisional
+    return fortificationLineFor(analysis, scenario, corridor, wallLimit, towerLimit, {
+      maximumWingDepth: profile.settlement.maximumCurtainWingDepth,
+      purpose: profile.settlement.fortificationPattern === 'curtain' ? 'delay' : 'core',
+    }) ?? provisional
   })
   return lines.length > 0 ? { lines } : null
 }
@@ -477,12 +773,31 @@ function defensiveOutpostFor(
   if (profile.settlement.remoteTowerLimit <= 0 || !profile.allowedBuildings.includes('tower')
     || protectedSites.length === 0) return undefined
   const config = aiSpatialConfig.settlementPlan.fortification
+  const requiredQuarrySites = Math.min(2, profile.settlement.buildingLimits.quarry ?? 0)
+  const quarryFootprints = scenario.cells.flatMap((row, rowIndex) => row.flatMap((_cell, column) => {
+    const positions = buildingFootprintPositions('quarry', { column, row: rowIndex })
+    return positions.length > 0 && positions.every((position) => {
+      const cell = scenario.cells[position.row]?.[position.column]
+      return cell && !cell.object && !cell.vegetation && cell.landform === 'hill'
+        && scenario.territories[position.row]?.[position.column] === analysis.regionId
+        && !reserved.has(positionKey(position))
+    }) ? [positions] : []
+  }))
+  const preservesQuarryCapacity = (tower: CellPosition) => {
+    if (requiredQuarrySites <= 0) return true
+    const usable = quarryFootprints.filter((footprint) => !footprint.some((position) => samePosition(position, tower)))
+    if (requiredQuarrySites === 1) return usable.length > 0
+    return usable.some((first, index) => usable.slice(index + 1).some((second) => (
+      first.every((position) => !second.some((other) => samePosition(position, other)))
+    )))
+  }
   return analysis.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
     const position = { column, row: rowIndex }
     const mapCell = scenario.cells[rowIndex]?.[column]
     if (!cell.inRegion || !cell.passable || !Number.isFinite(cell.distanceToCastle)
       || !mapCell || mapCell.object || mapCell.vegetation
       || reserved.has(positionKey(position))
+      || !preservesQuarryCapacity(position)
       || cell.distanceToCastle < config.outpostMinimumCastleDistance) return []
     const assetDistance = Math.min(...protectedSites.map((site) => positionDistance(position, site)))
     if (assetDistance < 1 || assetDistance > config.outpostMaximumAssetDistance) return []
@@ -562,6 +877,13 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     military: unique([military]),
     defense: unique([gate, outpostTower, military]),
   }
+  const deepestHillSite = analysis.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
+    const position = { column, row: rowIndex }
+    return cell.inRegion && cell.passable && clear(position) && cell.hillOpportunity > 0
+      ? [{ position, distance: cell.distanceToCastle }]
+      : []
+  })).sort((first, second) => second.distance - first.distance
+    || first.position.row - second.position.row || first.position.column - second.position.column)[0]?.position
   const zoneArea = Object.fromEntries((Object.keys(aiSpatialConfig.baseZoneArea) as AiSettlementZoneKind[]).map((kind) => [
     kind,
     Math.max(aiSpatialConfig.minimumZoneArea, Math.round(aiSpatialConfig.baseZoneArea[kind]
@@ -589,11 +911,41 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
     military: { centers: centers.military, cells: cells.military, maxOrigins: originLimit('military'), maxBuildings: limitsFor([...aiBuildingKindsByZone.military]), overflowRadius: profile.settlement.overflowRadius.military },
     defense: { centers: centers.defense, cells: cells.defense, maxOrigins: Math.max(originLimit('defense'), fortificationOrigins), maxBuildings: limitsFor([...aiBuildingKindsByZone.defense]), overflowRadius: profile.settlement.overflowRadius.defense },
   }
+  const reservedBuildingSites: Partial<Record<BuildingKind, CellPosition>> = {}
+  const reservedBuildingCells = new Set([...corridorSet, ...fortificationSet])
+  const reserveBuildingSite = (kind: BuildingKind, target: CellPosition | undefined) => {
+    if (!profile.allowedBuildings.includes(kind) || !buildingRules[kind].footprint) return
+    const candidate = analysis.cells.flatMap((row, rowIndex) => row.flatMap((cell, column) => {
+      const origin = { column, row: rowIndex }
+      const footprint = buildingFootprintPositions(kind, origin)
+      if (footprint.length === 0 || footprint.some((position) => {
+        const mapCell = scenario.cells[position.row]?.[position.column]
+        const analyzed = analysis.cells[position.row]?.[position.column]
+        return !mapCell || !analyzed?.inRegion || !analyzed.passable || mapCell.object
+          || mapCell.vegetation || reservedBuildingCells.has(positionKey(position))
+      })) return []
+      const hillCells = footprint.filter((position) => (
+        analysis.cells[position.row]?.[position.column]?.hillOpportunity ?? 0
+      ) > 0).length
+      const distance = target ? positionDistance(origin, target) : cell.distanceToCastle
+      return [{ origin, score: distance + hillCells * aiSpatialConfig.settlementPlan.ordinaryHillPenalty }]
+    })).sort((first, second) => first.score - second.score
+      || first.origin.row - second.origin.row || first.origin.column - second.origin.column)[0]
+    if (!candidate) return
+    reservedBuildingSites[kind] = candidate.origin
+    buildingFootprintPositions(kind, candidate.origin)
+      .forEach((position) => reservedBuildingCells.add(positionKey(position)))
+  }
+  // Reserve capability footprints, not an entire scripted build order. Once
+  // the capability exists anywhere, placement releases the reservation.
+  reserveBuildingSite('smelter', industry)
+  reserveBuildingSite('barracks', military)
   return {
     layout,
     opening,
     front: analysis.front,
     reservedCorridors: corridor,
+    reservedAccessTargets: unique([deepestHillSite]),
     reservedSites: {
       housing,
       food,
@@ -604,6 +956,7 @@ export function createSettlementPlan(analysis: AiWorldAnalysis, scenario: MapSce
       rightTower: primaryFortification?.towers[1],
       outpostTower,
     },
+    reservedBuildingSites,
     fortification,
     zones,
   }

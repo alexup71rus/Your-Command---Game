@@ -46,9 +46,11 @@ import {
   trade,
   ungarrisonFailure,
   ungarrisonTower,
+  workforceFor,
   type CommandResult,
   type MatchState,
   type TurnReport,
+  type WorkforceSummary,
 } from './game/match'
 import { squadMovementOrderCostBetween } from './game/movement'
 import { findMovementPath } from './game/pathfinding'
@@ -196,6 +198,14 @@ export function App() {
     if (phase !== 'playing' || spectatorMatch || !matchCells || !matchPlayerId) return false
     return hasNearbyEnemyThreat(matchCells, matchPlayerId, gameConfig.audio.combatThreatRadius, matchParticipants)
   }, [matchCells, matchParticipants, matchPlayerId, phase, spectatorMatch])
+  const workforceByOwner = useMemo(() => {
+    if (phase !== 'playing' || !match || !matchParticipants) return undefined
+    const map = new Map<string, WorkforceSummary>()
+    matchParticipants.forEach((participant) => {
+      map.set(participant.id, workforceFor(match, participant.id))
+    })
+    return map
+  }, [match, matchParticipants, phase])
   const musicScene: MusicScene = phase !== 'playing' || overlay !== null
     ? 'menu'
     : visibleEnemyNearby || recentCombat
@@ -919,7 +929,7 @@ export function App() {
       setAiBusy(true)
       setAiSlow(false)
       let working = initial
-      for (let attempt = 0; attempt < 2 && working.status === 'playing'; attempt += 1) {
+      for (let attempt = 0; attempt < aiPlannerConfig.maximumPlanAttempts && working.status === 'playing'; attempt += 1) {
         const memory = working.aiMemory[participant.id] ?? createAiMemory()
         let commandFailed = false
         let plan
@@ -1110,7 +1120,7 @@ export function App() {
 
   return (
     <main className={`game-shell phase-${phase}${spectatorMatch ? ' spectator-match' : ''}`} onPointerDownCapture={handleInterfacePointerDown}>
-      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
+      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} workforceByOwner={workforceByOwner} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
       {phase === 'playing' && match && <>

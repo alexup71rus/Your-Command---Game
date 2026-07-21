@@ -84,7 +84,6 @@ export const gameConfig = {
     autoMoveStepDelayMs: 300,
   },
   ai: {
-    workerTimeoutGraceMs: 500,
     hiddenActionDelayMs: 20,
     memoryRouteAvoidanceTurns: 6,
   },

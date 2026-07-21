@@ -1,5 +1,3 @@
-import { aiPlannerConfig } from '../../config/ai'
-import { gameConfig } from '../../config/game'
 import type { MatchState } from '../match'
 import type { AiProfileId } from '../scenario'
 import type { AiMemory, AiPlan } from './model'
@@ -8,7 +6,6 @@ import type { AiWorkerRequest, AiWorkerResponse } from './workerProtocol'
 interface PendingRequest {
   resolve: (plan: AiPlan) => void
   reject: (error: Error) => void
-  timeout: number
   signal?: AbortSignal
   abort?: () => void
 }
@@ -19,7 +16,6 @@ const pending = new Map<number, PendingRequest>()
 
 function rejectPending(error: Error) {
   pending.forEach((request) => {
-    window.clearTimeout(request.timeout)
     if (request.signal && request.abort) request.signal.removeEventListener('abort', request.abort)
     request.reject(error)
   })
@@ -39,7 +35,6 @@ function ensureWorker() {
     const request = pending.get(event.data.requestId)
     if (!request) return
     pending.delete(event.data.requestId)
-    window.clearTimeout(request.timeout)
     if (request.signal && request.abort) request.signal.removeEventListener('abort', request.abort)
     if (event.data.type === 'plan' && event.data.plan) request.resolve(event.data.plan)
     else request.reject(new Error(event.data.error ?? 'AI planning failed'))
@@ -66,15 +61,11 @@ export function calculateAiPlan(state: MatchState, memory: AiMemory, profileId: 
     }
     const activeWorker = ensureWorker()
     const requestId = ++requestSequence
-    const timeout = window.setTimeout(() => {
-      if (!pending.has(requestId)) return
-      disposeWorker(new Error('AI planning timed out'))
-    }, aiPlannerConfig.hardBudgetMs + gameConfig.ai.workerTimeoutGraceMs)
     const abort = () => {
       if (!pending.has(requestId)) return
       disposeWorker(new DOMException('AI planning aborted', 'AbortError'))
     }
-    pending.set(requestId, { resolve, reject, timeout, signal, abort })
+    pending.set(requestId, { resolve, reject, signal, abort })
     signal?.addEventListener('abort', abort, { once: true })
     const request: AiWorkerRequest = { type: 'plan', requestId, state, memory, profileId }
     activeWorker.postMessage(request)

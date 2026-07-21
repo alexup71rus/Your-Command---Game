@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { aiAvatarPaths } from '../config/ai'
 import { gameConfig } from '../config/game'
-import { buildingRules, troopKinds } from '../config/rules'
+import { buildingRules, combatRules, troopKinds } from '../config/rules'
 import {
   cameraForOverview,
   clampCamera,
@@ -13,7 +13,7 @@ import {
   type Size,
 } from '../game/camera'
 import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game/map'
-import { maxSquadHealth, squadHealth } from '../game/match'
+import { maxSquadHealth, positionKey, squadHealth, workerSeverity, type WorkerAssignment, type WorkforceSummary } from '../game/match'
 import { squadMovementOrderCost, squadMovementOrderCostBetween } from '../game/movement'
 import { areOwnersHostile, isCastleSiteValid, type AiProfileId, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
 import { isCellVisible, isObjectVisible, visibleObjectAt, type VisibilityMap } from '../game/visibility'
@@ -25,6 +25,7 @@ interface GridCanvasProps {
   territories?: TerritoryMap
   regions?: StartRegion[]
   participants?: MatchParticipant[]
+  workforceByOwner?: Map<string, WorkforceSummary>
   foundingOpponents?: Array<{ profileId: AiProfileId; region: StartRegion }>
   showTerritories?: boolean
   showGrid?: boolean
@@ -88,7 +89,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const mapColumns = props.map[0]?.length ?? 0
 
   useEffect(() => { propsRef.current = props })
-  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.foundingOpponents, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview])
+  useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.foundingOpponents, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview, props.workforceByOwner])
   useEffect(() => {
     props.foundingOpponents?.forEach(({ profileId }) => {
       if (opponentImagesRef.current.has(profileId)) return
@@ -592,6 +593,16 @@ export function GridCanvas(props: GridCanvasProps) {
       const lastRow = Math.min(rows, Math.ceil(bottomRight.y / CELL_SIZE))
       const cellSize = CELL_SIZE * camera.zoom
 
+      const workforceByOwner = current.workforceByOwner
+      const workerAssignmentByKey = workforceByOwner && workforceByOwner.size > 0 ? new Map<string, WorkerAssignment>() : null
+      if (workforceByOwner && workerAssignmentByKey) {
+        workforceByOwner.forEach((summary) => {
+          summary.assignments.forEach((assignment) => {
+            workerAssignmentByKey.set(positionKey(assignment.position), assignment)
+          })
+        })
+      }
+
       for (let row = firstRow; row < lastRow; row += 1) {
         for (let column = firstColumn; column < lastColumn; column += 1) {
           const cell = map[row][column]
@@ -714,6 +725,49 @@ export function GridCanvas(props: GridCanvasProps) {
           if (object.type === 'castle') drawCastle(x, y, cellSize, color)
           else if (object.type === 'building') drawBuilding(x, y, Math.max(objectWidth, objectHeight), object.kind, color)
           else drawSquad(x, y, cellSize, object.units, color)
+          if (object.type === 'building' && workerAssignmentByKey && cellSize >= 18) {
+            const origin = object.footprint
+              ? { column: object.footprint.originColumn, row: object.footprint.originRow }
+              : { column, row }
+            const assignment = workerAssignmentByKey.get(positionKey(origin))
+            const severity = assignment ? workerSeverity(assignment) : null
+            if (severity) {
+              const badgeRadius = Math.max(7, cellSize * 0.14)
+              const badgeCenterX = x + objectWidth * 0.82
+              const badgeCenterY = y + objectHeight * 0.18
+              const badgeColor = severity === 'stopped' ? '#c97060' : '#c9a23f'
+              context.save()
+              context.fillStyle = '#1b241d'
+              context.strokeStyle = badgeColor
+              context.lineWidth = Math.max(1, cellSize * 0.025)
+              context.beginPath()
+              context.arc(badgeCenterX, badgeCenterY, badgeRadius, 0, Math.PI * 2)
+              context.fill()
+              context.stroke()
+              context.strokeStyle = badgeColor
+              context.lineWidth = Math.max(1.5, badgeRadius * 0.22)
+              context.lineCap = 'round'
+              if (severity === 'stopped') {
+                const span = badgeRadius * 0.55
+                context.beginPath()
+                context.moveTo(badgeCenterX - span, badgeCenterY - span)
+                context.lineTo(badgeCenterX + span, badgeCenterY + span)
+                context.moveTo(badgeCenterX + span, badgeCenterY - span)
+                context.lineTo(badgeCenterX - span, badgeCenterY + span)
+                context.stroke()
+              } else {
+                context.beginPath()
+                context.moveTo(badgeCenterX, badgeCenterY - badgeRadius * 0.5)
+                context.lineTo(badgeCenterX, badgeCenterY + badgeRadius * 0.18)
+                context.stroke()
+                context.beginPath()
+                context.arc(badgeCenterX, badgeCenterY + badgeRadius * 0.5, Math.max(1, badgeRadius * 0.12), 0, Math.PI * 2)
+                context.fillStyle = badgeColor
+                context.fill()
+              }
+              context.restore()
+            }
+          }
           if (object.type === 'building' && object.kind === 'tower' && object.garrison && cellSize >= 22) {
             const centerX = x + cellSize * .75
             const centerY = y + cellSize * .25
@@ -839,7 +893,7 @@ export function GridCanvas(props: GridCanvasProps) {
             if (cost === null || (current.movementOrdersRemaining ?? 0) < cost) return
             drawOrderMarker(landing.column, landing.row, 'move', glyph)
           })
-          if ((source.units.archers ?? 0) > 0 && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) {
+          if ((source.units.archers ?? 0) > 0 && (current.movementOrdersRemaining ?? 0) >= combatRules.ranged.orderCost) {
             directions.forEach(({ dx, dy }) => {
               for (let distance = 1; distance <= gameConfig.turn.archerRange; distance += 1) {
                 const column = current.movementSource!.column + dx * distance

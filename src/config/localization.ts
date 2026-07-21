@@ -36,7 +36,6 @@ export interface LocaleDictionary {
   opponents: {
     title: string
     kicker: string
-    description: string
     player: string
     playerDescription: string
     selected: string
@@ -107,6 +106,7 @@ export interface LocaleDictionary {
     squadHealth: string
     damage: string
     movementCost: string
+    rangedDefense: string
     cost: string
     free: string
     emergencyFree: string

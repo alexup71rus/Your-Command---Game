@@ -7,6 +7,7 @@ import {
   civilianPopulationCapacityFor,
   foodDemandFor,
   foodServiceCapacityFor,
+  moveOrAttackFailure,
   objectAt,
   ownedBuildingCount,
   productionFor,
@@ -27,7 +28,7 @@ import {
   samePosition,
 } from '../analysis'
 import type { AiMemory, AiProfileRules } from '../model'
-import { forceTargetFor, isTemporarilyBlocked, minimumFieldArmySize, overdriveBonusSlots, plannedBuildingLimit } from './shared'
+import { developmentBonusSlots, developmentHousingBonusSlots, forceTargetFor, isTemporarilyBlocked, minimumFieldArmySize, plannedBuildingLimit } from './shared'
 import type { AiEconomySnapshot } from './types'
 
 const foodResources = gameConfig.economy.foodResources
@@ -127,6 +128,44 @@ function visibleEnemySquads(state: MatchState, ownerId: string) {
   ))
 }
 
+/**
+ * Finds hostile formations that can damage a defeat-critical or military
+ * structure with their very next order. This is deliberately narrower than
+ * `homeThreatFor`: a scout in the wider warning radius warrants a response,
+ * while an archer already firing on the castle/barracks warrants spending the
+ * current turn on combat instead of reserving orders for ordinary building.
+ */
+export function immediateCriticalAssetAttackFor(state: MatchState, ownerId: string) {
+  const minimumValue = aiTacticalConfig.defense.assetValues.barracks
+  const assets = aiObjectEntries(state.scenario, ownerId).flatMap((entry) => {
+    const kind = entry.object.type === 'castle'
+      ? 'castle' as const
+      : entry.object.type === 'building' ? entry.object.kind : null
+    const value = kind ? aiTacticalConfig.defense.assetValues[kind] : undefined
+    return kind && value !== undefined && value >= minimumValue
+      ? [{ position: entry.position, kind }]
+      : []
+  })
+  const attackers = visibleEnemySquads(state, ownerId).flatMap((enemy) => {
+    const enemyTurn = {
+      ...state,
+      activeParticipantId: enemy.object.ownerId,
+      ordersRemaining: gameConfig.turn.maxOrders,
+    }
+    const targets = assets.filter((asset) => (
+      moveOrAttackFailure(enemyTurn, enemy.position, asset.position) === null
+    ))
+    return targets.length > 0 ? [{ position: enemy.position, object: enemy.object, targets }] : []
+  })
+  return {
+    threatened: attackers.length > 0,
+    attackers,
+    assets: assets.filter((asset) => attackers.some((attacker) => (
+      attacker.targets.some((target) => samePosition(target.position, asset.position))
+    ))),
+  }
+}
+
 function hasForestIndustryPotential(state: MatchState, ownerId: string) {
   const regionId = state.scenario.participants.find((participant) => participant.id === ownerId)?.regionId
   if (!regionId) return false
@@ -175,11 +214,13 @@ export function homeThreatFor(state: MatchState, ownerId: string, memory?: AiMem
   )
   const visibleThreats = visibleEnemySquads(state, ownerId).map((entry) => ({
     distance: distanceToProtectedAsset(entry.position),
+    coreDistance: positionDistance(entry.position, castle),
     inside: state.scenario.territories[entry.position.row]?.[entry.position.column] === participant.regionId,
     power: troopCompositionPower(entry.object.units, squadHealth(entry.object)),
   }))
   const rememberedThreats = rememberedSquadThreats(state, memory).map((contact) => ({
     distance: distanceToProtectedAsset(contact.position),
+    coreDistance: positionDistance(contact.position, castle),
     inside: state.scenario.territories[contact.position.row]?.[contact.position.column] === participant.regionId,
     power: contact.power,
   }))
@@ -188,7 +229,11 @@ export function homeThreatFor(state: MatchState, ownerId: string, memory?: AiMem
   return {
     threatened: threats.some((threat) => threat.inside
       || threat.distance <= threatConfig.immediateRadius
-      || Math.ceil(threat.distance / threatConfig.assumedOrdersPerTurn) <= threatConfig.maximumArrivalTurns),
+      // The longer warning horizon protects the settlement core, not every
+      // peripheral orchard or mine. Otherwise two armies merely standing on
+      // their own sides of a border can both classify the other as a home
+      // invasion forever and abandon their campaigns for mutual guard duty.
+      || Math.ceil(threat.coreDistance / threatConfig.assumedOrdersPerTurn) <= threatConfig.maximumArrivalTurns),
     power: threats.filter((threat) => threat.inside || threat.distance <= threatConfig.evaluationRadius)
       .reduce((sum, threat) => sum + threat.power, 0),
     nearest: Math.min(...threats.map((threat) => threat.distance), Number.POSITIVE_INFINITY),
@@ -286,7 +331,13 @@ export function strategicPhaseFor(state: MatchState, profile: AiProfileRules, me
   const regroupThreshold = Math.max(aiStrategicConfig.phase.regroupMinimumPower,
     Math.min(profile.doctrine.forceTargets.assault.maximum,
       targetPower * profile.riskThreshold * aiStrategicConfig.phase.regroupTargetRatio))
-  if (offensiveWave && snapshot.armyPower < regroupThreshold) return 'regroup' as const
+  // A deliberately launched reconnaissance wave must be judged against its
+  // own minimum. Comparing it with the full-assault recovery threshold made
+  // the AI advance for one turn, recall on the next, and repeat forever.
+  const activeWaveFloor = memory.wave === 'probe'
+    ? profile.doctrine.forceTargets.probe.minimum * (1 - aiPlannerConfig.readinessEstimateTolerance)
+    : regroupThreshold
+  if (offensiveWave && snapshot.armyPower < activeWaveFloor) return 'regroup' as const
   const campaignReady = snapshot.foodRunway >= aiPlannerConfig.foodRunwayTurns
     && snapshot.goldRunway >= aiStrategicConfig.phase.campaignGoldRunway
   const ownParticipant = state.scenario.participants.find((participant) => participant.id === ownerId)
@@ -333,10 +384,11 @@ export function strategicPhaseFor(state: MatchState, profile: AiProfileRules, me
   // Overdrive opens extra housing/service slots when the domain is resource
   // rich, so a settlement that has hit its blueprint ceiling can still slip
   // back into expansion to place a couple more buildings instead of idling.
-  const overdriveSlots = overdriveBonusSlots(state, memory)
-  const canBuildHouse = ownedBuildingCount(state, ownerId, 'house') < plannedBuildingLimit(memory, 'house') + overdriveSlots
+  const developmentSlots = developmentBonusSlots(state, profile, memory)
+  const canBuildHouse = ownedBuildingCount(state, ownerId, 'house') < plannedBuildingLimit(memory, 'house')
+      + developmentHousingBonusSlots(state, profile, memory)
     && snapshot.residentialCapacity <= snapshot.foodServiceCapacity
-  const canBuildKitchen = ownedBuildingCount(state, ownerId, 'kitchen') < plannedBuildingLimit(memory, 'kitchen') + overdriveSlots
+  const canBuildKitchen = ownedBuildingCount(state, ownerId, 'kitchen') < plannedBuildingLimit(memory, 'kitchen') + developmentSlots
     && snapshot.foodServiceCapacity <= snapshot.residentialCapacity
   const canExpandHousing = canBuildHouse || canBuildKitchen
   const canSustainExpansion = populationGrowthSupplyFor(state, ownerId).sustainable
@@ -390,7 +442,8 @@ export function chooseTargetOwner(state: MatchState, profile: AiProfileRules, me
   const best = candidates[0]
   const current = candidates.find((candidate) => candidate.id === memory.targetOwnerId)
   if (!best) return null
-  if (current && memory.idleTurns >= aiPlannerConfig.retargetAfterIdleTurns) {
+  if (current && memory.idleTurns >= aiPlannerConfig.retargetAfterIdleTurns
+    && state.turn - memory.lastTargetChangeTurn >= aiPlannerConfig.retargetAfterIdleTurns) {
     return candidates.find((candidate) => candidate.id !== current.id)?.id ?? current.id
   }
   if (current && best.id !== current.id && best.score < current.score * (1 + aiPlannerConfig.targetChangeMargin)

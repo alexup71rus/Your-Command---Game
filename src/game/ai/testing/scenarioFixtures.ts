@@ -160,9 +160,9 @@ export function createDefensiveTerrainScenario(profileId: AiProfileId): MapScena
 
 /**
  * A mature settlement with a functioning production chain and field troops,
- * but too little stone to start its planned fortification immediately. It is
- * intentionally authored so a behavior test can observe saving and the full
- * construction order without waiting for the opening economy to replay first.
+ * with an authored construction budget. Velislava still has to save for her
+ * curtain; Svyatobor starts with the committed budget for a complete enclosure
+ * so the test observes the full build order instead of replaying the opening.
  */
 export function createFortressConstructionState(
   profileId: Extract<AiProfileId, 'velislava' | 'svyatobor'> = 'svyatobor',
@@ -172,6 +172,16 @@ export function createFortressConstructionState(
   const state = createMatch(terrain === 'mountain-pass'
     ? createDefensiveTerrainScenario(profileId)
     : createEconomicScenario(profileId, 'open'))
+  // The live planner creates its settlement blueprint before development.
+  // Preserve that ordering in the fixture so mature preset buildings cannot
+  // occupy cells that were meant to close the citadel perimeter later.
+  const analysis = analyzeAiWorld(state.scenario, ownerId)
+  if (!analysis) throw new Error('Could not analyze the fortress construction fixture')
+  const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles[profileId])
+  const reservedDefense = new Set([
+    ...(settlementPlan.fortification?.lines.flatMap((line) => [line.gate, ...line.walls, ...line.towers]) ?? []),
+    ...(settlementPlan.reservedSites.outpostTower ? [settlementPlan.reservedSites.outpostTower] : []),
+  ].map((position) => `${position.column}:${position.row}`))
   const buildings: Array<[BuildingKind, number, number]> = [
     ['orchard', 20, 6], ['orchard', 22, 6], ['mill', 20, 17],
     ['farm', 18, 18], ['farm', 21, 18],
@@ -189,25 +199,27 @@ export function createFortressConstructionState(
       && positions.every((position) => {
         const cell = state.scenario.cells[position.row]?.[position.column]
         return cell && cell.landform !== 'peak' && !cell.object
+          && !reservedDefense.has(`${position.column}:${position.row}`)
       })) {
       placeTestBuilding(state, ownerId, kind, { column, row })
     }
   })
-  placeTestSquad(state, ownerId, { column: 20, row: 13 }, {
+  const muster = profileId === 'svyatobor' ? { column: 19, row: 12 } : { column: 20, row: 13 }
+  placeTestSquad(state, ownerId, muster, {
     militia: 2, spearmen: 2, archers: profileId === 'svyatobor' ? 2 : 0, knights: 0,
   })
   state.domains[ownerId] = {
     ...state.domains[ownerId],
     population: 18,
     taxRate: 'none',
-    resources: {
+    resources: profileId === 'svyatobor' ? {
+      wood: 220, stone: 360, ore: 20, iron: 20,
+      flour: 80, meat: 20, fruit: 60, gold: 240,
+    } : {
       wood: 25, stone: 0, ore: 10, iron: 2,
       flour: 40, meat: 0, fruit: 30, gold: 100,
     },
   }
-  const analysis = analyzeAiWorld(state.scenario, ownerId)
-  if (!analysis) throw new Error('Could not analyze the fortress construction fixture')
-  const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles[profileId])
   const nonDefensiveZones = ['housing', 'food', 'industry', 'military'] as const
   nonDefensiveZones.forEach((zoneKind) => {
     const zone = settlementPlan.zones[zoneKind]

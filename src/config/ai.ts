@@ -7,11 +7,9 @@ import type {
 } from '../game/ai/model'
 
 export const aiPlannerConfig = {
+  // UI threshold only. Crossing it shows that the lord is still thinking; it
+  // never truncates search or changes the chosen plan.
   softBudgetMs: 3_000,
-  hardBudgetMs: 10_000,
-  deadlineSafetyMarginMs: 25,
-  nodeBudget: 64_000,
-  goalValidationNodeBudget: 768,
   projectionTurns: 4,
   stableRecoveryTurns: 3,
   foodRunwayTurns: 3,
@@ -23,20 +21,39 @@ export const aiPlannerConfig = {
   maximumRememberedContacts: 256,
   maximumBlockedCells: 32,
   blockedCellMemoryTurns: 2,
+  maximumRecentMovements: 32,
+  movementHistoryTurns: 3,
   maximumCommands: 18,
+  // A plan is produced from fog-limited information. If a move reveals a
+  // hidden blocker or costs more orders than projected, discard the stale
+  // suffix and calculate once more from the authoritative intermediate state.
+  maximumPlanAttempts: 2,
   minimumTaxHoldTurns: 3,
   forcedAdvanceAfterIdleTurns: 2,
   stalledMobilizationProbeTurns: 6,
   retargetAfterIdleTurns: 6,
+  settlementPlanReviewInterval: 25,
+  // Strategic search is model-predictive: it evaluates several future owner
+  // turns, executes only the first turn, then replans from authoritative state.
+  // These values define the model being evaluated, rather than interrupting a
+  // calculation after an arbitrary amount of time or visited nodes.
+  strategicLookaheadTurns: 2,
+  strategicCurrentForecastWidth: 5,
+  strategicFutureCandidateWidth: 3,
+  strategicFutureDiscount: 0.9,
   relaxBlueprintAfterStalledTurns: 4,
   armyReorganizationCooldownTurns: 4,
   ordinaryTacticalOrderReserve: 2,
   assaultOrderReserve: 4,
+  // Ordinary defense preserves room for a heavy forest move. When the next
+  // affordable fortification step is a tower, the planner raises this reserve
+  // to `defenseTowerOrderReserve` for that turn only.
+  defenseStrategicOrderReserve: 4,
+  defenseTowerOrderReserve: 6,
   strategicSearchDepth: 5,
   strategicBeamWidth: 8,
   candidatePriorScale: 0.12,
   candidatePriorLimit: 24,
-  sequenceLengthBonus: 3,
   tacticalGuardMultiplier: 2,
   forcedAdvanceMinimumScore: -80,
   emergencyRunwayTurns: 1.5,
@@ -108,6 +125,37 @@ export const aiSpatialConfig = {
       minimumCastleDistance: 3,
       maximumCorridorShare: 0.62,
       minimumWalls: 2,
+      // Delay walls may deliberately be long. The construction planner still
+      // builds one funded segment at a time, so this is a geometric ceiling,
+      // not permission to spend the survival stockpile in one turn.
+      maximumWallsPerLine: 14,
+      enclosureHalfExtents: [
+        { columns: 1, rows: 2 },
+        { columns: 2, rows: 1 },
+        { columns: 2, rows: 2 },
+        { columns: 2, rows: 3 },
+        { columns: 3, rows: 2 },
+      ],
+      enclosureTowerCount: 2,
+      // Seeded variation only chooses between already validated enclosure
+      // plans. The structural invariants (closed perimeter, usable gate and
+      // tower count) are checked before any of these soft preferences apply.
+      enclosureGateCandidates: 4,
+      enclosureAlignedOrientationBonus: 180,
+      enclosureCorridorGateBonus: 120,
+      enclosureGateFrontDistanceWeight: 12,
+      enclosureTowerCornerBonus: 100,
+      enclosureTowerFrontBonus: 80,
+      enclosureTowerVariation: 140,
+      enclosurePlanVariation: 480,
+      enclosureInteriorDevelopmentWeight: 14,
+      enclosureOpenPerimeterWeight: 12,
+      enclosureAnchoredCompactWeight: 40,
+      curtainShapeVariation: 220,
+      curtainWingDelayBonus: 10,
+      curtainDoctrineBonus: 420,
+      curtainOpenWingBonus: 280,
+      curtainAnchoredStraightBonus: 250,
       naturalAnchorBonus: 18,
       chokeWeight: 5,
       preferredDistanceWeight: 2,
@@ -117,6 +165,7 @@ export const aiSpatialConfig = {
       minimumPathDelay: 2,
       weakLinePenalty: 30,
       minimumLineSpacing: 6,
+      outworkMinimumLineSpacing: 3,
       outpostMinimumCastleDistance: 7,
       outpostMaximumAssetDistance: 6,
       outpostHillBonus: 48,
@@ -136,7 +185,6 @@ export const aiStrategicConfig = {
   maximumFoodFallbackBuildings: 2,
   minimumRunwayFlowMagnitude: 0.5,
   minimumCivilianReserve: 2,
-  defenseWorkerReserveShare: 0.5,
   maximumRecruitBatch: 3,
   recruitmentCellCapacity: 10,
   basicMilitiaBeforeBarracks: 2,
@@ -157,6 +205,9 @@ export const aiStrategicConfig = {
     plains: { orchard: 18, mill: 14, farm: 14, huntingLodge: -4 },
     highland: { quarry: 18, mine: 14, orchard: 2, huntingLodge: 2 },
   } satisfies Record<AiOpeningKind, Partial<Record<BuildingKind, number>>>,
+  // Keeps openings recognisably different without letting randomness defeat
+  // hard survival, workforce, prerequisite or blueprint constraints.
+  buildingGoalVariation: 24,
   threat: {
     immediateRadius: 12,
     evaluationRadius: 16,
@@ -218,8 +269,15 @@ export const aiStrategicConfig = {
       fundedMarket: 156,
       market: 142,
       barracks: 138,
+      // Once a settlement has already raised its militia screen or entered a
+      // military phase, unlocking the real roster is more important than an
+      // optional second food plot whose legal footprint may not exist.
+      urgentBarracks: 206,
       mine: 128,
-      smelter: 132,
+      // Once ore extraction exists, close the iron chain before filling every
+      // optional housing slot; otherwise the complete profile can spend the
+      // whole midgame stockpiling unusable ore and still field basic troops.
+      smelter: 198,
       church: 82,
       defenseBarbican: 174,
       barbican: 105,
@@ -228,15 +286,21 @@ export const aiStrategicConfig = {
       tower: 118,
     },
     farmDemandMultiplier: 1.35,
+    farmClusterPriorityBonus: 34,
     lowWoodThreshold: 25,
     maximumLumberMills: 2,
     kitchenBeforeGrowthServiceSlack: 1,
     kitchenBeforeGrowthHousingSlack: 2,
     houseHousingSlack: 1,
-    houseFutureService: 2,
+    // One spare served citizen is enough to place the next house. Requiring
+    // two created a 9/10 capacity deadlock after recruitment: housing had room
+    // for 9 civilians, food service for 10, and neither a house nor a kitchen
+    // considered itself the correct next step.
+    houseFutureService: 1,
     kitchenServiceSlack: 4,
     lowGoldMarketThreshold: 36,
     barracksMinimumPopulation: 3,
+    barracksUrgentPopulation: 12,
     industryFoodRunway: 3,
     smelterOreStock: 4,
     churchMinimumPopulation: 10,
@@ -244,25 +308,27 @@ export const aiStrategicConfig = {
     churchGoldRunway: 5,
     fortificationArmySize: 4,
     towerArmySize: 6,
+    enclosureMinimumHouses: 3,
+    enclosureMinimumQuarries: 2,
     fortificationContinuityBonus: 24,
     minimumViableFortificationWalls: 2,
   },
   recruitment: {
     civilianGrowthReserve: 3,
+    emergencyCivilianReserve: 1,
+    emergencyDraftAllowance: 6,
+    criticalWorkerBuildings: ['mill', 'farm', 'orchard', 'huntingLodge', 'kitchen'] as readonly BuildingKind[],
     assaultReserveShare: 0.45,
     ordinaryReserveShare: 0.7,
     emergencyDefenseRadius: 3,
     emergencyDefensePowerRatio: 0.8,
+    defensePowerMultiplier: 1.15,
     defenseUtility: 180,
     ordinaryUtility: 112,
   },
   taxation: {
     disableFoodRunway: 3.5,
-    enableModerateFoodRunway: 5,
-    enableExtortionateGoldRunway: 1.25,
-    enableExtortionateFoodRunway: 7,
-    disableExtortionateGoldRunway: 2.5,
-    disableExtortionateFoodRunway: 5.5,
+    enableModerateFoodRunway: 7,
     emergencyReliefRunway: 2,
     recoveryUtility: 220,
     ordinaryUtility: 70,
@@ -323,35 +389,13 @@ export const aiStrategicConfig = {
     adaptiveShiftAreaDivisor: 2,
   },
   recovery: {
+    meaningfulRunwayDelta: 0.25,
     dismissalUtility: 196,
     removeUnpaidChurchUtility: 212,
     removeIrrecoverableBuildingUtility: 132,
     excessBuildingUtility: { recovery: 128, stable: 76 },
-    crowdedZoneUtility: { recovery: 122, stable: 68 },
     liquidationUtility: 94,
-    redevelopmentUtility: 62,
-    redevelopmentFoodRunway: 6,
     protectedBarracksCount: 1,
-    retentionDefault: 45,
-    retentionByKind: {
-      lumberMill: 100,
-      market: 100,
-      house: 90,
-      kitchen: 90,
-      orchard: 80,
-      huntingLodge: 80,
-      farm: 80,
-      mill: 80,
-      barracks: 75,
-      church: 10,
-      // Fortifications sit below economy buildings in retention (so a starving
-      // settlement still sacrifices walls before houses), but above the default
-      // so a non-defense surplus trim does not pick a wall first.
-      wall: 60,
-      tower: 60,
-      barbican: 60,
-    } as Partial<Record<BuildingKind, number>>,
-    duplicateBarracksRetention: 30,
   },
   projection: {
     populationWeight: 22,
@@ -429,6 +473,7 @@ export const aiTacticalConfig = {
     scoutManeuverThreshold: 0.45,
     scoutMinimumGroups: 3,
     screenRadius: 3,
+    rangedWithdrawalThreatDistance: 4,
     maneuverRoleThreshold: 0.5,
     regroupUtility: 24,
     mobilizationBaseUtility: 18,
@@ -460,7 +505,16 @@ export const aiTacticalConfig = {
   },
   movement: {
     retreatUtility: 125,
+    // Formation actions must outrank another attractive archer volley: the
+    // screen is established first, then the remaining orders can be spent on
+    // fire. Withdrawal is deliberately limited to one step per ranged squad
+    // per turn in tactics, so these are priorities rather than kite loops.
+    rangedWithdrawalUtility: 350,
+    rangedWithdrawalDistanceUtility: 35,
+    screenUtility: 400,
+    screenProgressUtility: 40,
     defenderUtility: 28,
+    defenseEngagementUtility: 110,
     defenseProgressUtility: 18,
     mobilizationProgressUtility: 16,
     regroupProgressUtility: 18,
@@ -565,6 +619,15 @@ export const aiTacticalConfig = {
     siegeRange: 6,
   },
   defense: {
+    coreBreachRadius: 2,
+    coreBreachMinimumContactPowerRatio: 0.3,
+    coreBreachEngagementUtility: 600,
+    contactCommitmentUtility: 180,
+    contactExchangeUtility: 18,
+    concentrationPowerUtility: 40,
+    certainDestructionPenalty: 1_000,
+    rangedExposureRoutePenalty: 12,
+    rangedExposureLookahead: 8,
     remoteGuardMinimumCastleDistance: 6,
     maximumPropertyAnchors: 3,
     propertyExposureWeight: 9,
@@ -626,11 +689,21 @@ export const aiProfiles: Record<AiProfileRules['id'], AiProfileRules> = {
     },
     settlement: {
       areaScale: 0.82,
+      fortificationPattern: 'none',
+      maximumCurtainWingDepth: 0,
+      surplusFortificationStoneReserve: 0,
       remoteTowerLimit: 0,
-      zoneOriginTargets: { housing: 5, food: 3, industry: 2, military: 1, defense: 1 },
-      buildingLimits: { house: 3, kitchen: 1, market: 1, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 1, barracks: 1 },
+      zoneOriginTargets: { housing: 6, food: 4, industry: 3, military: 1, defense: 1 },
+      buildingLimits: { house: 5, kitchen: 1, market: 1, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 1, barracks: 1 },
       overflowRadius: { housing: 2, food: 3, industry: 3, military: 2, defense: 2 },
     },
+    developmentMilestones: [
+      { round: 0, economyBonusSlots: 0, housingBonusSlots: 0, armyCeiling: 16 },
+      { round: 100, economyBonusSlots: 1, housingBonusSlots: 2, armyCeiling: 22 },
+      { round: 200, economyBonusSlots: 2, housingBonusSlots: 4, armyCeiling: 28 },
+      { round: 300, economyBonusSlots: 3, housingBonusSlots: 6, armyCeiling: 34 },
+    ],
+    taxation: { maximumRate: 'moderate', maximumRateFoodRunway: 7, desiredGoldRunway: 2 },
     riskThreshold: 0.9,
     earliestOffensiveRound: 12,
     strategicReserve: { wood: 18, stone: 10, flour: 10, gold: 18 },
@@ -669,11 +742,21 @@ export const aiProfiles: Record<AiProfileRules['id'], AiProfileRules> = {
     },
     settlement: {
       areaScale: 1,
+      fortificationPattern: 'curtain',
+      maximumCurtainWingDepth: 3,
+      surplusFortificationStoneReserve: 0,
       remoteTowerLimit: 0,
-      zoneOriginTargets: { housing: 6, food: 6, industry: 3, military: 1, defense: 5 },
-      buildingLimits: { house: 4, kitchen: 1, market: 1, mill: 2, farm: 4, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 2, barracks: 1, wall: 8, barbican: 1 },
+      zoneOriginTargets: { housing: 8, food: 10, industry: 4, military: 1, defense: 5 },
+      buildingLimits: { house: 7, kitchen: 2, market: 1, mill: 2, farm: 4, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 2, barracks: 1, wall: 14, barbican: 1 },
       overflowRadius: { housing: 2, food: 4, industry: 3, military: 2, defense: 3 },
     },
+    developmentMilestones: [
+      { round: 0, economyBonusSlots: 0, housingBonusSlots: 0, armyCeiling: 20 },
+      { round: 100, economyBonusSlots: 1, housingBonusSlots: 3, armyCeiling: 30 },
+      { round: 200, economyBonusSlots: 2, housingBonusSlots: 6, armyCeiling: 40 },
+      { round: 300, economyBonusSlots: 3, housingBonusSlots: 9, armyCeiling: 50 },
+    ],
+    taxation: { maximumRate: 'extortionate', maximumRateFoodRunway: 8, desiredGoldRunway: 2.5 },
     riskThreshold: 1.05,
     earliestOffensiveRound: 8,
     strategicReserve: { wood: 24, stone: 18, iron: 2, flour: 14, gold: 26 },
@@ -712,11 +795,21 @@ export const aiProfiles: Record<AiProfileRules['id'], AiProfileRules> = {
     },
     settlement: {
       areaScale: 1.18,
+      fortificationPattern: 'citadel-enclosure',
+      maximumCurtainWingDepth: 0,
+      surplusFortificationStoneReserve: 90,
       remoteTowerLimit: 1,
-      zoneOriginTargets: { housing: 8, food: 7, industry: 5, military: 2, defense: 10 },
-      buildingLimits: { house: 5, kitchen: 2, market: 1, church: 1, mill: 2, farm: 4, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 2, mine: 2, smelter: 2, barracks: 2, wall: 12, tower: 3, barbican: 2 },
+      zoneOriginTargets: { housing: 14, food: 10, industry: 8, military: 2, defense: 10 },
+      buildingLimits: { house: 10, kitchen: 2, market: 1, church: 1, mill: 2, farm: 4, orchard: 2, huntingLodge: 2, lumberMill: 2, quarry: 2, mine: 2, smelter: 2, barracks: 2, wall: 24, tower: 4, barbican: 2 },
       overflowRadius: { housing: 3, food: 4, industry: 4, military: 3, defense: 3 },
     },
+    developmentMilestones: [
+      { round: 0, economyBonusSlots: 0, housingBonusSlots: 0, armyCeiling: 30 },
+      { round: 100, economyBonusSlots: 1, housingBonusSlots: 4, armyCeiling: 40 },
+      { round: 200, economyBonusSlots: 2, housingBonusSlots: 8, armyCeiling: 50 },
+      { round: 300, economyBonusSlots: 3, housingBonusSlots: 12, armyCeiling: 60 },
+    ],
+    taxation: { maximumRate: 'extortionate', maximumRateFoodRunway: 6, desiredGoldRunway: 4 },
     riskThreshold: 1.2,
     earliestOffensiveRound: 6,
     strategicReserve: { wood: 30, stone: 22, ore: 5, iron: 8, flour: 16, meat: 4, gold: 34 },

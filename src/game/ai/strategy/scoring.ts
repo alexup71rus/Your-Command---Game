@@ -18,11 +18,16 @@ import type { StrategicCandidate } from './types'
 
 const foodResources = gameConfig.economy.foodResources
 
-export function projectedStrategicScore(state: MatchState, profile: AiProfileRules, phase: AiStrategicPhase) {
+export function projectedStrategicScore(
+  state: MatchState,
+  profile: AiProfileRules,
+  phase: AiStrategicPhase,
+  projectionTurns: number = aiPlannerConfig.projectionTurns,
+) {
   const scoring = aiStrategicConfig.projection
   const ownerId = state.activeParticipantId
   const domain = state.domains[ownerId]
-  const projection = projectOwnerEconomy(state, ownerId, aiPlannerConfig.projectionTurns)
+  const projection = projectOwnerEconomy(state, ownerId, projectionTurns)
   const projectedDomain = projection.state.domains[ownerId]
   const reports = projection.reports
   const starved = reports.filter((report) => !report.food.fed).length

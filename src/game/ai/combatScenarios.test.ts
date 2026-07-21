@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { buildingRules } from '../../config/rules'
-import { objectAt, squadSize } from '../match'
+import { objectAt, squadHealth, squadSize } from '../match'
 import type { AiProfileId } from '../scenario'
-import { aiObjectEntries, positionKey } from './analysis'
+import { aiObjectEntries, positionDistance, positionKey } from './analysis'
 import { createAiMemory } from './model'
 import {
   militia,
@@ -69,6 +69,96 @@ function runSummary(run: ReturnType<typeof runFrozenTactics>) {
 }
 
 describe('authored AI combat scenarios', () => {
+  it.each(profiles)('%s spends at most four volleys on one shielded spearman in a turn', (profileId) => {
+    const state = startAiTurn(profileId)
+    const ownerId = state.activeParticipantId
+    const archer = { column: 12, row: 12 }
+    const defender = { column: 4, row: 12 }
+    placeTestSquad(state, ownerId, archer, { militia: 0, spearmen: 0, archers: 1, knights: 0 }, { health: 1 })
+    placeTestSquad(state, 'player', defender, spearmen(1), { health: 1.35 })
+
+    const run = runFrozenTactics(state, profileId, assaultMemory('player'), 'assault', 8)
+    const volleys = run.steps.filter(({ command }) => command.type === 'move-or-attack'
+      && command.from.column === archer.column && command.from.row === archer.row
+      && command.to.column === defender.column && command.to.row === defender.row)
+    const survivingDefender = objectAt(run.state, defender)
+    const summary = runSummary(run)
+
+    expect(run.failures, summary).toEqual([])
+    expect(volleys, summary).toHaveLength(4)
+    expect(survivingDefender?.type === 'squad' ? squadHealth(survivingDefender) : 0, summary).toBeCloseTo(0.39)
+    expect(run.state.ordersRemaining, summary).toBe(0)
+  })
+
+  it.each(['velislava', 'svyatobor'] as const)('%s withdraws exposed archers once, then keeps fighting', (profileId) => {
+    const state = startAiTurn(profileId)
+    const ownerId = state.activeParticipantId
+    const ownerRegion = state.scenario.participants.find((participant) => participant.id === ownerId)?.regionId
+    const archer = { column: 17, row: 12 }
+    const threat = { column: 14, row: 12 }
+    state.turn = 20
+    for (let row = 11; row <= 13; row += 1) {
+      for (let column = 13; column <= 18; column += 1) {
+        state.scenario.cells[row][column] = {
+          ...state.scenario.cells[row][column], landform: 'plain', vegetation: false, object: undefined,
+        }
+        if (ownerRegion) state.scenario.territories[row][column] = ownerRegion
+      }
+    }
+    placeTestSquad(state, ownerId, archer, { militia: 0, spearmen: 0, archers: 3, knights: 0 }, { health: 3 })
+    placeTestSquad(state, 'player', threat, spearmen(8), { health: 10.8 })
+    const run = runFrozenTactics(state, profileId, {
+      ...createAiMemory(), targetOwnerId: 'player', phase: 'defense',
+    }, 'defense', 8)
+    const withdrawals = run.steps.filter((step) => step.factors.includes('ranged-withdrawal'))
+    const summary = runSummary(run)
+
+    expect(run.failures, summary).toEqual([])
+    expect(withdrawals, summary).toHaveLength(1)
+    expect(withdrawals[0]?.command.type, summary).toBe('move-or-attack')
+    if (withdrawals[0]?.command.type === 'move-or-attack') {
+      expect(positionDistance(withdrawals[0].command.to, threat), summary)
+        .toBeGreaterThan(positionDistance(withdrawals[0].command.from, threat))
+    }
+    expect(run.steps.some((step) => step.factors.some((factor) => factor.startsWith('damage:'))), summary).toBe(true)
+  })
+
+  it.each(['velislava', 'svyatobor'] as const)('%s forms a front-line screen between melee danger and archers', (profileId) => {
+    const state = startAiTurn(profileId)
+    const ownerId = state.activeParticipantId
+    const ownerRegion = state.scenario.participants.find((participant) => participant.id === ownerId)?.regionId
+    const archer = { column: 17, row: 12 }
+    const screenStart = { column: 17, row: 15 }
+    const screenAnchor = { column: 16, row: 12 }
+    const threat = { column: 13, row: 12 }
+    state.turn = 20
+    for (let row = 11; row <= 15; row += 1) {
+      for (let column = 12; column <= 18; column += 1) {
+        state.scenario.cells[row][column] = {
+          ...state.scenario.cells[row][column], landform: 'plain', vegetation: false, object: undefined,
+        }
+        if (ownerRegion) state.scenario.territories[row][column] = ownerRegion
+      }
+    }
+    placeTestSquad(state, ownerId, archer, { militia: 0, spearmen: 0, archers: 3, knights: 0 }, { health: 3 })
+    placeTestSquad(state, ownerId, screenStart, spearmen(3), { health: 4.05 })
+    placeTestSquad(state, 'player', threat, spearmen(8), { health: 10.8 })
+    const run = runFrozenTactics(state, profileId, {
+      ...createAiMemory(), targetOwnerId: 'player', phase: 'defense',
+    }, 'defense', 4)
+    const screenMoves = run.steps.filter((step) => step.factors.includes('screen-ranged'))
+    const summary = runSummary(run)
+
+    expect(run.failures, summary).toEqual([])
+    expect(screenMoves.length, summary).toBeGreaterThan(0)
+    expect(screenMoves.every((step) => step.factors.includes('role:screen')), summary).toBe(true)
+    expect(objectAt(run.state, screenAnchor), summary).toMatchObject({
+      type: 'squad', ownerId, units: { spearmen: 3 },
+    })
+    expect(positionDistance(screenAnchor, archer), summary).toBe(1)
+    expect(positionDistance(screenAnchor, threat), summary).toBeLessThan(positionDistance(archer, threat))
+  })
+
   it.each(profiles)('%s takes the forest detour without chipping the healthy wall', (profileId) => {
     const { state, blocker } = prepareTwoLaneAssault(profileId, 'wall')
     const initialWall = objectAt(state, blocker)

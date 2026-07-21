@@ -239,8 +239,20 @@ function buildingDistance(first: OwnedBuildingEntry, second: OwnedBuildingEntry)
   return Math.min(...firstCells.flatMap((a) => secondCells.map((b) => Math.abs(a.column - b.column) + Math.abs(a.row - b.row))))
 }
 
-function positionKey(position: CellPosition) {
+export function positionKey(position: CellPosition) {
   return `${position.column}:${position.row}`
+}
+
+/**
+ * Worker assignment severity for on-map indicators.
+ * - 'stopped' — production is halted (no workers, or blocked by missing/idle support).
+ * - 'reduced' — understaffed but still producing (assigned < required, no block).
+ * - null — fully staffed.
+ */
+export function workerSeverity(assignment: WorkerAssignment): 'stopped' | 'reduced' | null {
+  if (assignment.assigned === 0 || assignment.blockedReason !== undefined) return 'stopped'
+  if (assignment.assigned < assignment.required) return 'reduced'
+  return null
 }
 
 function farmSupportAssignments(state: MatchState, ownerId: string) {
@@ -534,7 +546,7 @@ function hasPotentialFarmSiteForMill(state: MatchState, millPosition: CellPositi
 /**
  * Validates the authored map position independently from the current order and
  * resource budget. Planning code uses this to compare real build sites without
- * spending its search budget on occupied, unsupported, or invalid footprints.
+ * treating occupied, unsupported, or invalid footprints as candidates.
  */
 export function buildingSiteFailure(state: MatchState, kind: BuildingKind, position: CellPosition): CommandFailure | null {
   const rule = buildingRules[kind]
@@ -696,6 +708,19 @@ function applySquadDamage(squad: SquadObject, damage: number): SquadObject | nul
   return { ...squad, units, health: Math.min(nextHealth, remainingCapacity) }
 }
 
+/**
+ * A volley is spread across the formation, so protection is weighted by unit
+ * count rather than durability. A single knight therefore cannot lend its full
+ * armour to a mostly unarmoured squad.
+ */
+export function rangedDamageTakenMultiplierFor(squad: Pick<SquadObject, 'units'>) {
+  const size = squadSize(squad)
+  if (size <= 0) return 1
+  return troopKinds.reduce((sum, kind) => (
+    sum + (squad.units[kind] ?? 0) * troopRules[kind].rangedDamageTakenMultiplier
+  ), 0) / size
+}
+
 export function hasLivingCastle(state: Pick<MatchState, 'scenario'>, ownerId: string) {
   return state.scenario.cells.some((row) => row.some((cell) => cell.object?.type === 'castle' && cell.object.ownerId === ownerId))
 }
@@ -776,7 +801,7 @@ function resolveRangedAttack(
   attacker: SquadObject,
   defender: MapObject,
   heightMultiplierOverride?: number,
-  orderCost: number = gameConfig.turn.movementOrderCost,
+  orderCost: number = combatRules.ranged.orderCost,
 ): MatchState {
   const sourceCell = cellAt(state, from)
   const targetCell = cellAt(state, to)
@@ -787,6 +812,7 @@ function resolveRangedAttack(
   const archerDamage = (attacker.units.archers ?? 0) * troopRules.archers.damage * heightMultiplier * coverMultiplier * dietMultiplier
   if (defender.type === 'squad') {
     const damage = archerDamage / combatRules.ranged.squadDamageDivisor
+      * rangedDamageTakenMultiplierFor(defender)
     const nextDefender = applySquadDamage(defender, damage)
     const losses = squadSize(defender) - (nextDefender ? squadSize(nextDefender) : 0)
     return withCell(state, to, (cell) => ({ ...cell, object: nextDefender ?? undefined }), { kind: nextDefender ? 'attacked' : 'destroyed', position: to, amount: losses }, orderCost)
@@ -842,7 +868,7 @@ export function moveOrAttackFailure(state: MatchState, from: CellPosition, to: C
   if (!isAdjacent(from, to)) {
     const passageCost = squadMovementOrderCostBetween(state.scenario.cells, source, from, to)
     if (passageCost !== null) return commandGuard(state, passageCost)
-    if (isRangedAttack(state, from, to)) return commandGuard(state, gameConfig.turn.movementOrderCost)
+    if (isRangedAttack(state, from, to)) return commandGuard(state, combatRules.ranged.orderCost)
     if (target && target.ownerId !== state.activeParticipantId && (source.units.archers ?? 0) > 0) {
       const aligned = from.column === to.column || from.row === to.row
       const distance = Math.abs(from.column - to.column) + Math.abs(from.row - to.row)

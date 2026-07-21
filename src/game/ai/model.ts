@@ -6,7 +6,10 @@ export const aiProfileIds: AiProfileId[] = ['radomir', 'velislava', 'svyatobor']
 
 export type AiArsenalTier = 'basic' | 'tactical' | 'complete'
 export type AiLayoutKind = 'courtyard' | 'frontier' | 'strongpoint'
-export type AiFortificationKind = 'curtain' | 'terrain-gate' | 'bastion'
+export type AiFortificationKind = 'curtain' | 'terrain-gate' | 'bastion' | 'enclosure'
+export type AiFortificationPattern = 'none' | 'curtain' | 'citadel-enclosure'
+export type AiFortificationShape = 'straight' | 'winged' | 'enclosure'
+export type AiFortificationPurpose = 'core' | 'delay' | 'surplus'
 export type AiOpeningKind = 'forest' | 'plains' | 'highland'
 export type AiStrategicPhase = 'recovery' | 'survival' | 'expansion' | 'mobilization' | 'assault' | 'regroup' | 'defense'
 export type AiWaveKind = 'none' | 'probe' | 'main' | 'support' | 'regroup' | 'siege'
@@ -16,7 +19,7 @@ export type AiSettlementZoneKind = 'housing' | 'food' | 'industry' | 'military' 
 export type AiReservedSiteKind = 'housing' | 'food' | 'military' | 'industry' | 'gate' | 'leftTower' | 'rightTower' | 'outpostTower'
 
 export const aiLayoutKinds: readonly AiLayoutKind[] = ['courtyard', 'frontier', 'strongpoint']
-export const aiFortificationKinds: readonly AiFortificationKind[] = ['curtain', 'terrain-gate', 'bastion']
+export const aiFortificationKinds: readonly AiFortificationKind[] = ['curtain', 'terrain-gate', 'bastion', 'enclosure']
 export const aiOpeningKinds: readonly AiOpeningKind[] = ['forest', 'plains', 'highland']
 export const aiStrategicPhases: readonly AiStrategicPhase[] = ['recovery', 'survival', 'expansion', 'mobilization', 'assault', 'regroup', 'defense']
 export const aiWaveKinds: readonly AiWaveKind[] = ['none', 'probe', 'main', 'support', 'regroup', 'siege']
@@ -38,15 +41,35 @@ export interface AiBlockedCell {
   expiresTurn: number
 }
 
+export interface AiRecentMovement {
+  from: CellPosition
+  to: CellPosition
+  turn: number
+}
+
 export interface AiSettlementPlan {
   layout: AiLayoutKind
   opening: AiOpeningKind
   front: CellPosition
   reservedCorridors: CellPosition[]
+  /** Internal service paths to constrained production pockets (for example a
+   * one-cell mountain road). Kept separate from the military approach so
+   * staging logic does not mistake an industry route for the battle front. */
+  reservedAccessRoutes?: CellPosition[]
+  /** Deep resource cells that must remain reachable after each placement. */
+  reservedAccessTargets?: CellPosition[]
   reservedSites: Partial<Record<AiReservedSiteKind, CellPosition>>
+  /** Footprint origins kept open until a missing critical capability exists. */
+  reservedBuildingSites?: Partial<Record<BuildingKind, CellPosition>>
   fortification: {
     lines: Array<{
       kind: AiFortificationKind
+      /** Visual/route doctrine. Optional so older saved AI memories remain valid. */
+      shape?: AiFortificationShape
+      /** Core defenses are mandatory; surplus outworks wait for a funded stockpile. */
+      purpose?: AiFortificationPurpose
+      /** Stone left untouched when committing an optional surplus outwork. */
+      activationStoneReserve?: number
       approach: CellPosition
       gate: CellPosition
       walls: CellPosition[]
@@ -65,9 +88,12 @@ export interface AiSettlementPlan {
 export interface AiMemory {
   contacts: AiContact[]
   blockedCells: AiBlockedCell[]
+  recentMovements: AiRecentMovement[]
   targetOwnerId: string | null
   phase: AiStrategicPhase
   settlementPlan: AiSettlementPlan | null
+  settlementPlanAnalysisKey: string | null
+  lastSettlementPlanReviewTurn: number
   squadRoles: Record<string, AiSquadRole>
   wave: AiWaveKind
   lastTargetChangeTurn: number
@@ -80,6 +106,8 @@ export interface AiMemory {
   lastMainWaveTurn: number
   stableTurns: number
   idleTurns: number
+  /** Best front-line distance reached against the current target. */
+  campaignBestDistance: number | null
   stalledTurns: number
   lastCancellationReason: string | null
 }
@@ -88,9 +116,12 @@ export function createAiMemory(): AiMemory {
   return {
     contacts: [],
     blockedCells: [],
+    recentMovements: [],
     targetOwnerId: null,
     phase: 'survival',
     settlementPlan: null,
+    settlementPlanAnalysisKey: null,
+    lastSettlementPlanReviewTurn: 0,
     squadRoles: {},
     wave: 'none',
     lastTargetChangeTurn: 0,
@@ -100,6 +131,7 @@ export function createAiMemory(): AiMemory {
     lastMainWaveTurn: 0,
     stableTurns: 0,
     idleTurns: 0,
+    campaignBestDistance: null,
     stalledTurns: 0,
     lastCancellationReason: null,
   }
@@ -130,7 +162,6 @@ export interface AiPlan {
   commands: AiCommand[]
   memory: AiMemory
   exploredNodes: number
-  partial: boolean
   elapsedMs: number
   trace: AiPlanTraceEntry[]
 }
@@ -166,10 +197,28 @@ export interface AiDoctrine {
 
 export interface AiSettlementDoctrine {
   areaScale: number
+  fortificationPattern: AiFortificationPattern
+  maximumCurtainWingDepth: number
+  surplusFortificationStoneReserve: number
   remoteTowerLimit: number
   zoneOriginTargets: Record<AiSettlementZoneKind, number>
   buildingLimits: Partial<Record<BuildingKind, number>>
   overflowRadius: Record<AiSettlementZoneKind, number>
+}
+
+export interface AiDevelopmentMilestone {
+  round: number
+  economyBonusSlots: number
+  housingBonusSlots: number
+  armyCeiling: number
+}
+
+export interface AiTaxDoctrine {
+  maximumRate: TaxRate
+  /** Minimum projected food runway required before using maximum taxation. */
+  maximumRateFoodRunway: number
+  /** Gold runway below which a food-secure domain should raise more revenue. */
+  desiredGoldRunway: number
 }
 
 export interface AiProfileRules {
@@ -182,6 +231,8 @@ export interface AiProfileRules {
   preferredOpenings: AiOpeningKind[]
   doctrine: AiDoctrine
   settlement: AiSettlementDoctrine
+  developmentMilestones: AiDevelopmentMilestone[]
+  taxation: AiTaxDoctrine
   riskThreshold: number
   earliestOffensiveRound: number
   strategicReserve: Partial<Record<ResourceId, number>>

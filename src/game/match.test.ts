@@ -39,6 +39,7 @@ import {
   upkeepFor,
   ungarrisonTower,
   workforceFor,
+  workerSeverity,
 } from './match'
 import type { MapScenario } from './scenario'
 
@@ -695,7 +696,7 @@ describe('match rules', () => {
     const result = moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 8, row: 0 })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.state.ordersRemaining).toBe(7)
+    expect(result.state.ordersRemaining).toBe(6)
     expect(result.state.scenario.cells[0][0].object).toMatchObject({ type: 'squad', ownerId: 'player' })
     expect(result.state.scenario.cells[0][8].object).toMatchObject({ type: 'building', hitPoints: 7 })
   })
@@ -724,7 +725,7 @@ describe('match rules', () => {
     expect(militiaState.scenario.cells[0][2].object).toBeUndefined()
     expect(knightState.scenario.cells[0][2].object).toMatchObject({ type: 'squad', units: { knights: 1 } })
     const knight = knightState.scenario.cells[0][2].object
-    expect(knight?.type === 'squad' ? squadHealth(knight) : 0).toBeCloseTo(1.3)
+    expect(knight?.type === 'squad' ? squadHealth(knight) : 0).toBeCloseTo(2.284)
   })
 
   it('blocks ranged attacks through forests and beyond archer range', () => {
@@ -1218,7 +1219,7 @@ describe('match rules', () => {
     scenario.cells[0][7] = { ...scenario.cells[0][7], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
     const fired = towerAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 7, row: 0 })
     if (!fired.ok) throw new Error('tower attack failed')
-    expect(fired.state.ordersRemaining).toBe(7)
+    expect(fired.state.ordersRemaining).toBe(6)
     expect(fired.state.scenario.cells[0][7].object).toMatchObject({ hitPoints: 7 })
 
     const destructionScenario = createScenario()
@@ -1317,5 +1318,44 @@ describe('match rules', () => {
 
     const enemyGate = createGateScenario({ militia: 1, spearmen: 0, archers: 0, knights: 0 }, 'npc-2')
     expect(moveOrAttack(createMatch(enemyGate), { column: 1, row: 4 }, { column: 3, row: 4 })).toMatchObject({ ok: false, reason: 'not-adjacent' })
+  })
+})
+
+describe('workerSeverity', () => {
+  const assignment = (overrides: Partial<{ kind: BuildingKind; required: number; assigned: number; blockedReason: 'missing-support' | 'idle-support' | 'no-workers' }>) => ({
+    kind: 'mill' as BuildingKind,
+    position: { column: 0, row: 0 },
+    required: 2,
+    assigned: 2,
+    ...overrides,
+  })
+
+  it('is null when fully staffed', () => {
+    expect(workerSeverity(assignment({ assigned: 2, required: 2 }))).toBeNull()
+  })
+
+  it('is null when overstaffed', () => {
+    expect(workerSeverity(assignment({ assigned: 3, required: 2 }))).toBeNull()
+  })
+
+  it('is stopped when no workers are assigned', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2 }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by no-workers', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2, blockedReason: 'no-workers' }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by missing support, regardless of assigned count', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2, blockedReason: 'missing-support' }))).toBe('stopped')
+    expect(workerSeverity(assignment({ assigned: 1, required: 2, blockedReason: 'missing-support' }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by idle support', () => {
+    expect(workerSeverity(assignment({ assigned: 1, required: 1, blockedReason: 'idle-support' }))).toBe('stopped')
+  })
+
+  it('is reduced when understaffed but producing', () => {
+    expect(workerSeverity(assignment({ assigned: 1, required: 2 }))).toBe('reduced')
   })
 })

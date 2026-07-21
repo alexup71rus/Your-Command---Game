@@ -24,9 +24,16 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
   const targetIndex = to.row * columns + to.column
   const previous = new Int32Array(rows * columns).fill(-1)
   const distances = new Float64Array(rows * columns).fill(Number.POSITIVE_INFINITY)
-  const queue: Array<{ index: number; cost: number; order: number }> = []
+  const heuristic = (index: number) => {
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    return Math.abs(to.column - column) + Math.abs(to.row - row)
+  }
+  const queue: Array<{ index: number; cost: number; priority: number; order: number }> = []
   let insertionOrder = 0
-  const comesBefore = (first: (typeof queue)[number], second: (typeof queue)[number]) => first.cost < second.cost || (first.cost === second.cost && first.order < second.order)
+  const comesBefore = (first: (typeof queue)[number], second: (typeof queue)[number]) => first.priority < second.priority
+    || (first.priority === second.priority && (first.cost < second.cost
+      || (first.cost === second.cost && first.order < second.order)))
   const push = (entry: (typeof queue)[number]) => {
     queue.push(entry)
     let child = queue.length - 1
@@ -58,7 +65,7 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
 
   distances[sourceIndex] = 0
   previous[sourceIndex] = sourceIndex
-  push({ index: sourceIndex, cost: 0, order: insertionOrder++ })
+  push({ index: sourceIndex, cost: 0, priority: heuristic(sourceIndex), order: insertionOrder++ })
 
   while (queue.length > 0) {
     const currentEntry = pop()
@@ -76,7 +83,7 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
         if (cost < distances[nextIndex]) {
           distances[nextIndex] = cost
           previous[nextIndex] = currentIndex
-          push({ index: nextIndex, cost, order: insertionOrder++ })
+          push({ index: nextIndex, cost, priority: cost + heuristic(nextIndex), order: insertionOrder++ })
         }
       }
 
@@ -92,7 +99,12 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
         if (passageCost >= distances[landingIndex]) continue
         distances[landingIndex] = passageCost
         previous[landingIndex] = currentIndex
-        push({ index: landingIndex, cost: passageCost, order: insertionOrder++ })
+        push({
+          index: landingIndex,
+          cost: passageCost,
+          priority: passageCost + heuristic(landingIndex),
+          order: insertionOrder++,
+        })
       }
     }
   }

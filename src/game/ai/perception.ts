@@ -8,12 +8,17 @@ import { createAiMemory, type AiContact, type AiMemory } from './model'
 
 const contactKey = (contact: Pick<AiContact, 'ownerId' | 'kind' | 'position'>) => `${contact.ownerId}:${contact.kind}:${contact.position.column}:${contact.position.row}`
 
-function redactedDomain(): DomainEconomy {
+function redactedDomain(diverseDiet: boolean): DomainEconomy {
   return {
     resources: Object.fromEntries(resourceIds.map((resource) => [resource, 0])) as DomainEconomy['resources'],
     population: 0,
     taxRate: 'moderate',
-    diverseDiet: false,
+    // Stocks, population and production stay private. The already-active diet
+    // combat modifier is observable, however: replacing it with either fixed
+    // value makes speculative casualties differ from authoritative casualties.
+    // That can change whether a knight survives and therefore the order cost of
+    // the next movement in the same queued turn.
+    diverseDiet,
     marketActivity: {
       bought: Object.fromEntries(tradeableResources.map((resource) => [resource, 0])) as DomainEconomy['marketActivity']['bought'],
       sold: Object.fromEntries(tradeableResources.map((resource) => [resource, 0])) as DomainEconomy['marketActivity']['sold'],
@@ -84,6 +89,9 @@ export function createAiPerception(
         return object === cell.object ? cell : { ...cell, object }
       }))
     : state.scenario.cells
-  const domains = Object.fromEntries(Object.entries(state.domains).map(([participantId, domain]) => [participantId, participantId === ownerId ? domain : redactedDomain()]))
+  const domains = Object.fromEntries(Object.entries(state.domains).map(([participantId, domain]) => [
+    participantId,
+    participantId === ownerId ? domain : redactedDomain(domain.diverseDiet),
+  ]))
   return { state: { ...state, scenario: { ...state.scenario, cells }, domains }, memory, visibility }
 }

@@ -1,4 +1,5 @@
 import { aiBuildingZoneByKind, aiStrategicConfig } from '../../../config/ai'
+import { gameConfig } from '../../../config/game'
 import { resourceIds, type ResourceAmount } from '../../../config/rules'
 import type { BuildingKind, ResourceId } from '../../map'
 import type { MatchState } from '../../match'
@@ -48,11 +49,33 @@ export function isPlannedFortification(memory: AiMemory | undefined, position: C
   return Boolean(outpost && samePosition(outpost, position))
 }
 
+export function isPlannedFortificationGate(memory: AiMemory | undefined, position: CellPosition) {
+  return Boolean(memory?.settlementPlan?.fortification?.lines.some((line) => samePosition(line.gate, position)))
+}
+
 export function minimumFieldArmySize(profile: AiProfileRules) {
   return Math.max(
     aiStrategicConfig.minimumFieldArmySize,
     Math.ceil(profile.doctrine.forceTargets.probe.minimum),
   )
+}
+
+export function developmentMilestoneFor(profile: AiProfileRules, round: number) {
+  return [...profile.developmentMilestones]
+    .sort((first, second) => first.round - second.round)
+    .reduce((current, milestone) => milestone.round <= round ? milestone : current,
+      profile.developmentMilestones[0])
+}
+
+/**
+ * A profile-specific campaign ceiling. It is a pacing rule, not a recruitment
+ * target: forecasts, workforce and upkeep still decide whether another batch
+ * is sustainable. Active castle defense may temporarily draft beyond it.
+ */
+export function armyCeilingFor(profile: AiProfileRules, round: number, emergencyDraft = false) {
+  const base = developmentMilestoneFor(profile, round).armyCeiling
+  return Math.min(gameConfig.army.capacity,
+    base + (emergencyDraft ? aiStrategicConfig.recruitment.emergencyDraftAllowance : 0))
 }
 
 export function forceTargetFor(
@@ -102,4 +125,32 @@ export function overdriveBonusSlots(state: MatchState, memory: AiMemory | undefi
   const tier = overdriveTier(state, memory)
   if (tier <= 0) return 0
   return aiStrategicConfig.overdrive.bonusSlotsPerTier[tier - 1] ?? 0
+}
+
+/**
+ * Long matches must not stop at the opening blueprint. Stable milestone slots
+ * express deliberate settlement maturity; stockpile overdrive remains an
+ * earlier optional reward. Taking the maximum prevents both systems from
+ * multiplying into runaway construction.
+ */
+export function developmentBonusSlots(
+  state: MatchState,
+  profile: AiProfileRules,
+  memory: AiMemory | undefined,
+) {
+  // A reached campaign milestone is permanent settlement maturity. Tying it
+  // to `stableTurns` made the cap shrink during recovery, so the AI could tear
+  // down a productive mill and orphan the farms it had unlocked after round
+  // 100. Only the optional stockpile overdrive is stability-gated.
+  const milestoneSlots = developmentMilestoneFor(profile, state.turn).economyBonusSlots
+  return Math.max(milestoneSlots, overdriveBonusSlots(state, memory))
+}
+
+export function developmentHousingBonusSlots(
+  state: MatchState,
+  profile: AiProfileRules,
+  memory: AiMemory | undefined,
+) {
+  const milestoneSlots = developmentMilestoneFor(profile, state.turn).housingBonusSlots
+  return Math.max(milestoneSlots, overdriveBonusSlots(state, memory))
 }
