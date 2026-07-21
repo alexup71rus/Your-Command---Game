@@ -62,6 +62,7 @@ import type { AiProfileId } from './game/scenario'
 import { calculateAiPlan, resetAiPlanner } from './game/ai/workerClient'
 import { aiCommandTargetPosition, executeAiCommand, rememberAiCommandFailure } from './game/ai/commands'
 import { useLocalization } from './hooks/useLocalization'
+import { useAutoCamera } from './hooks/useAutoCamera'
 import { useMapGrid } from './hooks/useMapGrid'
 import { useMusic, type MusicScene } from './hooks/useMusic'
 import { useNavigationHint } from './hooks/useNavigationHint'
@@ -127,6 +128,8 @@ export function App() {
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null)
   const [castleDraft, setCastleDraft] = useState<CellPosition | null>(null)
   const [cameraCommand, setCameraCommand] = useState<CameraCommand | null>(null)
+  const [combatEffect, setCombatEffect] = useState<({ key: number } & CellPosition) | null>(null)
+  const [spectatorParticipantId, setSpectatorParticipantId] = useState<string | null>(null)
   const [unitAnimation, setUnitAnimation] = useState<{ key: number; from: CellPosition; to: CellPosition } | null>(null)
   const [territoriesHeld, setTerritoriesHeld] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('buildings')
@@ -167,6 +170,7 @@ export function App() {
   }, [constrainParticipants, savedMaps])
   const burstId = useRef(0)
   const focusId = useRef(0)
+  const combatEffectId = useRef(0)
   const unitAnimationId = useRef(0)
   const lastBurstVariant = useRef<ClickBurstVariant | null>(null)
   const combatMusicTimer = useRef<number | null>(null)
@@ -176,6 +180,7 @@ export function App() {
   const opponentTurn = Boolean(match && (spectatorMatch || match.activeParticipantId !== match.playerId))
   const { locale, setLocale, text, status: localizationStatus, retry: retryLocalization } = useLocalization()
   const { visible: showGrid, setVisible: setShowGrid } = useMapGrid()
+  const { enabled: autoCameraEnabled, setEnabled: setAutoCameraEnabled } = useAutoCamera()
   const { visible: navigationHintVisible, markLearned } = useNavigationHint()
   const { enabled: soundEnabled, volume, play: playSound, setVolume, toggle: toggleSound } = useSoundEffects()
   const matchCells = match?.scenario.cells
@@ -279,6 +284,7 @@ export function App() {
       setSelectedRegionId(null)
       setCastleDraft(null)
       setSelectedCell(null)
+      setSpectatorParticipantId(null)
       cancelAutoMove()
       setPendingAction(null)
       setCommandFeedback(null)
@@ -349,6 +355,14 @@ export function App() {
     window.setTimeout(() => setBursts((current) => current.filter((burst) => burst.id !== id)), effect.lifetimeMs)
   }, [])
 
+  const createCombatEffect = useCallback((position: CellPosition) => {
+    setCombatEffect({ key: ++combatEffectId.current, ...position })
+  }, [])
+
+  const renderCombatEffect = useCallback(({ clientX, clientY }: Pick<MapClickRequest, 'clientX' | 'clientY'>) => {
+    createBurst(clientX, clientY, 'combat')
+  }, [createBurst])
+
   const focusRegion = useCallback((regionId: string) => {
     const region = scenario?.regions.find((candidate) => candidate.id === regionId)
     if (region) setCameraCommand({ kind: 'cell', ...region.center, zoom: gameConfig.camera.foundingZoom, key: ++focusId.current })
@@ -365,6 +379,7 @@ export function App() {
     setCastleDraft(null)
     setContextMenu(null)
     setSelectedCell(null)
+    setSpectatorParticipantId(null)
     cancelAutoMove()
     setPendingAction(null)
     setCommandFeedback(null)
@@ -448,6 +463,7 @@ export function App() {
     setContextMenu(null)
     setActiveTab('buildings')
     setSelectedCell(null)
+    setSpectatorParticipantId(null)
     cancelAutoMove()
     setPendingAction(null)
     setCommandFeedback(null)
@@ -486,6 +502,16 @@ export function App() {
   }, [markRecentCombat, playSound, text])
 
   const handleMapClick = useCallback((request: MapClickRequest) => {
+    if (phase === 'playing' && match && spectatorMatch) {
+      cancelAutoMove()
+      const position = { column: request.column, row: request.row }
+      const object = objectAt(match, position)
+      createBurst(request.clientX, request.clientY, 'map')
+      playSound('map')
+      setSelectedCell(object ? position : null)
+      setSpectatorParticipantId(object?.ownerId ?? null)
+      return
+    }
     if (phase === 'playing' && opponentTurn) return
     cancelAutoMove()
     const position = { column: request.column, row: request.row }
@@ -600,7 +626,7 @@ export function App() {
       return
     }
     setCastleDraft(position)
-  }, [applyCommand, cancelAutoMove, createBurst, currentVisibleObjectAt, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId, text])
+  }, [applyCommand, cancelAutoMove, createBurst, currentVisibleObjectAt, match, opponentTurn, pendingAction, phase, playSound, scenario, selectRegion, selectedCell, selectedRegionId, spectatorMatch, text])
 
   const confirmFounding = useCallback(() => {
     if (!scenario || !selectedRegionId || !castleDraft || !isCastleSiteValid(scenario, selectedRegionId, castleDraft)) return
@@ -943,10 +969,10 @@ export function App() {
             if (command.type === 'move-or-attack' && working.lastEvent?.kind === 'moved') {
               setUnitAnimation({ key: ++unitAnimationId.current, from: command.from, to: command.to })
             }
-            if (targetPosition && (enteredSight || threatensPlayer || (spectator && combatEvent))) setCameraCommand({ kind: 'cell', ...targetPosition, key: ++focusId.current })
+            if (autoCameraEnabled && targetPosition && (enteredSight || threatensPlayer || (spectator && combatEvent))) setCameraCommand({ kind: 'cell', ...targetPosition, key: ++focusId.current })
             if (combatEvent) {
               markRecentCombat()
-              createBurst(window.innerWidth / 2, window.innerHeight / 2, 'combat')
+              if (targetPosition) createCombatEffect(targetPosition)
               playSound('attack')
             } else playSound('action')
             await pause(gameConfig.turn.autoMoveStepDelayMs)
@@ -979,7 +1005,7 @@ export function App() {
       controller.abort()
       setAiSlow(false)
     }
-  }, [createBurst, match?.activeParticipantId, match?.turn, markRecentCombat, playSound, text])
+  }, [autoCameraEnabled, createCombatEffect, match?.activeParticipantId, match?.turn, markRecentCombat, playSound, text])
 
   useEffect(() => {
     if (!commandFeedback) return
@@ -1003,7 +1029,7 @@ export function App() {
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} participantMaximum={setupParticipantMaximum} savedMapCount={savedMaps.length} onParticipantChange={changeParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />
         )}
         {overlay === 'opponents' && <OpponentSetupModal text={text.opponents} hasHumanPlayer={hasHumanPlayer} selected={opponentProfileIds} selectedTeamIds={participantTeamIds} maxParticipants={selectedMapParticipantLimit} onClose={() => setOverlay(null)} onConfirm={confirmOpponents} />}
-        {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} />}
+        {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} />}
         {overlay === 'saved-games' && <SavedGamesModal locale={locale} text={text} saves={savedGames} showSaveAction={false} canSave={false} busy={savedGamesBusy} feedback={savedGamesFeedback} onClose={closeSavedGames} onSave={saveCurrentGame} onLoad={requestLoadGame} onDelete={removeSavedGame} />}
         {pendingLoadId && <ConfirmDialog title={text.savedGames.loadTitle} description={text.savedGames.loadDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.loadConfirm} onCancel={() => setPendingLoadId(null)} onConfirm={() => { const id = pendingLoadId; setPendingLoadId(null); void loadGame(id) }} />}
       </div>
@@ -1043,7 +1069,8 @@ export function App() {
     : null
   const selectedMapObject = match && selectedCell ? visibleObjectAt(match.scenario.cells, visibility, match.playerId, selectedCell) : null
   const selectedObjectConcealed = Boolean(match && selectedCell && objectAt(match, selectedCell) && !selectedMapObject)
-  const interfaceSelectedCell = selectedObjectConcealed ? null : selectedCell
+  const visibleSpectatorParticipantId = spectatorMatch && selectedMapObject?.ownerId === spectatorParticipantId ? spectatorParticipantId : null
+  const interfaceSelectedCell = selectedObjectConcealed || (spectatorMatch && !visibleSpectatorParticipantId) ? null : selectedCell
   const contextCell = contextMenu ? activeScenario.cells[contextMenu.row]?.[contextMenu.column] : null
   const canOfferAutoMove = Boolean(
     contextMenu
@@ -1083,11 +1110,11 @@ export function App() {
 
   return (
     <main className={`game-shell phase-${phase}${spectatorMatch ? ' spectator-match' : ''}`} onPointerDownCapture={handleInterfacePointerDown}>
-      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} ariaLabel={text.interface.mapAria} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
+      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
       {phase === 'playing' && match && <>
-        <GameHud match={match} text={text} opponentTurn={opponentTurn} aiBusy={aiBusy} aiSlow={aiSlow} spectator={spectatorMatch} previewOrderCost={pendingOrderCost || hoveredOrderCost} onEndTurn={finishTurn} />
+        <GameHud match={match} text={text} opponentTurn={opponentTurn} aiBusy={aiBusy} aiSlow={aiSlow} spectator={spectatorMatch} spectatorParticipantId={visibleSpectatorParticipantId} previewOrderCost={pendingOrderCost || hoveredOrderCost} onEndTurn={finishTurn} />
         {!spectatorMatch && <GameCommandDock match={match} selectedCell={interfaceSelectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onOrderPreview={setHoveredOrderCost} onTabChange={(tab) => { cancelAutoMove(); setActiveTab(tab); setSelectedCell(null); setPendingAction(null); setCommandFeedback(null); setHoveredOrderCost(0) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onDismiss={startDismiss} onCompositionChange={changeComposition} onConfirmDismiss={confirmDismiss} onTowerAction={startTowerAction} onCancelAction={() => { setPendingAction(null); setHoveredOrderCost(0) }} onSetTaxRate={changeTaxRate} onTrade={tradeAtMarket} />}
         {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
       </>}
@@ -1110,7 +1137,7 @@ export function App() {
 
       {match && match.status !== 'playing' && !outcomeDismissed && <GameOutcomeModal text={text.game} outcome={match.status} spectatorWinner={spectatorWinner} onContinue={() => setOutcomeDismissed(true)} />}
 
-      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onReturnToMenu={returnToMainMenu} onOpenSavedGames={() => openSavedGames(true)} />}
+      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} onReturnToMenu={returnToMainMenu} onOpenSavedGames={() => openSavedGames(true)} />}
       {overlay === 'saved-games' && <SavedGamesModal locale={locale} text={text} saves={savedGames} showSaveAction={!spectatorMatch} canSave={!opponentTurn} busy={savedGamesBusy} feedback={savedGamesFeedback} onClose={closeSavedGames} onSave={saveCurrentGame} onLoad={requestLoadGame} onDelete={removeSavedGame} />}
       {pendingLoadId && <ConfirmDialog title={text.savedGames.loadTitle} description={text.savedGames.loadDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.loadConfirm} onCancel={() => setPendingLoadId(null)} onConfirm={() => { const id = pendingLoadId; setPendingLoadId(null); void loadGame(id) }} />}
     </main>

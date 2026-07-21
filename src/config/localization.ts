@@ -85,6 +85,7 @@ export interface LocaleDictionary {
     longThinking: string
     yourTurn: string
     spectator: string
+    viewingRuler: string
     aiPhase: Record<AiStrategicPhase, string>
   }
   tabs: Array<{ id: TabId; label: string }>
@@ -251,6 +252,10 @@ export interface LocaleDictionary {
     gridDescription: string
     gridEnabled: string
     gridDisabled: string
+    autoCamera: string
+    autoCameraDescription: string
+    autoCameraEnabled: string
+    autoCameraDisabled: string
     mainMenu: string
     mainMenuDescription: string
     saveGame: string

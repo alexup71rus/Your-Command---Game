@@ -664,6 +664,20 @@ describe('match rules', () => {
     expect(result.state.scenario.cells[1][6].object).toMatchObject({ type: 'squad', ownerId: 'player' })
   })
 
+  it('keeps a surviving squad in place after its final melee strike', () => {
+    const scenario = createScenario()
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 3, spearmen: 0, archers: 0, knights: 0 } } }
+    scenario.cells[4][5] = { ...scenario.cells[4][5], object: { type: 'squad', ownerId: 'npc-2', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+
+    const result = moveOrAttack(createMatch(scenario), { column: 4, row: 4 }, { column: 5, row: 4 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.lastEvent).toMatchObject({ kind: 'destroyed', position: { column: 5, row: 4 } })
+    expect(result.state.scenario.cells[4][4].object).toMatchObject({ type: 'squad', ownerId: 'player' })
+    expect(result.state.scenario.cells[4][5].object).toBeUndefined()
+  })
+
   it('reduces ordinary squad damage against walls', () => {
     const scenario = createScenario()
     scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 10, spearmen: 0, archers: 0, knights: 0 } } }

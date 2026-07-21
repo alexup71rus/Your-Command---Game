@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { aiAvatarPaths } from '../config/ai'
 import { gameConfig } from '../config/game'
 import { buildingRules, troopKinds } from '../config/rules'
@@ -42,6 +42,8 @@ interface GridCanvasProps {
   actionPreview?: { kind: 'building'; building: BuildingKind } | { kind: 'squad'; units: TroopComposition } | { kind: 'target' } | null
   isActionCellValid?: (position: CellPosition) => boolean
   cameraCommand?: CameraCommand | null
+  combatEffect?: ({ key: number } & CellPosition) | null
+  onCombatEffect?: (request: Pick<MapClickRequest, 'clientX' | 'clientY'>) => void
   onContextRequest: (request: MapContextRequest) => void
   onMapClick: (request: MapClickRequest) => void
   onNavigate: (skill: 'move' | 'zoom') => void
@@ -75,8 +77,12 @@ export function GridCanvas(props: GridCanvasProps) {
   const propsRef = useRef(props)
   const requestDrawRef = useRef<() => void>(() => undefined)
   const focusRef = useRef<(command: CameraCommand) => void>(() => undefined)
+  const cellClientPointRef = useRef<(position: CellPosition) => Point | null>(() => null)
+  const lastCombatEffectKeyRef = useRef(0)
   const opponentImagesRef = useRef(new Map<AiProfileId, HTMLImageElement>())
   const cameraCommand = props.cameraCommand
+  const combatEffect = props.combatEffect
+  const onCombatEffect = props.onCombatEffect
   const initialCameraCommandRef = useRef(cameraCommand)
   const mapRows = props.map.length
   const mapColumns = props.map[0]?.length ?? 0
@@ -92,9 +98,17 @@ export function GridCanvas(props: GridCanvasProps) {
       opponentImagesRef.current.set(profileId, image)
     })
   }, [props.foundingOpponents])
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (cameraCommand) focusRef.current(cameraCommand)
   }, [cameraCommand])
+
+  useLayoutEffect(() => {
+    if (!combatEffect || combatEffect.key === lastCombatEffectKeyRef.current) return
+    const point = cellClientPointRef.current(combatEffect)
+    if (!point) return
+    lastCombatEffectKeyRef.current = combatEffect.key
+    onCombatEffect?.({ clientX: point.x, clientY: point.y })
+  }, [combatEffect, onCombatEffect])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -135,6 +149,12 @@ export function GridCanvas(props: GridCanvasProps) {
         : clampCamera({ x: (command.column + 0.5) * CELL_SIZE, y: (command.row + 0.5) * CELL_SIZE, zoom: command.zoom ?? gameConfig.camera.foundingZoom }, viewport, world)
       sessionMinimumZoom = command.kind === 'overview' ? camera.zoom : undefined
       requestDraw()
+    }
+    cellClientPointRef.current = (position) => {
+      if (position.column < 0 || position.column >= columns || position.row < 0 || position.row >= rows) return null
+      const point = worldToScreen({ x: (position.column + 0.5) * CELL_SIZE, y: (position.row + 0.5) * CELL_SIZE }, camera, viewport)
+      const bounds = canvas.getBoundingClientRect()
+      return { x: bounds.left + point.x, y: bounds.top + point.y }
     }
 
     const drawCastle = (x: number, y: number, size: number, color: string, ghost = false) => {
@@ -1024,7 +1044,7 @@ export function GridCanvas(props: GridCanvasProps) {
     canvas.addEventListener('pointerleave', onPointerLeave); canvas.addEventListener('wheel', onWheel, { passive: false }); canvas.addEventListener('contextmenu', onContextMenu)
     resizeObserver.observe(canvas)
     return () => {
-      resizeObserver.disconnect(); requestDrawRef.current = () => undefined; focusRef.current = () => undefined
+      resizeObserver.disconnect(); requestDrawRef.current = () => undefined; focusRef.current = () => undefined; cellClientPointRef.current = () => null
       canvas.removeEventListener('pointerdown', onPointerDown); canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', stopDragging); canvas.removeEventListener('pointercancel', stopDragging); canvas.removeEventListener('lostpointercapture', stopDragging)
       canvas.removeEventListener('pointerleave', onPointerLeave); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('contextmenu', onContextMenu)

@@ -807,15 +807,14 @@ function resolveAttack(state: MatchState, from: CellPosition, to: CellPosition, 
   if (defender.type === 'squad') {
     const nextDefender = applySquadDamage(defender, squadDamage(state, attacker, fromCell) / combatRules.melee.defenderDamageDivisor)
     const nextAttacker = applySquadDamage(attacker, squadDamage(state, defender, targetCell) / combatRules.melee.retaliationDamageDivisor)
-    const attackerSurvives = nextAttacker !== null
     const defenderSurvives = nextDefender !== null
     const defenderLosses = squadSize(defender) - (nextDefender ? squadSize(nextDefender) : 0)
     const next = withTwoCells(
       state,
       from,
       to,
-      { ...fromCell, object: attackerSurvives && defenderSurvives ? nextAttacker : undefined },
-      { ...targetCell, object: defenderSurvives ? nextDefender : attackerSurvives ? nextAttacker : undefined },
+      { ...fromCell, object: nextAttacker ?? undefined },
+      { ...targetCell, object: nextDefender ?? undefined },
       { kind: defenderSurvives ? 'attacked' : 'destroyed', position: to, amount: defenderLosses },
     )
     return next

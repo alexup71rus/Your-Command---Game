@@ -30,7 +30,7 @@ const en: LocaleDictionary = {
     chooseSite: 'Choose a cell on the map', validSite: 'Suitable castle site', invalidSite: 'A castle cannot be founded here', confirm: 'Confirm founding',
   },
   hud: {
-    state: 'Domain status', resources: 'Resources', people: 'Civilians', army: 'Recruited troops', turn: 'Turn', ordersAvailable: 'Orders available', workers: 'Employed', freePeople: 'Free', diverseDiet: 'Varied diet', thinking: 'is planning', longThinking: 'is evaluating a complex position', yourTurn: 'Your turn', spectator: 'Spectator mode',
+    state: 'Domain status', resources: 'Resources', people: 'Civilians', army: 'Recruited troops', turn: 'Turn', ordersAvailable: 'Orders available', workers: 'Employed', freePeople: 'Free', diverseDiet: 'Varied diet', thinking: 'is planning', longThinking: 'is evaluating a complex position', yourTurn: 'Your turn', spectator: 'Spectator mode', viewingRuler: 'Ruler statistics',
     aiPhase: { recovery: 'is restoring the economy', survival: 'is securing supplies', expansion: 'is developing the domain', mobilization: 'is mustering troops', assault: 'is advancing', regroup: 'is regrouping', defense: 'is defending the castle' },
   },
   tabs: [
@@ -80,7 +80,7 @@ const en: LocaleDictionary = {
     leaveTitle: 'Return to the main menu?', leaveDescription: 'Changes made after the latest save will be lost.', leaveAction: 'Leave',
   },
   settings: {
-    title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately', grid: 'Map grid', gridDescription: 'Show cell borders and a stronger line every ten rows', gridEnabled: 'Show', gridDisabled: 'Hide', mainMenu: 'Main menu', mainMenuDescription: 'Return to map selection', saveGame: 'Save and load', saveGameDescription: 'Create new slots and return to saved games', manageGames: 'Open games',
+    title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately', grid: 'Map grid', gridDescription: 'Show cell borders and a stronger line every ten rows', gridEnabled: 'Show', gridDisabled: 'Hide', autoCamera: 'Automatic camera', autoCameraDescription: 'Move the camera to visible AI actions and battles', autoCameraEnabled: 'Follow', autoCameraDisabled: 'Do not follow', mainMenu: 'Main menu', mainMenuDescription: 'Return to map selection', saveGame: 'Save and load', saveGameDescription: 'Create new slots and return to saved games', manageGames: 'Open games',
   },
   savedGames: {
     kicker: 'GAMES', title: 'Save and load', close: 'Close saved games', empty: 'There are no saved games yet.', saveCurrent: 'Current game', saveCurrentDescription: 'Create a separate slot on the current turn.', saveUnavailable: 'Saving will be available after the opponent turn.', save: 'Save', loadSection: 'Load game', loadSectionDescription: 'The most recent saves are shown first.', slots: 'Slots', latest: 'Latest', load: 'Load', remove: 'Delete', turn: 'Turn', updated: 'Saved', saved: 'Game saved', saveFailed: 'Could not save the game', loadFailed: 'This save is corrupted, unavailable, or belongs to an incompatible game version', readFailed: 'Could not read the saved game list', deleteFailed: 'Could not delete the saved game', loadTitle: 'Load this game?', loadDescription: 'Unsaved progress in the current game will be lost.', loadConfirm: 'Load', deleteTitle: 'Delete this save?', deleteDescription: 'This progress cannot be recovered.',

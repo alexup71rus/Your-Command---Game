@@ -254,7 +254,8 @@ describe('authored AI combat scenarios', () => {
 
     expect(run.steps[0]?.command, summary).toEqual({ type: 'move-or-attack', from: attacker, to: weak })
     expect(run.steps[0]?.factors.some((factor) => factor.startsWith('finisher:')), summary).toBe(true)
-    expect(objectAt(run.state, weak), summary).toMatchObject({ type: 'squad', ownerId })
+    expect(objectAt(run.state, attacker), summary).toMatchObject({ type: 'squad', ownerId })
+    expect(objectAt(run.state, weak), summary).toBeUndefined()
   })
 
   it('uses seeded tactical variety for a cheap building on the march instead of replaying one fixed choice', () => {

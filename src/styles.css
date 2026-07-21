@@ -657,6 +657,31 @@ small { font-size: max(10px, .833em); }
   height: 100%;
 }
 
+.hud-ruler {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 142px;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border-right: 1px solid rgba(211, 185, 112, 0.14);
+}
+
+.hud-ruler img {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 2px solid rgba(220, 190, 105, .4);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.hud-ruler span { min-width: 0; }
+.hud-ruler small,
+.hud-ruler strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-ruler small { color: #7f8a7e; font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.hud-ruler strong { margin-top: 2px; color: #d9c78c; font: 500 11px Georgia, serif; }
+
 .compact-status-list {
   display: flex;
   flex: 1;
@@ -1126,7 +1151,8 @@ small { font-size: max(10px, .833em); }
 
 .language-options button,
 .settings-sound-toggle,
-.settings-grid-toggle {
+.settings-grid-toggle,
+.settings-camera-toggle {
   min-height: 36px;
   border: 1px solid rgba(185, 198, 176, 0.14);
   border-radius: 7px;
@@ -1161,7 +1187,8 @@ small { font-size: max(10px, .833em); }
   font-size: 10px;
 }
 
-.settings-grid-toggle {
+.settings-grid-toggle,
+.settings-camera-toggle {
   display: flex;
   min-width: 112px;
   align-items: center;
@@ -1185,6 +1212,31 @@ small { font-size: max(10px, .833em); }
   border-color: rgba(220, 190, 105, .42);
   color: #ead598;
   background: rgba(220, 190, 105, .09);
+}
+
+.settings-camera-toggle.active {
+  border-color: rgba(220, 190, 105, .42);
+  color: #ead598;
+  background: rgba(220, 190, 105, .09);
+}
+
+.camera-toggle-icon {
+  position: relative;
+  width: 17px;
+  height: 13px;
+  border: 1px solid currentColor;
+  border-radius: 50% / 60%;
+}
+
+.camera-toggle-icon::after {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
 }
 
 .settings-grid-toggle.active .grid-toggle-icon {
@@ -1796,7 +1848,11 @@ small { font-size: max(10px, .833em); }
 }
 
 .phase-playing .turn-panel { bottom: 224px; width: min(450px, calc(100% - 80px)); }
-.phase-playing.spectator-match .turn-panel { bottom: 20px; }
+.phase-playing.spectator-match .turn-panel {
+  bottom: 20px;
+  border-bottom-color: rgba(211, 185, 112, 0.28);
+  border-radius: 12px;
+}
 .phase-playing .map-tools { bottom: 20px; }
 .phase-playing .current-turn { flex-basis: 92px; }
 .phase-playing .order-status { padding-inline: 12px; }
@@ -2712,6 +2768,9 @@ small { font-size: max(10px, .833em); }
     grid-template-columns: 1fr;
     width: calc(100% - 16px);
   }
+
+  .hud-ruler { flex-basis: 43px; padding-right: 8px; }
+  .hud-ruler span { display: none; }
 
   .army-panel {
     display: none;

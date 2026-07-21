@@ -12,12 +12,13 @@ interface GameHudProps {
   aiBusy: boolean
   aiSlow: boolean
   spectator: boolean
+  spectatorParticipantId?: string | null
   previewOrderCost: number
   onEndTurn: () => void
 }
 
-export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, spectator, previewOrderCost, onEndTurn }: GameHudProps) {
-  const domainId = spectator ? match.activeParticipantId : match.playerId
+export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, spectator, spectatorParticipantId, previewOrderCost, onEndTurn }: GameHudProps) {
+  const domainId = spectator ? spectatorParticipantId ?? match.activeParticipantId : match.playerId
   const domain = match.domains[domainId]
   const forecast = useMemo(() => turnEconomyForecastFor(match, domainId), [domainId, match])
   const turnDelta = Object.fromEntries(resourceIds.map((resource) => [resource, (forecast?.resources[resource] ?? domain.resources[resource]) - domain.resources[resource]])) as Record<(typeof resourceIds)[number], number>
@@ -33,6 +34,11 @@ export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, spectator, 
     ? aiParticipantDisplayName(text.opponents, match.scenario.participants, activeParticipant.id)
     : undefined
   const activeAiPhase = activeParticipant?.kind === 'ai' ? match.aiMemory[activeParticipant.id]?.phase : undefined
+  const viewedParticipant = spectator ? match.scenario.participants.find((participant) => participant.id === domainId) : undefined
+  const viewedProfileId = viewedParticipant?.kind === 'ai' ? viewedParticipant.profileId : undefined
+  const viewedParticipantName = viewedParticipant?.kind === 'ai'
+    ? aiParticipantDisplayName(text.opponents, match.scenario.participants, viewedParticipant.id)
+    : undefined
   const activeAiStatus = aiSlow
     ? text.hud.longThinking
     : activeAiPhase
@@ -40,9 +46,10 @@ export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, spectator, 
       : aiBusy ? text.hud.thinking : text.game.opponentTurn
   return (
     <>
-      <header className="hud" aria-label={text.hud.state}>
-        <section className="hud-panel resource-panel" aria-label={text.hud.resources}>
+      {(!spectator || spectatorParticipantId) && <header className="hud" aria-label={text.hud.state}>
+        <section className="hud-panel resource-panel" aria-label={viewedParticipantName ? `${text.hud.resources}: ${viewedParticipantName}` : text.hud.resources}>
           <div className="resource-panel-content">
+            {viewedParticipant && viewedProfileId && viewedParticipantName && <div className="hud-ruler" title={viewedParticipantName}><img src={`${import.meta.env.BASE_URL}${aiAvatarPaths[viewedProfileId]}`} alt="" style={{ borderColor: viewedParticipant.color }} /><span><small>{text.hud.viewingRuler}</small><strong>{viewedParticipantName}</strong></span></div>}
             <dl className="compact-status-list">
               {resourceIds.map((resource) => <div key={resource}><dt>{text.game.resourceNames[resource]}</dt><dd>{domain.resources[resource]}</dd>{turnDelta[resource] !== 0 && <small className={turnDelta[resource] < 0 ? 'negative' : ''}>{turnDelta[resource] > 0 ? '+' : ''}{turnDelta[resource]}</small>}</div>)}
             </dl>
@@ -55,7 +62,7 @@ export function GameHud({ match, text, opponentTurn, aiBusy, aiSlow, spectator, 
             <div className="army-total"><dt>{text.game.armyLimit}</dt><dd>{totalArmySize(match, domainId)}/{armyCapacity}</dd></div>
           </dl>
         </section>
-      </header>
+      </header>}
       <section className={`hud-panel turn-panel${opponentTurn ? ' opponent-turn' : ''}`} aria-label={text.hud.turn} aria-busy={opponentTurn}>
         {activeProfileId && <div className="active-opponent"><img src={`${import.meta.env.BASE_URL}${aiAvatarPaths[activeProfileId]}`} alt="" /><span><strong>{activeParticipantName}</strong><small>{activeAiStatus}</small></span></div>}
         <div className="current-turn"><span>{text.hud.turn}</span><strong>{match.turn}</strong></div>

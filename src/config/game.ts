@@ -149,6 +149,8 @@ export const gameConfig = {
   display: {
     showGridByDefault: true,
     gridStorageKey: storageKey('map-grid-visible'),
+    autoCameraByDefault: false,
+    autoCameraStorageKey: storageKey('auto-camera-enabled'),
     clickBurst: {
       maximumVisible: 8,
       lifetimeMs: 720,

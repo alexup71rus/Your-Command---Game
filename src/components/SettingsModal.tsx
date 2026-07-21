@@ -12,12 +12,14 @@ interface SettingsModalProps {
   volume: number
   musicVolume: number
   showGrid: boolean
+  autoCamera: boolean
   onClose: () => void
   onLocaleChange: (locale: Locale) => void
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
   onMusicVolumeChange: (volume: number) => void
   onShowGridChange: (visible: boolean) => void
+  onAutoCameraChange: (enabled: boolean) => void
   onReturnToMenu?: () => void
   onOpenSavedGames?: () => void
 }
@@ -34,12 +36,14 @@ export function SettingsModal({
   volume,
   musicVolume,
   showGrid,
+  autoCamera,
   onClose,
   onLocaleChange,
   onSoundToggle,
   onVolumeChange,
   onMusicVolumeChange,
   onShowGridChange,
+  onAutoCameraChange,
   onReturnToMenu,
   onOpenSavedGames,
 }: SettingsModalProps) {
@@ -145,6 +149,22 @@ export function SettingsModal({
             >
               <span className="grid-toggle-icon" aria-hidden="true" />
               {showGrid ? text.settings.gridEnabled : text.settings.gridDisabled}
+            </button>
+          </section>
+
+          <section className="settings-card camera-settings-card">
+            <div className="settings-card-copy">
+              <h3>{text.settings.autoCamera}</h3>
+              <p>{text.settings.autoCameraDescription}</p>
+            </div>
+            <button
+              type="button"
+              className={`settings-camera-toggle${autoCamera ? ' active' : ''}`}
+              aria-pressed={autoCamera}
+              onClick={() => onAutoCameraChange(!autoCamera)}
+            >
+              <span className="camera-toggle-icon" aria-hidden="true" />
+              {autoCamera ? text.settings.autoCameraEnabled : text.settings.autoCameraDisabled}
             </button>
           </section>
 
