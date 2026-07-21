@@ -13,8 +13,8 @@ import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
 import type { SavedMapDraft } from '../game/savedMaps'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
-import { CloseIcon } from './InterfaceIcons'
 import { SelectField } from './ui/SelectField'
+import { ModalCloseButton } from './ui/ModalCloseButton'
 import { useModalFocus } from '../hooks/useModalFocus'
 
 interface MapGeneratorModalProps {
@@ -23,6 +23,7 @@ interface MapGeneratorModalProps {
   text: LocaleDictionary['generator']
   locale: Locale
   participantCount: number
+  participantMaximum: number
   savedMapCount: number
   onParticipantChange: (count: number) => void
   onSave: (draft: SavedMapDraft) => boolean
@@ -58,7 +59,7 @@ function RangeControl({
   )
 }
 
-export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
+export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, participantMaximum, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
   const modalRef = useModalFocus<HTMLElement>()
   const [settings, setSettings] = useState<GeneratorSettings>(defaultGeneratorSettings)
   const [manualGrid, setManualGrid] = useState<ManualHeightGrid>(createManualHeightGrid)
@@ -73,7 +74,7 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [saveError, setSaveError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
-  const participantLimit = maximumParticipantsForMapSize(settings.mapSize)
+  const participantLimit = Math.min(participantMaximum, maximumParticipantsForMapSize(settings.mapSize))
   const previewMap = useMemo(
     () => generateMap(deferredSettings, deferredManualGrid),
     [deferredManualGrid, deferredSettings],
@@ -239,7 +240,7 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
       <section ref={modalRef} tabIndex={-1} className="generator-modal" role="dialog" aria-modal="true" aria-labelledby="generator-title" onPointerDown={(event) => event.stopPropagation()}>
         <header className="generator-header">
           <div><h2 id="generator-title">{text.title}</h2></div>
-          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close} data-modal-autofocus><CloseIcon /></button>
+          <ModalCloseButton label={text.close} onClick={onClose} data-modal-autofocus />
         </header>
 
         <div className="generator-body">

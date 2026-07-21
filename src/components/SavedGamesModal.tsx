@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import type { Locale, LocaleDictionary } from '../config/localization'
 import type { SavedGameSummary } from '../game/savedGames'
-import { CloseIcon } from './InterfaceIcons'
 import { ConfirmDialog } from './ui/ConfirmDialog'
+import { ModalCloseButton } from './ui/ModalCloseButton'
 import { useModalFocus } from '../hooks/useModalFocus'
 
 interface SavedGamesModalProps {
@@ -28,7 +28,7 @@ export function SavedGamesModal({ locale, text, saves, showSaveAction, canSave, 
       <section ref={modalRef} tabIndex={-1} className="settings-modal saved-games-modal" role="dialog" aria-modal="true" aria-labelledby="saved-games-title" onPointerDown={(event) => event.stopPropagation()}>
         <header className="settings-header">
           <div><span className="settings-kicker">{text.savedGames.kicker}</span><h2 id="saved-games-title">{text.savedGames.title}</h2></div>
-          <button type="button" className="settings-close" onClick={onClose} aria-label={text.savedGames.close} data-modal-autofocus={!showSaveAction && saves.length === 0 ? true : undefined}><CloseIcon /></button>
+          <ModalCloseButton label={text.savedGames.close} onClick={onClose} data-modal-autofocus={!showSaveAction && saves.length === 0 ? true : undefined} />
         </header>
         <div className="saved-games-content" aria-busy={busy}>
           {showSaveAction && <section className="save-current-panel">

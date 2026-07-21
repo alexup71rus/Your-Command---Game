@@ -12,7 +12,7 @@ import type {
   TroopComposition,
   TroopKind,
 } from './map'
-import type { CellPosition, MapScenario, MatchParticipant } from './scenario'
+import { areOwnersHostile, participantTeamId, type CellPosition, type MapScenario, type MatchParticipant } from './scenario'
 import { cardinalDirections } from './geometry'
 import { friendlyBarbicanPassage, squadMovementOrderCost, squadMovementOrderCostBetween } from './movement'
 import { createAiMemory, type AiMemory } from './ai/model'
@@ -365,8 +365,8 @@ export function civilianPopulationCapacityFor(state: MatchState, ownerId: string
 }
 
 export function createMatch(scenario: MapScenario): MatchState {
-  const player = scenario.participants.find((participant) => participant.kind === 'human')
-  if (!player) throw new Error('A founded scenario must contain a human participant')
+  const player = scenario.participants.find((participant) => participant.kind === 'human') ?? scenario.participants[0]
+  if (!player) throw new Error('A founded scenario must contain at least one participant')
   const domains = Object.fromEntries(scenario.participants.map((participant) => [
     participant.id,
     {
@@ -384,7 +384,10 @@ export function createMatch(scenario: MapScenario): MatchState {
     turn: 1,
     ordersRemaining: gameConfig.turn.maxOrders,
     domains,
-    status: 'playing',
+    status: scenario.participants.length > 1
+      && new Set(scenario.participants.map(participantTeamId)).size === 1
+      ? 'won'
+      : 'playing',
     lastEvent: null,
     lastTurnReports: {},
     aiMemory: Object.fromEntries(scenario.participants
@@ -703,10 +706,19 @@ function collapseDefeatedOwner(state: MatchState, ownerId: string) {
 }
 
 function afterCastleDestroyed(state: MatchState, defeatedOwnerId: string) {
-  if (defeatedOwnerId === state.playerId) return { ...state, status: 'lost' as const }
+  const spectatorMatch = state.scenario.participants.every((participant) => participant.kind === 'ai')
   const collapsed = collapseDefeatedOwner(state, defeatedOwnerId)
-  const aiStillAlive = collapsed.scenario.participants.some((participant) => participant.kind === 'ai' && hasLivingCastle(collapsed, participant.id))
-  return aiStillAlive ? collapsed : { ...collapsed, status: 'won' as const }
+  if (spectatorMatch) {
+    const livingRulers = collapsed.scenario.participants.filter((participant) => hasLivingCastle(collapsed, participant.id))
+    const livingSides = new Set(livingRulers.map(participantTeamId))
+    return livingSides.size > 1 ? collapsed : { ...collapsed, status: 'won' as const }
+  }
+  if (defeatedOwnerId === state.playerId) return { ...state, status: 'lost' as const }
+  const hostileStillAlive = collapsed.scenario.participants.some((participant) => (
+    hasLivingCastle(collapsed, participant.id)
+    && areOwnersHostile(collapsed.scenario.participants, state.playerId, participant.id)
+  ))
+  return hostileStillAlive ? collapsed : { ...collapsed, status: 'won' as const }
 }
 
 function withRangedStructureDamage(state: MatchState, position: CellPosition, defender: BuildingObject | Extract<MapObject, { type: 'castle' }>, hitPoints: number, damage: number, orderCost: number) {
@@ -740,7 +752,8 @@ function withMeleeStructureDamage(state: MatchState, from: CellPosition, to: Cel
 export function isRangedAttack(state: MatchState, from: CellPosition, to: CellPosition) {
   const source = objectAt(state, from)
   const target = objectAt(state, to)
-  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId || (source.units.archers ?? 0) < 1 || !target || target.ownerId === state.activeParticipantId) return false
+  if (source?.type !== 'squad' || source.ownerId !== state.activeParticipantId || (source.units.archers ?? 0) < 1 || !target
+    || !areOwnersHostile(state.scenario.participants, state.activeParticipantId, target.ownerId)) return false
   const columnDistance = Math.abs(to.column - from.column)
   const rowDistance = Math.abs(to.row - from.row)
   const distance = columnDistance + rowDistance
@@ -825,6 +838,8 @@ export function moveOrAttackFailure(state: MatchState, from: CellPosition, to: C
   const targetCell = cellAt(state, to)
   if (!targetCell || targetCell.landform === 'peak') return 'invalid-terrain'
   const target = targetCell.object
+  if (target && target.ownerId !== state.activeParticipantId
+    && !areOwnersHostile(state.scenario.participants, state.activeParticipantId, target.ownerId)) return 'occupied'
   if (!isAdjacent(from, to)) {
     const passageCost = squadMovementOrderCostBetween(state.scenario.cells, source, from, to)
     if (passageCost !== null) return commandGuard(state, passageCost)
@@ -864,7 +879,9 @@ export function moveOrAttack(state: MatchState, from: CellPosition, to: CellPosi
     }
   }
   if (!isAdjacent(from, to) && target) return { ok: true, state: resolveRangedAttack(state, from, to, source, target) }
-  if (target && target.ownerId !== state.activeParticipantId) return { ok: true, state: resolveAttack(state, from, to, source, target) }
+  if (target && areOwnersHostile(state.scenario.participants, state.activeParticipantId, target.ownerId)) {
+    return { ok: true, state: resolveAttack(state, from, to, source, target) }
+  }
   if (target?.type === 'squad') {
     const units = { ...target.units }
     troopKinds.forEach((kind) => { units[kind] = (units[kind] ?? 0) + (source.units[kind] ?? 0) })
@@ -1060,7 +1077,7 @@ export function towerAttackFailure(state: MatchState, towerPosition: CellPositio
   if (tower?.type !== 'building' || tower.kind !== 'tower' || tower.ownerId !== state.activeParticipantId) return 'not-owned'
   if (!isValidGarrison(tower.garrison)) return 'requires-garrison'
   const target = objectAt(state, to)
-  if (!target || target.ownerId === state.activeParticipantId) return 'requires-target'
+  if (!target || !areOwnersHostile(state.scenario.participants, state.activeParticipantId, target.ownerId)) return 'requires-target'
   const columnDistance = Math.abs(to.column - towerPosition.column)
   const rowDistance = Math.abs(to.row - towerPosition.row)
   const distance = columnDistance + rowDistance
@@ -1559,12 +1576,18 @@ export function endTurn(state: MatchState): CommandResult {
       break
     }
   }
-  const wrappedToPlayer = nextParticipant.id === state.playerId && ownerId !== state.playerId
+  const nextParticipantIndex = participants.findIndex((participant) => participant.id === nextParticipant.id)
+  const spectatorMatch = participants.every((participant) => participant.kind === 'ai')
+  const wrappedToNextRound = participants.length === 1
+    ? true
+    : spectatorMatch
+      ? nextParticipantIndex <= currentIndex
+    : nextParticipant.id === state.playerId && ownerId !== state.playerId
   return {
     ok: true,
     state: {
       ...state,
-      turn: state.turn + (wrappedToPlayer ? 1 : 0),
+      turn: state.turn + (wrappedToNextRound ? 1 : 0),
       activeParticipantId: nextParticipant.id,
       ordersRemaining: gameConfig.turn.maxOrders,
       domains,

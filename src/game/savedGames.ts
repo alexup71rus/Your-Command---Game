@@ -3,7 +3,7 @@ import { aiPlannerConfig } from '../config/ai'
 import { buildingKinds, buildingRules, resourceIds, taxRates, tradeableResources, troopKinds, troopRules } from '../config/rules'
 import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './map'
 import type { MatchEvent, MatchState, TurnReport } from './match'
-import type { CellPosition, MapScenario, StartRegion } from './scenario'
+import { areOwnersHostile, type CellPosition, type MapScenario, type StartRegion } from './scenario'
 import {
   aiLayoutKinds,
   aiFortificationKinds,
@@ -246,12 +246,12 @@ function isScenario(value: unknown): value is MapScenario {
     && isBoundedString(participant.regionId, 64)
     && regionIds.has(participant.regionId)
     && typeof participant.color === 'string'
+    && (participant.teamId === undefined || (Number.isSafeInteger(participant.teamId) && Number(participant.teamId) >= 1 && Number(participant.teamId) <= gameConfig.match.maxParticipants))
     && (participant.kind === 'human'
       ? participant.profileId === undefined
       : typeof participant.profileId === 'string' && aiProfileIds.some((profileId) => profileId === participant.profileId))
   ))) return false
   if (participants.filter((participant) => participant.kind === 'human').length !== 1) return false
-  if (new Set(participants.flatMap((participant) => participant.kind === 'ai' ? [participant.profileId] : [])).size !== participantCount - 1) return false
   if (new Set(participants.map((participant) => participant.regionId)).size !== participantCount) return false
   if (!value.regions.every((region) => isRegion(region, regionIds, size))) return false
   const regions = value.regions as StartRegion[]
@@ -418,17 +418,22 @@ function isMatchState(value: unknown): value is MatchState {
   }))) return false
   const castleOwners = scenario.cells.flatMap((row) => row.flatMap((cell) => cell.object?.type === 'castle' ? [cell.object.ownerId] : []))
   const castleOwnerSet = new Set(castleOwners)
-  const livingAiCount = scenario.participants.filter((participant) => participant.kind === 'ai' && castleOwnerSet.has(participant.id)).length
+  const livingHostileCount = scenario.participants.filter((participant) => (
+    castleOwnerSet.has(participant.id) && areOwnersHostile(scenario.participants, value.playerId as string, participant.id)
+  )).length
   if (castleOwners.length !== castleOwnerSet.size) return false
-  if (value.status === 'playing' && (!castleOwnerSet.has(value.playerId) || livingAiCount < 1 || !castleOwnerSet.has(value.activeParticipantId))) return false
-  if (value.status === 'won' && (!castleOwnerSet.has(value.playerId) || livingAiCount !== 0)) return false
+  if (value.status === 'playing' && (!castleOwnerSet.has(value.playerId)
+    || (scenario.participants.length > 1 && livingHostileCount < 1)
+    || !castleOwnerSet.has(value.activeParticipantId))) return false
+  if (value.status === 'won' && (!castleOwnerSet.has(value.playerId) || livingHostileCount !== 0)) return false
   if (value.status === 'lost' && castleOwnerSet.has(value.playerId)) return false
   const aiOwners = scenario.participants.filter((participant) => participant.kind === 'ai').map((participant) => participant.id)
   const aiMemory = value.aiMemory as Record<string, unknown>
   if (Object.keys(aiMemory).length !== aiOwners.length || !aiOwners.every((owner) => {
     const memory = aiMemory[owner]
     return isRecord(memory)
-      && (memory.targetOwnerId === null || (isBoundedString(memory.targetOwnerId, 64) && owners.has(memory.targetOwnerId) && memory.targetOwnerId !== owner))
+      && (memory.targetOwnerId === null || (isBoundedString(memory.targetOwnerId, 64) && owners.has(memory.targetOwnerId)
+        && areOwnersHostile(scenario.participants, owner, memory.targetOwnerId)))
       && typeof memory.phase === 'string' && aiStrategicPhases.some((phase) => phase === memory.phase)
       && (memory.settlementPlan === null || isSettlementPlan(memory.settlementPlan, size))
       && isSquadRoleRecord(memory.squadRoles, size)
@@ -444,7 +449,8 @@ function isMatchState(value: unknown): value is MatchState {
       && Array.isArray(memory.contacts)
       && memory.contacts.length <= aiPlannerConfig.maximumRememberedContacts
       && memory.contacts.every((contact) => isRecord(contact)
-        && isBoundedString(contact.ownerId, 64) && owners.has(contact.ownerId) && contact.ownerId !== owner
+        && isBoundedString(contact.ownerId, 64) && owners.has(contact.ownerId)
+        && areOwnersHostile(scenario.participants, owner, contact.ownerId)
         && (contact.kind === 'squad' || contact.kind === 'barracks')
         && isPosition(contact.position, size)
         && isNonNegativeInteger(contact.lastSeenTurn) && contact.lastSeenTurn <= turn

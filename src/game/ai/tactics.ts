@@ -17,7 +17,7 @@ import {
 import { findMovementPath } from '../pathfinding'
 import { squadMovementOrderCost } from '../movement'
 import { clockwiseCardinalDirections } from '../geometry'
-import type { CellPosition } from '../scenario'
+import { areOwnersHostile, type CellPosition } from '../scenario'
 import { aiObjectEntries, castlePositionFor, positionDistance, positionKey, samePosition } from './analysis'
 import { executeAiCommand } from './commands'
 import { armyPowerFor, estimatedTargetPower, fortificationReadyFor, homeThreatFor, stagingAnchorsFor, troopCompositionPower } from './strategy'
@@ -158,7 +158,9 @@ function possibleEnemyReplies(state: MatchState, ownerId: string, countNode: () 
   const replies: MoveCommand[] = []
   const ownObjects = aiObjectEntries(state.scenario, ownerId)
   const enemies = aiObjectEntries(state.scenario)
-    .flatMap((entry) => entry.object.type === 'squad' && entry.object.ownerId !== ownerId ? [{ ...entry, object: entry.object }] : [])
+    .flatMap((entry) => entry.object.type === 'squad'
+      && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+      ? [{ ...entry, object: entry.object }] : [])
   for (const enemy of enemies) {
     const responseState = { ...state, activeParticipantId: enemy.object.ownerId, ordersRemaining: gameConfig.turn.maxOrders }
     for (const target of ownObjects) {
@@ -212,7 +214,7 @@ interface TowerThreat {
 
 function towerThreatsFor(state: MatchState, ownerId: string): TowerThreat[] {
   return aiObjectEntries(state.scenario).flatMap((entry) => (
-    entry.object.ownerId !== ownerId && entry.object.type === 'building'
+    areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId) && entry.object.type === 'building'
       && entry.object.kind === 'tower' && entry.object.garrison?.archers
       ? [{ position: entry.position, archers: entry.object.garrison.archers }]
       : []
@@ -352,7 +354,7 @@ function deterministicOpportunityRoll(state: MatchState, profile: AiProfileRules
 
 function localOpportunityThreat(state: MatchState, ownerId: string, target: CellPosition) {
   return aiObjectEntries(state.scenario).reduce((sum, entry) => {
-    if (entry.object.ownerId === ownerId
+    if (!areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
       || positionDistance(entry.position, target) > aiTacticalConfig.raid.opportunityThreatRadius) return sum
     if (entry.object.type === 'squad') {
       return sum + troopCompositionPower(entry.object.units, squadHealth(entry.object))
@@ -397,7 +399,7 @@ function isOpportunisticStructureAttack(
 
 function attackTargetsFor(state: MatchState, ownerId: string) {
   return aiObjectEntries(state.scenario)
-    .filter((entry) => entry.object.ownerId !== ownerId)
+    .filter((entry) => areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId))
     .flatMap((entry) => entry.object.type === 'building'
       ? buildingFootprintPositions(entry.object.kind, entry.position)
           .map((position) => ({ position, object: entry.object }))
@@ -537,7 +539,8 @@ function mapWithRememberedThreats(state: MatchState, memory: AiMemory, ownerId: 
   let result = state.scenario.cells
   const changedRows = new Map<number, GameMap[number]>()
   memory.contacts.forEach((contact) => {
-    if (contact.ownerId === ownerId || contact.kind !== 'squad' || state.turn - contact.lastSeenTurn > gameConfig.ai.memoryRouteAvoidanceTurns) return
+    if (!areOwnersHostile(state.scenario.participants, ownerId, contact.ownerId)
+      || contact.kind !== 'squad' || state.turn - contact.lastSeenTurn > gameConfig.ai.memoryRouteAvoidanceTurns) return
     const cell = result[contact.position.row]?.[contact.position.column]
     if (!cell || cell.object) return
     const row = changedRows.get(contact.position.row) ?? [...result[contact.position.row]]
@@ -675,7 +678,8 @@ function routeScore(
     : 0
   const knightForestPenalty = squad.object.units.knights > 0 ? forests * route.knightForestPenalty : 0
   const rememberedDanger = phase === 'defense' ? 0 : memory.contacts.reduce((sum, contact) => {
-    if (contact.kind !== 'squad' || contact.ownerId === state.activeParticipantId) return sum
+    if (contact.kind !== 'squad'
+      || !areOwnersHostile(state.scenario.participants, state.activeParticipantId, contact.ownerId)) return sum
     const nearest = Math.min(
       ...path.slice(1, route.routeLookahead + 1).map((position) => positionDistance(position, contact.position)),
       route.distantContactFallback,
@@ -707,11 +711,14 @@ function movementCandidates(
   const threat = homeThreatFor(state, ownerId, memory)
   const defensiveAssets = defensiveAssetsFor(state, ownerId)
   const threateningSquads = aiObjectEntries(state.scenario)
-    .flatMap((entry) => entry.object.type === 'squad' && entry.object.ownerId !== ownerId ? [{ ...entry, object: entry.object }] : [])
+    .flatMap((entry) => entry.object.type === 'squad'
+      && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+      ? [{ ...entry, object: entry.object }] : [])
     .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
       || first.position.row - second.position.row || first.position.column - second.position.column)
   const rememberedThreats = memory.contacts
-    .filter((contact) => contact.kind === 'squad' && contact.ownerId !== ownerId)
+    .filter((contact) => contact.kind === 'squad'
+      && areOwnersHostile(state.scenario.participants, ownerId, contact.ownerId))
     .sort((first, second) => threatPriority(second.position, defensiveAssets) - threatPriority(first.position, defensiveAssets)
       || first.position.row - second.position.row || first.position.column - second.position.column)
   const squads = squadEntries(state, ownerId)
@@ -1033,7 +1040,8 @@ function splitCandidate(state: MatchState, profile: AiProfileRules, memory: AiMe
 function towerCandidates(state: MatchState, profile: AiProfileRules, memory: AiMemory, phase: AiStrategicPhase, countNode: () => boolean) {
   if (!profile.allowedBuildings.includes('tower')) return []
   const ownerId = state.activeParticipantId
-  const enemies = aiObjectEntries(state.scenario).filter((entry) => entry.object.ownerId !== ownerId)
+  const enemies = aiObjectEntries(state.scenario)
+    .filter((entry) => areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId))
   const towers = aiObjectEntries(state.scenario, ownerId)
     .flatMap((entry) => entry.object.type === 'building' && entry.object.kind === 'tower'
       ? [{ ...entry, object: entry.object as BuildingObject }]
@@ -1058,10 +1066,12 @@ function towerCandidates(state: MatchState, profile: AiProfileRules, memory: AiM
       }
       if (!hasShot && phase === 'assault'
         && fieldPower < profile.doctrine.forceTargets.assault.minimum) {
-        const target = state.scenario.participants.filter((participant) => participant.id !== ownerId).flatMap((participant) => {
-          const castle = castlePositionFor(state.scenario, participant.id)
-          return castle ? [{ castle, distance: positionDistance(tower.position, castle) }] : []
-        }).sort((first, second) => first.distance - second.distance)[0]?.castle
+        const target = state.scenario.participants
+          .filter((participant) => areOwnersHostile(state.scenario.participants, ownerId, participant.id))
+          .flatMap((participant) => {
+            const castle = castlePositionFor(state.scenario, participant.id)
+            return castle ? [{ castle, distance: positionDistance(tower.position, castle) }] : []
+          }).sort((first, second) => first.distance - second.distance)[0]?.castle
         const exits = adjacentDestinations(tower.position)
           .filter((position) => !isTemporarilyBlocked(memory, position, state.turn))
           .filter((position) => ungarrisonFailure(state, tower.position, position) === null)

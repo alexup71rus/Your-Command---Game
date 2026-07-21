@@ -9,17 +9,18 @@ interface FoundingPanelProps {
   draftValid: boolean
   locale: Locale
   text: LocaleDictionary['founding']
+  regionLocked?: boolean
   onSelectRegion: (regionId: string | null) => void
   onConfirm: () => void
 }
 
-export function FoundingPanel({ scenario, selectedRegionId, castleDraft, draftValid, locale, text, onSelectRegion, onConfirm }: FoundingPanelProps) {
+export function FoundingPanel({ scenario, selectedRegionId, castleDraft, draftValid, locale, text, regionLocked = false, onSelectRegion, onConfirm }: FoundingPanelProps) {
   const selectedRegion = scenario.regions.find((region) => region.id === selectedRegionId)
   const siteState = !castleDraft ? 'idle' : draftValid ? 'valid' : 'invalid'
   return (
     <section className={`founding-panel${selectedRegion ? ' placing-castle' : ' choosing-region'}`} aria-live="polite" aria-labelledby="founding-title">
       <header>
-        <div><span className="founding-scenario-name">{scenario.name}</span><h1 id="founding-title">{selectedRegion ? text.placeTitle : text.chooseTitle}</h1><p>{selectedRegion ? text.placeDescription : text.chooseDescription}</p></div>
+        <div><span className="founding-scenario-name">{scenario.name}</span><h1 id="founding-title">{selectedRegion ? text.placeTitle : text.chooseTitle}</h1><p>{selectedRegion ? regionLocked ? text.assignedRegion : text.placeDescription : text.chooseDescription}</p></div>
       </header>
       {!selectedRegion ? (
         <div className="region-options" style={{ '--region-count': scenario.regions.length } as CSSProperties}>
@@ -34,7 +35,7 @@ export function FoundingPanel({ scenario, selectedRegionId, castleDraft, draftVa
         <div className="founding-actions">
           <div className="chosen-region"><i style={{ background: selectedRegion.color }}>{selectedRegion.index + 1}</i><span>{text.region} {selectedRegion.index + 1}<small>{text.selected}</small></span></div>
           <div className={`site-status ${siteState}`}><span aria-hidden="true">{draftValid ? '◆' : '◇'}</span>{!castleDraft ? text.chooseSite : draftValid ? text.validSite : text.invalidSite}</div>
-          <div className="founding-buttons"><button type="button" className="change-region" onClick={() => onSelectRegion(null)}>{text.changeRegion}</button><button type="button" className="confirm-founding" disabled={!castleDraft || !draftValid} onClick={onConfirm}>{text.confirm}</button></div>
+          <div className="founding-buttons">{!regionLocked && <button type="button" className="change-region" onClick={() => onSelectRegion(null)}>{text.changeRegion}</button>}<button type="button" className="confirm-founding" disabled={!castleDraft || !draftValid} onClick={onConfirm}>{text.confirm}</button></div>
         </div>
       )}
     </section>

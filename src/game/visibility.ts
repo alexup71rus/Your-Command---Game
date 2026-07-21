@@ -1,7 +1,7 @@
 import { gameConfig } from '../config/game'
 import { buildingRules } from '../config/rules'
 import type { GameMap, MapObject } from './map'
-import type { CellPosition } from './scenario'
+import { areOwnersHostile, type CellPosition, type MatchParticipant } from './scenario'
 
 export type VisibilityMap = Uint8Array[]
 
@@ -70,7 +70,7 @@ export function isCellVisible(visibility: VisibilityMap | null | undefined, posi
   return !visibility || visibility[position.row]?.[position.column] === 1
 }
 
-export function hasNearbyEnemyThreat(map: GameMap, playerId: string, radius: number) {
+export function hasNearbyEnemyThreat(map: GameMap, playerId: string, radius: number, participants?: readonly MatchParticipant[]) {
   const ownedPositions: CellPosition[] = []
   const enemyThreats: CellPosition[] = []
   map.forEach((row, rowIndex) => row.forEach((cell, column) => {
@@ -78,8 +78,8 @@ export function hasNearbyEnemyThreat(map: GameMap, playerId: string, radius: num
     if (!object) return
     const position = { column, row: rowIndex }
     if (object.ownerId === playerId) ownedPositions.push(position)
-    else if (object.type === 'squad'
-      || (object.type === 'building' && object.kind === 'tower' && Boolean(object.garrison))) enemyThreats.push(position)
+    else if ((!participants || areOwnersHostile(participants, playerId, object.ownerId)) && (object.type === 'squad'
+      || (object.type === 'building' && object.kind === 'tower' && Boolean(object.garrison)))) enemyThreats.push(position)
   }))
   const radiusSquared = radius * radius
   return enemyThreats.some((threat) => ownedPositions.some((owned) => {

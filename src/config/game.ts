@@ -22,7 +22,7 @@ export const gameConfig = {
     defaultMapSize: 100,
   },
   match: {
-    minParticipants: 2,
+    minParticipants: 1,
     maxParticipants: 4,
     defaultParticipants: 2,
     castleBoundaryBuffer: 2,

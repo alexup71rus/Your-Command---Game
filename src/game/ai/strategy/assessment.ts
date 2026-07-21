@@ -18,7 +18,7 @@ import {
   type MatchState,
 } from '../../match'
 import { findMovementPath } from '../../pathfinding'
-import type { CellPosition } from '../../scenario'
+import { areOwnersHostile, type CellPosition } from '../../scenario'
 import { clockwiseCardinalDirections } from '../../geometry'
 import {
   aiObjectEntries,
@@ -122,7 +122,9 @@ export function economicEmergencyFor(state: MatchState, ownerId: string) {
 }
 
 function visibleEnemySquads(state: MatchState, ownerId: string) {
-  return aiObjectEntries(state.scenario).filter((entry): entry is typeof entry & { object: SquadObject } => entry.object.type === 'squad' && entry.object.ownerId !== ownerId)
+  return aiObjectEntries(state.scenario).filter((entry): entry is typeof entry & { object: SquadObject } => (
+    entry.object.type === 'squad' && areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)
+  ))
 }
 
 function hasForestIndustryPotential(state: MatchState, ownerId: string) {
@@ -149,7 +151,8 @@ export function hasHuntingTerrainPotential(state: MatchState, ownerId: string) {
 
 function rememberedSquadThreats(state: MatchState, memory: AiMemory | undefined, ownerId?: string) {
   return (memory?.contacts ?? []).flatMap((contact) => {
-    if (contact.kind !== 'squad' || !contact.units || (ownerId && contact.ownerId !== ownerId)) return []
+    if (contact.kind !== 'squad' || !contact.units || (ownerId && contact.ownerId !== ownerId)
+      || !areOwnersHostile(state.scenario.participants, state.activeParticipantId, contact.ownerId)) return []
     const visible = objectAt(state, contact.position)
     if (visible?.type === 'squad' && visible.ownerId === contact.ownerId) return []
     const age = state.turn - contact.lastSeenTurn
@@ -376,7 +379,8 @@ function targetScore(state: MatchState, ownerId: string, targetId: string, memor
 export function chooseTargetOwner(state: MatchState, profile: AiProfileRules, memory: AiMemory) {
   const ownerId = state.activeParticipantId
   const candidates = state.scenario.participants
-    .filter((participant) => participant.id !== ownerId && castlePositionFor(state.scenario, participant.id))
+    .filter((participant) => areOwnersHostile(state.scenario.participants, ownerId, participant.id)
+      && castlePositionFor(state.scenario, participant.id))
     .map((participant) => ({ id: participant.id, score: targetScore(state, ownerId, participant.id, memory) }))
     .sort((first, second) => second.score - first.score || first.id.localeCompare(second.id))
   const best = candidates[0]

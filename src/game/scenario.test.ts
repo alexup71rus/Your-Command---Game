@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
 import { createManualHeightGrid, generateMap } from './generator'
 import {
+  areOwnersAllied,
+  areOwnersHostile,
   createMapScenario,
   evaluateRegionResourceBalance,
+  foundAutomatedMatch,
   foundMatch,
   isCastleSiteValid,
   isRegionBalanceAcceptable,
+  isSpectatorScenario,
   type RegionScore,
   type RegionResourceBalance,
   type TerritoryMap,
@@ -41,6 +45,19 @@ describe('starting domains', () => {
       expect(createMapScenario(compactMap, 2, settings.seed)).toMatchObject({ ok: true })
     },
   )
+
+  it('supports a single-seat world for solo play or observation', () => {
+    const result = createMapScenario(map, 1, defaultPreset.settings.seed)
+    expect(result).toMatchObject({ ok: true })
+    if (!result.ok) return
+    const region = result.scenario.regions[0]
+    const solo = foundMatch(result.scenario, region.id, region.validCastleCells[0], [])
+    expect(solo.participants).toEqual([{ id: 'player', kind: 'human', regionId: region.id, color: region.color }])
+    expect(solo.cells.flat().filter((cell) => cell.object?.type === 'castle')).toHaveLength(1)
+    const observed = foundAutomatedMatch(result.scenario, ['radomir'])
+    expect(isSpectatorScenario(observed)).toBe(true)
+    expect(observed.cells.flat().filter((cell) => cell.object?.type === 'castle')).toHaveLength(1)
+  })
 
   it.each([
     { mapSize: 50, participants: 3 },
@@ -119,6 +136,41 @@ describe('starting domains', () => {
     expect(founded.participants.filter((participant) => participant.kind === 'human')).toHaveLength(1)
     expect(founded.participants.filter((participant) => participant.kind === 'ai')).toHaveLength(2)
     expect(new Set(founded.participants.map((participant) => participant.regionId)).size).toBe(3)
+  })
+
+  it('seats every selected ruler as an AI in an automated match', () => {
+    const result = createMapScenario(map, 3, defaultPreset.settings.seed)
+    if (!result.ok) throw new Error('Expected a valid scenario')
+    const founded = foundAutomatedMatch(result.scenario, ['radomir', 'velislava', 'svyatobor'])
+    expect(isSpectatorScenario(founded)).toBe(true)
+    expect(founded.participants.map((participant) => participant.profileId)).toEqual(['radomir', 'velislava', 'svyatobor'])
+    expect(founded.cells.flat().filter((cell) => cell.object?.type === 'castle')).toHaveLength(3)
+    expect(new Set(founded.participants.map((participant) => participant.regionId))).toHaveProperty('size', 3)
+  })
+
+  it('allows several rulers with the same AI profile and gives them unique owner IDs', () => {
+    const result = createMapScenario(map, 4, defaultPreset.settings.seed)
+    if (!result.ok) throw new Error('Expected a valid scenario')
+    const humanRegion = result.scenario.regions[0]
+    const commanded = foundMatch(result.scenario, humanRegion.id, humanRegion.validCastleCells[0], ['radomir', 'radomir', 'radomir'])
+    expect(commanded.participants.filter((participant) => participant.kind === 'ai').map((participant) => participant.id))
+      .toEqual(['ai-radomir-1', 'ai-radomir-2', 'ai-radomir-3'])
+    expect(commanded.participants.filter((participant) => participant.kind === 'ai').map((participant) => participant.profileId))
+      .toEqual(['radomir', 'radomir', 'radomir'])
+
+    const observed = foundAutomatedMatch(result.scenario, ['velislava', 'velislava', 'velislava', 'velislava'])
+    expect(new Set(observed.participants.map((participant) => participant.id))).toHaveProperty('size', 4)
+    expect(observed.participants.map((participant) => participant.id)).toEqual(['ai-velislava-1', 'ai-velislava-2', 'ai-velislava-3', 'ai-velislava-4'])
+  })
+
+  it('binds seats to regions in order and preserves configured alliances', () => {
+    const result = createMapScenario(map, 3, defaultPreset.settings.seed)
+    if (!result.ok) throw new Error('Expected a valid scenario')
+    const founded = foundAutomatedMatch(result.scenario, ['radomir', 'velislava', 'svyatobor'], [1, 1, 2])
+    expect(founded.participants.map((participant) => participant.regionId)).toEqual(founded.regions.map((region) => region.id))
+    expect(founded.participants.map((participant) => participant.teamId)).toEqual([1, 1, 2])
+    expect(areOwnersAllied(founded.participants, founded.participants[0].id, founded.participants[1].id)).toBe(true)
+    expect(areOwnersHostile(founded.participants, founded.participants[0].id, founded.participants[2].id)).toBe(true)
   })
 
   it('rejects peaks, forests, occupied cells and cells near a border', () => {

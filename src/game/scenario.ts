@@ -16,6 +16,7 @@ export interface MatchParticipant {
   regionId: string
   color: string
   profileId?: AiProfileId
+  teamId?: number
 }
 
 export interface RegionScore {
@@ -83,6 +84,20 @@ export type ScenarioResult =
   | { ok: false; reason: 'unbalanced-regions'; balance: RegionBalance }
 
 export const REGION_COLORS = ['#d2b45f', '#6f9c83', '#a26f61', '#718cac'] as const
+
+export function participantTeamId(participant: MatchParticipant) {
+  return participant.teamId ?? participant.id
+}
+
+export function areOwnersAllied(participants: readonly MatchParticipant[], firstOwnerId: string, secondOwnerId: string) {
+  const first = participants.find((participant) => participant.id === firstOwnerId)
+  const second = participants.find((participant) => participant.id === secondOwnerId)
+  return Boolean(first && second && participantTeamId(first) === participantTeamId(second))
+}
+
+export function areOwnersHostile(participants: readonly MatchParticipant[], firstOwnerId: string, secondOwnerId: string) {
+  return firstOwnerId !== secondOwnerId && !areOwnersAllied(participants, firstOwnerId, secondOwnerId)
+}
 
 const keyOf = (column: number, row: number, columns: number) => row * columns + column
 
@@ -615,31 +630,17 @@ export function chooseCastleSiteForRegion(scenario: MapScenario, region: StartRe
     ?? region.validCastleCells[0]
 }
 
-export function foundMatch(
+function placeFoundingCastles(
   scenario: MapScenario,
-  humanRegionId: string,
-  humanCastle: CellPosition,
-  opponentProfileIds: AiProfileId[] = ['radomir', 'velislava', 'svyatobor'],
-): MapScenario {
-  if (!isCastleSiteValid(scenario, humanRegionId, humanCastle)) return scenario
-  const humanRegionIndex = scenario.regions.findIndex((region) => region.id === humanRegionId)
-  const opponentAssignments = assignOpponentRegions(scenario, humanRegionId, opponentProfileIds)
-  if (opponentAssignments.length !== scenario.regions.length - 1
-    || new Set(opponentAssignments.map(({ profileId }) => profileId)).size !== opponentAssignments.length) return scenario
-  const participants: MatchParticipant[] = [
-    { id: 'player', kind: 'human', regionId: humanRegionId, color: scenario.regions[humanRegionIndex].color },
-    ...opponentAssignments.map(({ region, profileId }) => {
-      return { id: `ai-${profileId}`, kind: 'ai' as const, regionId: region.id, color: region.color, profileId }
-    }),
-  ]
-  const placements = scenario.regions.map((region) => ({
-    region,
-    position: region.id === humanRegionId ? humanCastle : chooseCastleSiteForRegion(scenario, region),
-    participant: participants.find((participant) => participant.regionId === region.id)!,
-  }))
+  participants: MatchParticipant[],
+  castleForRegion: (region: StartRegion) => CellPosition,
+) {
   const changedRows = new Map<number, GameMap[number]>()
   const cells = [...scenario.cells]
-  placements.forEach(({ position, participant }) => {
+  scenario.regions.forEach((region) => {
+    const participant = participants.find((candidate) => candidate.regionId === region.id)
+    if (!participant) return
+    const position = castleForRegion(region)
     const row = changedRows.get(position.row) ?? [...cells[position.row]]
     changedRows.set(position.row, row)
     cells[position.row] = row
@@ -654,4 +655,69 @@ export function foundMatch(
     }
   })
   return { ...scenario, cells, participants }
+}
+
+function aiParticipantIds(profileIds: AiProfileId[]) {
+  const totals = new Map<AiProfileId, number>()
+  profileIds.forEach((profileId) => totals.set(profileId, (totals.get(profileId) ?? 0) + 1))
+  const occurrences = new Map<AiProfileId, number>()
+  return profileIds.map((profileId) => {
+    const occurrence = (occurrences.get(profileId) ?? 0) + 1
+    occurrences.set(profileId, occurrence)
+    return totals.get(profileId) === 1 ? `ai-${profileId}` : `ai-${profileId}-${occurrence}`
+  })
+}
+
+export function foundMatch(
+  scenario: MapScenario,
+  humanRegionId: string,
+  humanCastle: CellPosition,
+  opponentProfileIds: AiProfileId[] = ['radomir', 'velislava', 'svyatobor'],
+  participantTeamIds: number[] = [],
+): MapScenario {
+  if (!isCastleSiteValid(scenario, humanRegionId, humanCastle)) return scenario
+  const humanRegionIndex = scenario.regions.findIndex((region) => region.id === humanRegionId)
+  const opponentAssignments = assignOpponentRegions(scenario, humanRegionId, opponentProfileIds)
+  if (opponentAssignments.length !== scenario.regions.length - 1) return scenario
+  const participantIds = aiParticipantIds(opponentAssignments.map(({ profileId }) => profileId))
+  const participants: MatchParticipant[] = [
+    {
+      id: 'player',
+      kind: 'human',
+      regionId: humanRegionId,
+      color: scenario.regions[humanRegionIndex].color,
+      ...(participantTeamIds[0] ? { teamId: participantTeamIds[0] } : {}),
+    },
+    ...opponentAssignments.map(({ region, profileId }, index) => {
+      const teamId = participantTeamIds[index + 1]
+      return { id: participantIds[index], kind: 'ai' as const, regionId: region.id, color: region.color, profileId, ...(teamId ? { teamId } : {}) }
+    }),
+  ]
+  return placeFoundingCastles(
+    scenario,
+    participants,
+    (region) => region.id === humanRegionId ? humanCastle : chooseCastleSiteForRegion(scenario, region),
+  )
+}
+
+export function foundAutomatedMatch(
+  scenario: MapScenario,
+  profileIds: AiProfileId[],
+  participantTeamIds: number[] = [],
+): MapScenario {
+  if (profileIds.length !== scenario.regions.length) return scenario
+  const participantIds = aiParticipantIds(profileIds)
+  const participants: MatchParticipant[] = scenario.regions.map((region, index) => ({
+    id: participantIds[index],
+    kind: 'ai',
+    regionId: region.id,
+    color: region.color,
+    profileId: profileIds[index],
+    ...(participantTeamIds[index] ? { teamId: participantTeamIds[index] } : {}),
+  }))
+  return placeFoundingCastles(scenario, participants, (region) => chooseCastleSiteForRegion(scenario, region))
+}
+
+export function isSpectatorScenario(scenario: MapScenario) {
+  return scenario.participants.length > 0 && scenario.participants.every((participant) => participant.kind === 'ai')
 }

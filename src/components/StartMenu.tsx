@@ -94,6 +94,7 @@ interface StartMenuProps {
   savedMaps: SavedMapDefinition[]
   participantCount: number
   opponentProfileIds: AiProfileId[]
+  hasHumanPlayer: boolean
   onMapChange: (selection: MapSelection) => void
   onDeleteSavedMap: (id: string) => void
   onOpenOpponents: () => void
@@ -105,7 +106,7 @@ interface StartMenuProps {
   utilityControls: ReactNode
 }
 
-export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, onMapChange, onDeleteSavedMap, onOpenOpponents, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, storageFeedback, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, hasHumanPlayer, onMapChange, onDeleteSavedMap, onOpenOpponents, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, storageFeedback, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
@@ -181,10 +182,10 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
         </div>
 
         <footer className="match-action-bar">
-          <button type="button" className="participant-control opponent-control" onClick={onOpenOpponents}><span><strong>{text.participants}</strong><small>{text.participantDescription}</small></span><span className="opponent-avatar-stack" aria-label={`${participantCount} · ${text.humanAndNpc}`}>{opponentProfileIds.map((profileId) => <img key={profileId} src={`${import.meta.env.BASE_URL}${aiAvatarPaths[profileId]}`} alt="" />)}<b>{opponentProfileIds.length}</b></span></button>
+          <button type="button" className="participant-control opponent-control" onClick={onOpenOpponents}><span><strong>{text.participants}</strong><small>{text.participantDescription}</small></span><span className="opponent-avatar-stack" aria-label={`${participantCount} · ${hasHumanPlayer ? text.humanAndNpc : text.botsOnly}`}>{opponentProfileIds.map((profileId, index) => <img key={`${profileId}-${index}`} src={`${import.meta.env.BASE_URL}${aiAvatarPaths[profileId]}`} alt="" />)}<b>{participantCount}</b></span></button>
           <div className="match-primary-actions">
             {hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}</button>}
-            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : text.start}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
+            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : hasHumanPlayer ? text.start : text.watch}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
           </div>
           <div className="start-utility-slot">{utilityControls}</div>
         </footer>

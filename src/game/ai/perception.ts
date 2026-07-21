@@ -3,6 +3,7 @@ import { aiPlannerConfig } from '../../config/ai'
 import { gameConfig } from '../../config/game'
 import { squadHealth, type DomainEconomy, type MatchState } from '../match'
 import { calculateVisibility, isCellVisible, visibleObjectAt } from '../visibility'
+import { areOwnersHostile } from '../scenario'
 import { createAiMemory, type AiContact, type AiMemory } from './model'
 
 const contactKey = (contact: Pick<AiContact, 'ownerId' | 'kind' | 'position'>) => `${contact.ownerId}:${contact.kind}:${contact.position.column}:${contact.position.row}`
@@ -49,7 +50,7 @@ export function updateAiMemory(
       if (!isCellVisible(visibility, position)) continue
       for (const key of contactsByPosition.get(`${column}:${row}`) ?? []) contacts.delete(key)
       const object = state.scenario.cells[row][column].object
-      if (!object || object.ownerId === ownerId) continue
+      if (!object || !areOwnersHostile(state.scenario.participants, ownerId, object.ownerId)) continue
       const kind = object.type === 'squad' ? 'squad' : object.type === 'building' && object.kind === 'barracks' ? 'barracks' : null
       if (!kind) continue
       const contact: AiContact = object.type === 'squad'

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { supportedLocales, type Locale, type LocaleDictionary } from '../config/localization'
-import { CloseIcon, SoundIcon } from './InterfaceIcons'
+import { SoundIcon } from './InterfaceIcons'
 import { ConfirmDialog } from './ui/ConfirmDialog'
+import { ModalCloseButton } from './ui/ModalCloseButton'
 import { useModalFocus } from '../hooks/useModalFocus'
 
 interface SettingsModalProps {
@@ -57,7 +58,7 @@ export function SettingsModal({
       >
         <header className="settings-header">
           <div><span className="settings-kicker">ESC</span><h2 id="settings-title">{text.settings.title}</h2></div>
-          <button type="button" className="settings-close" onClick={onClose} aria-label={text.settings.close} data-modal-autofocus><CloseIcon /></button>
+          <ModalCloseButton label={text.settings.close} onClick={onClose} data-modal-autofocus />
         </header>
 
         <div className="settings-content">

@@ -16,7 +16,7 @@ import {
   squadMovementOrderCost,
 } from '../../movement'
 import { findMovementPath } from '../../pathfinding'
-import type { CellPosition } from '../../scenario'
+import { areOwnersHostile, type CellPosition } from '../../scenario'
 import {
   aiObjectEntries,
   castlePositionFor,
@@ -104,7 +104,7 @@ function localThreatFor(
 ) {
   const radius = aiTacticalConfig.raid.localThreatRadius
   return aiObjectEntries(state.scenario).reduce((sum, entry) => {
-    if (entry.object.ownerId === ownerId) return sum
+    if (!areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)) return sum
     const distance = positionDistance(entry.position, target)
     if (distance > radius) return sum
     const proximity = Math.max(0, 1 - distance / (radius + 1))

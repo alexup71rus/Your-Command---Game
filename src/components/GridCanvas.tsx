@@ -15,7 +15,7 @@ import {
 import type { BuildingKind, GameMap, TroopComposition, TroopKind } from '../game/map'
 import { maxSquadHealth, squadHealth } from '../game/match'
 import { squadMovementOrderCost, squadMovementOrderCostBetween } from '../game/movement'
-import { isCastleSiteValid, type AiProfileId, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
+import { areOwnersHostile, isCastleSiteValid, type AiProfileId, type CellPosition, type MatchParticipant, type StartRegion, type TerritoryMap } from '../game/scenario'
 import { isCellVisible, isObjectVisible, visibleObjectAt, type VisibilityMap } from '../game/visibility'
 
 const CELL_SIZE = gameConfig.map.cellSize
@@ -807,7 +807,8 @@ export function GridCanvas(props: GridCanvasProps) {
               : cell.object
             let kind: 'move' | 'merge' | 'attack' | null = null
             if (!target && (current.movementOrdersRemaining ?? 0) >= squadMovementOrderCost(source, cell)) kind = 'move'
-            else if (target && target.ownerId !== source.ownerId && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
+            else if (target && (!current.participants || areOwnersHostile(current.participants, source.ownerId, target.ownerId))
+              && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.movementOrderCost) kind = 'attack'
             else if (target?.type === 'squad' && (current.movementOrdersRemaining ?? 0) >= gameConfig.turn.squadReorganizationOrderCost && sourceSize + Object.values(target.units).reduce((sum, amount) => sum + amount, 0) <= gameConfig.turn.squadCapacity) kind = 'merge'
             if (!kind) return
             drawOrderMarker(column, row, kind, glyph)
@@ -838,7 +839,8 @@ export function GridCanvas(props: GridCanvasProps) {
                   context.restore()
                 }
                 if (target) {
-                  if (distance >= gameConfig.turn.archerMinimumRange && target.ownerId !== source.ownerId) {
+                  if (distance >= gameConfig.turn.archerMinimumRange
+                    && (!current.participants || areOwnersHostile(current.participants, source.ownerId, target.ownerId))) {
                     context.save()
                     context.fillStyle = 'rgba(176, 72, 58, .22)'; context.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2)
                     context.strokeStyle = '#d97860'; context.lineWidth = Math.max(1.5, Math.min(2.5, camera.zoom * 2)); context.setLineDash([3, 3]); context.strokeRect(x + 3, y + 3, Math.max(0, cellSize - 6), Math.max(0, cellSize - 6)); context.setLineDash([])

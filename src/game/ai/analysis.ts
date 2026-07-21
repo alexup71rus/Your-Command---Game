@@ -5,7 +5,7 @@ import { buildingFootprintPositions } from '../match'
 import { clockwiseCardinalDirections } from '../geometry'
 import { findMovementPath } from '../pathfinding'
 import { terrainMovementOrderMultiplier } from '../movement'
-import type { CellPosition, MapScenario } from '../scenario'
+import { areOwnersHostile, type CellPosition, type MapScenario } from '../scenario'
 import type { AiLayoutKind, AiOpeningKind, AiProfileRules, AiSettlementPlan, AiSettlementZoneKind } from './model'
 
 export interface AiObjectEntry {
@@ -126,7 +126,7 @@ function borderCells(scenario: Pick<MapScenario, 'cells' | 'territories'>, regio
 
 function nearestEnemyCastle(scenario: MapScenario, ownerId: string, castle: CellPosition) {
   return scenario.participants
-    .filter((participant) => participant.id !== ownerId)
+    .filter((participant) => areOwnersHostile(scenario.participants, ownerId, participant.id))
     .flatMap((participant) => {
       const position = castlePositionFor(scenario, participant.id)
       return position ? [{ position, distance: positionDistance(castle, position) }] : []

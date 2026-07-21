@@ -14,12 +14,14 @@ export interface LocaleDictionary {
     participants: string
     participantDescription: string
     humanAndNpc: string
+    botsOnly: string
     customMap: string
     customMapDescription: string
     openGenerator: string
     seedShort: string
     deleteSavedMap: string
     start: string
+    watch: string
     starting: string
     mapError: string
     mapUnviable: string
@@ -45,8 +47,12 @@ export interface LocaleDictionary {
     close: string
     playerMark: string
     mapCapacity: string
-    arsenal: Record<AiArsenalTier, string>
-    profiles: Record<AiProfileId, { name: string; strategy: string; toolkit: string }>
+    biography: string
+    region: string
+    alliance: string
+    changeAlliance: string
+    regionBinding: string
+    profiles: Record<AiProfileId, { name: string; epithets: string[]; role: string; strategy: string; toolkit: string }>
   }
   founding: {
     chooseTitle: string
@@ -59,6 +65,7 @@ export interface LocaleDictionary {
     hills: string
     selected: string
     changeRegion: string
+    assignedRegion: string
     chooseSite: string
     validSite: string
     invalidSite: string
@@ -77,6 +84,7 @@ export interface LocaleDictionary {
     thinking: string
     longThinking: string
     yourTurn: string
+    spectator: string
     aiPhase: Record<AiStrategicPhase, string>
   }
   tabs: Array<{ id: TabId; label: string }>
@@ -180,6 +188,9 @@ export interface LocaleDictionary {
     victoryDescription: string
     defeatTitle: string
     defeatDescription: string
+    spectatorVictoryTitle: string
+    spectatorVictoryDescription: string
+    autoBattle: string
     continue: string
     turnDesertion: string
     turnStarvation: string
@@ -341,11 +352,25 @@ export function isLocale(value: string | null): value is Locale {
   return value !== null && supportedLocales.includes(value as Locale)
 }
 
+export function aiProfileDisplayName(text: LocaleDictionary['opponents'], profileId: AiProfileId, occurrence = 0) {
+  const profile = text.profiles[profileId]
+  const epithet = profile.epithets[occurrence % profile.epithets.length]
+  return epithet ? `${profile.name} ${epithet}` : profile.name
+}
+
+export function aiParticipantDisplayName(text: LocaleDictionary['opponents'], participants: MatchParticipant[], participantId: string) {
+  const participantIndex = participants.findIndex((participant) => participant.id === participantId)
+  const participant = participants[participantIndex]
+  if (!participant?.profileId) return participant?.kind === 'human' ? text.player : participantId
+  const occurrence = participants.slice(0, participantIndex)
+    .filter((candidate) => candidate.profileId === participant.profileId).length
+  return aiProfileDisplayName(text, participant.profileId, occurrence)
+}
+
 export async function loadLocale(locale: Locale) {
   return (await localeLoaders[locale]()).default
 }
 import type { BuildingKind, ResourceId, TroopKind } from '../game/map'
 import type { CommandFailure } from '../game/match'
-import type { AiProfileId } from '../game/scenario'
-import type { AiArsenalTier } from '../game/ai/model'
+import type { AiProfileId, MatchParticipant } from '../game/scenario'
 import type { AiStrategicPhase } from '../game/ai/model'
