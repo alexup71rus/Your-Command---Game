@@ -6,6 +6,7 @@ import { analyzeAiWorld, createSettlementPlan, positionDistance, positionKey } f
 import { createAiPerception, updateAiMemory } from './perception'
 import { planAiTurn } from './planner'
 import { createAiMemory } from './model'
+import { waveFor } from './tactics'
 import { findStrategicBuildPosition, homeThreatFor, marketCandidate } from './strategy'
 import { militia as units, startAiTurn } from './testing/scenarioFixtures'
 
@@ -164,6 +165,48 @@ describe('AI perception and planning', () => {
     const memory = { ...createAiMemory(), settlementPlan: createSettlementPlan(analysis, state.scenario, aiProfiles.svyatobor) }
     const candidate = marketCandidate(state, aiProfiles.svyatobor, 'expansion', memory, analysis, () => true)
     expect(candidate?.command.type === 'trade' && candidate.command.resource === 'stone').toBe(false)
+  })
+
+  it('spaces successive main assault waves by mainWaveCooldownTurns', () => {
+    // waveFor enforces a cooldown between successive main waves so an assault
+    // campaign reads as prepared strikes rather than a non-stop reinforcement
+    // stream. Build a state where a main wave would otherwise be issued every
+    // turn (strong army, fortifications ready, far from the target) and verify
+    // the cooldown gates it.
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    // A large army well above the assault threshold and with no fielded squad
+    // near the target keeps waveFor on the main/support branch (not siege).
+    for (let row = 14; row <= 17; row += 1) {
+      for (let column = 19; column <= 22; column += 1) {
+        state.scenario.cells[row][column].object = undefined
+      }
+    }
+    state.scenario.cells[15][20].object = {
+      type: 'squad', ownerId, units: { militia: 0, spearmen: 6, archers: 3, knights: 0 },
+    }
+    state.scenario.cells[16][20].object = {
+      type: 'squad', ownerId, units: { militia: 0, spearmen: 6, archers: 3, knights: 0 },
+    }
+    state.scenario.cells[15][21].object = {
+      type: 'squad', ownerId, units: { militia: 0, spearmen: 6, archers: 3, knights: 0 },
+    }
+    state.turn = 20
+    const baseMemory = {
+      ...createAiMemory(),
+      targetOwnerId: 'player',
+      phase: 'assault' as const,
+      stableTurns: 10,
+      // No squad is near the target yet, and the previous wave was not main, so
+      // the cooldown branch is the only thing standing between this call and a
+      // freshly-issued main wave.
+      wave: 'support' as const,
+      lastMainWaveTurn: 18,
+    }
+    // Still within the cooldown: a fresh main wave must be withheld.
+    expect(waveFor(state, aiProfiles.svyatobor, baseMemory, 'assault')).toBe('support')
+    // Once the cooldown has elapsed, the next main wave is free to go out.
+    expect(waveFor(state, aiProfiles.svyatobor, { ...baseMemory, lastMainWaveTurn: 17 }, 'assault')).toBe('main')
   })
 
 })

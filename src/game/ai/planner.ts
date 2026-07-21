@@ -228,10 +228,14 @@ export function planAiTurn(
       : memory.lastOffensiveEndTurn,
     stableTurns: stable ? memory.stableTurns + 1 : 0,
   }
+  const nextWave = waveFor(state, profile, memory, phase)
   memory = {
     ...memory,
     squadRoles: assignSquadRoles(state, profile, memory.squadRoles, phase),
-    wave: waveFor(state, profile, memory, phase),
+    wave: nextWave,
+    // Record the turn a main wave is issued so `waveFor` can enforce the
+    // main-wave cooldown on subsequent turns.
+    lastMainWaveTurn: nextWave === 'main' ? state.turn : memory.lastMainWaveTurn,
   }
 
   const commands: AiCommand[] = []

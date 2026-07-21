@@ -337,4 +337,65 @@ describe('authored AI combat scenarios', () => {
     expect(concentratedRun.steps, summary).toHaveLength(1)
     expect(concentratedRun.steps[0].command.type, summary).not.toBe('split')
   })
+
+  it('weighs enemy archer fire when choosing which squad to attack', () => {
+    // Two weak enemy squads are both adjacent to our strong attacker. One sits
+    // on a clear line from a covering enemy archer detachment (so the worst-
+    // case reply includes incoming ranged fire); the other is shielded by a
+    // peak. The attacker must prefer the shielded target now that ranged
+    // replies are counted in worstReplyPenalty.
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    state.turn = 20
+    relocatePlayerCastle(state, { column: 3, row: 12 })
+    const attacker = { column: 12, row: 12 }
+    const exposedTarget = { column: 12, row: 11 }
+    const shieldedTarget = { column: 12, row: 13 }
+    const archerCover = { column: 12, row: 7 }
+    // Clear the column between the archer cover and the exposed target so the
+    // ranged line is unobstructed; place a peak between cover and shielded.
+    for (let row = 8; row <= 10; row += 1) {
+      state.scenario.cells[row][12] = { ...state.scenario.cells[row][12], landform: 'plain', vegetation: false, object: undefined }
+    }
+    placeTestSquad(state, ownerId, attacker, spearmen(8), { health: 10.8 })
+    placeTestSquad(state, 'player', exposedTarget, militia(2), { health: 2 })
+    placeTestSquad(state, 'player', shieldedTarget, militia(2), { health: 2 })
+    placeTestSquad(state, 'player', archerCover, { militia: 0, spearmen: 0, archers: 4, knights: 0 }, { health: 4 })
+    const run = runFrozenTactics(state, 'svyatobor', assaultMemory('player'), 'assault', 1)
+    const summary = JSON.stringify({ attacker, exposedTarget, shieldedTarget, archerCover, steps: run.steps, failures: run.failures })
+
+    const firstStrike = run.steps.find((step) => step.event?.kind === 'attacked' || step.event?.kind === 'destroyed')
+    expect(run.failures, summary).toEqual([])
+    expect(firstStrike, summary).toBeDefined()
+    expect(firstStrike?.command, summary).toMatchObject({ type: 'move-or-attack', to: shieldedTarget })
+  })
+
+  it('a scout in siege range still raids undefended economy near the enemy castle', () => {
+    // A scout detachment is within siege range of the enemy castle, so the
+    // main wave is 'siege'. An undefended enemy farm sits just off the route.
+    // The scout should still strike it (overrun multiplier > 0) rather than
+    // stand idle at the gates.
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    state.turn = 20
+    relocatePlayerCastle(state, { column: 3, row: 12 })
+    const scout = { column: 8, row: 12 }
+    const farm = { column: 6, row: 12 }
+    placeTestSquad(state, ownerId, scout, spearmen(4), { health: 5.4 })
+    placeTestBuilding(state, 'player', 'farm', farm)
+    const memory = {
+      ...createAiMemory(),
+      targetOwnerId: 'player',
+      phase: 'assault' as const,
+      wave: 'siege' as const,
+      stableTurns: 10,
+    }
+    const run = runFrozenTactics(state, 'svyatobor', memory, 'assault', 8)
+    const summary = JSON.stringify({ scout, farm, steps: run.steps, failures: run.failures })
+
+    expect(run.failures, summary).toEqual([])
+    expect(run.steps.some((step) => step.command.type === 'move-or-attack'
+      && step.command.to.column === farm.column && step.command.to.row === farm.row), summary).toBe(true)
+    expect(objectAt(run.state, farm), summary).not.toMatchObject({ type: 'building', ownerId: 'player' })
+  })
 })

@@ -27,7 +27,7 @@ import {
   samePosition,
 } from '../analysis'
 import type { AiMemory, AiProfileRules } from '../model'
-import { forceTargetFor, isTemporarilyBlocked, minimumFieldArmySize, plannedBuildingLimit } from './shared'
+import { forceTargetFor, isTemporarilyBlocked, minimumFieldArmySize, overdriveBonusSlots, plannedBuildingLimit } from './shared'
 import type { AiEconomySnapshot } from './types'
 
 const foodResources = gameConfig.economy.foodResources
@@ -330,9 +330,13 @@ export function strategicPhaseFor(state: MatchState, profile: AiProfileRules, me
   if (canLaunch && launchEconomyReady && usesProfileArsenal && assemblyReady && fortificationReadyFor(state, memory)
     && snapshot.armyPower >= probeThreshold) return 'assault' as const
   const housingSlack = snapshot.housingCapacity - state.domains[ownerId].population
-  const canBuildHouse = ownedBuildingCount(state, ownerId, 'house') < plannedBuildingLimit(memory, 'house')
+  // Overdrive opens extra housing/service slots when the domain is resource
+  // rich, so a settlement that has hit its blueprint ceiling can still slip
+  // back into expansion to place a couple more buildings instead of idling.
+  const overdriveSlots = overdriveBonusSlots(state, memory)
+  const canBuildHouse = ownedBuildingCount(state, ownerId, 'house') < plannedBuildingLimit(memory, 'house') + overdriveSlots
     && snapshot.residentialCapacity <= snapshot.foodServiceCapacity
-  const canBuildKitchen = ownedBuildingCount(state, ownerId, 'kitchen') < plannedBuildingLimit(memory, 'kitchen')
+  const canBuildKitchen = ownedBuildingCount(state, ownerId, 'kitchen') < plannedBuildingLimit(memory, 'kitchen') + overdriveSlots
     && snapshot.foodServiceCapacity <= snapshot.residentialCapacity
   const canExpandHousing = canBuildHouse || canBuildKitchen
   const canSustainExpansion = populationGrowthSupplyFor(state, ownerId).sustainable

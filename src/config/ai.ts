@@ -43,6 +43,12 @@ export const aiPlannerConfig = {
   defenseSupplyUtilityBonus: 20,
   defenseRecruitUtilityBonus: 35,
   productiveTradeRunwayDelta: 0.5,
+  // Cooldown between successive "main" assault waves. Without this, an army in
+  // the assault phase alternates main<->support every turn and looks like an
+  // unbroken stream of reinforcements rather than a sequence of prepared,
+  // assembled strikes. A support wave during the cooldown still advances the
+  // siege, but gives the AI a moment to accumulate before the next main push.
+  mainWaveCooldownTurns: 2,
 } as const
 
 export const aiBuildingKindsByZone = {
@@ -338,9 +344,12 @@ export const aiStrategicConfig = {
       mill: 80,
       barracks: 75,
       church: 10,
-      wall: 20,
-      tower: 20,
-      barbican: 20,
+      // Fortifications sit below economy buildings in retention (so a starving
+      // settlement still sacrifices walls before houses), but above the default
+      // so a non-defense surplus trim does not pick a wall first.
+      wall: 60,
+      tower: 60,
+      barbican: 60,
     } as Partial<Record<BuildingKind, number>>,
     duplicateBarracksRetention: 30,
   },
@@ -361,6 +370,21 @@ export const aiStrategicConfig = {
     excessiveHousingPenalty: 12,
     assaultArmyWeight: 5,
     defenseArmyWeight: 8,
+  },
+  // Overdrive lets a fully-developed settlement keep growing reluctantly when
+  // it is genuinely resource-rich: for every multiple of a building's cost held
+  // in reserve, one extra slot opens on the housing/food/industry/military
+  // zones. Defense (walls/towers/barbicans) is excluded — those follow the
+  // fortification plan. Army size is deliberately not raised by overdrive, so
+  // this adds economic depth without feeding the "endless wave spam" symptom.
+  overdrive: {
+    thresholds: [3, 6, 9] as const,
+    bonusSlotsPerTier: [1, 2, 3] as const,
+    minStableTurns: 3,
+    // Typical per-building cost reference used to turn raw stockpiles into a
+    // "how many copies could I afford right now" ratio. Picked from the median
+    // economy building so the tier feels the same across profiles.
+    costReference: { wood: 12, stone: 14, ore: 8, iron: 3, flour: 8, meat: 2, fruit: 4, gold: 24 } satisfies Record<ResourceId, number>,
   },
 } as const
 
@@ -517,6 +541,11 @@ export const aiTacticalConfig = {
     probeMultiplier: 1,
     mainMultiplier: 0.55,
     supportMultiplier: 0.7,
+    // Once an assault reaches siege range, scouts and detached groups should
+    // still raid undefended economy near the enemy castle instead of standing
+    // idle at the gates. The multiplier is deliberately low so the main body
+    // stays focused on the siege; only cheap opportunistic raids bleed through.
+    overrunMultiplier: 0.3,
   },
   staging: {
     corridorFrontShare: 0.55,

@@ -42,6 +42,7 @@ import {
   canAfford,
   isTemporarilyBlocked,
   minimumFieldArmySize,
+  overdriveBonusSlots,
   plannedBuildingLimit,
   settlementZoneKindFor,
 } from './shared'
@@ -103,10 +104,15 @@ export function adaptiveBuildingLimitFor(state: MatchState, memory: AiMemory, ki
       ? Math.min(aiStrategicConfig.maximumFoodFallbackBuildings,
           Math.floor(memory.stalledTurns / aiPlannerConfig.relaxBlueprintAfterStalledTurns))
       : 0
+  // Overdrive opens extra economy slots when the domain is resource-rich, so a
+  // fully-developed settlement can keep growing reluctantly. Defense buildings
+  // are excluded: walls/towers/barbicans follow the fortification plan.
+  const zoneKind = settlementZoneKindFor(kind)
+  const overdriveSlots = zoneKind === 'defense' ? 0 : overdriveBonusSlots(state, memory)
   if (kind === 'orchard' && !hasHuntingTerrainPotential(state, state.activeParticipantId)) {
-    return base + plannedBuildingLimit(memory, 'huntingLodge') + foodFallback
+    return base + plannedBuildingLimit(memory, 'huntingLodge') + foodFallback + overdriveSlots
   }
-  return base + foodFallback
+  return base + foodFallback + overdriveSlots
 }
 
 function settlementZoneHasCapacity(state: MatchState, memory: AiMemory, kind: BuildingKind, phase: AiStrategicPhase) {
@@ -131,7 +137,11 @@ function settlementZoneHasCapacity(state: MatchState, memory: AiMemory, kind: Bu
     || economicEmergencyFor(state, state.activeParticipantId) || addsMissingCapability ? 1 : 0
   const stalledOverflow = memory.stalledTurns >= aiPlannerConfig.relaxBlueprintAfterStalledTurns ? 1 : 0
   const capabilityOverflow = addsMissingCapability ? missingCapabilities.length : 0
-  return occupiedOrigins < zone.maxOrigins + Math.max(emergencyOverflow, stalledOverflow, capabilityOverflow)
+  // Overdrive raises the origin budget for economy zones (never defense) so a
+  // resource-rich, fully-developed domain can keep placing a few more buildings
+  // instead of stalling at the static blueprint ceiling.
+  const overdriveOverflow = zoneKind === 'defense' ? 0 : overdriveBonusSlots(state, memory)
+  return occupiedOrigins < zone.maxOrigins + Math.max(emergencyOverflow, stalledOverflow, capabilityOverflow, overdriveOverflow)
 }
 
 function openingBuildingBonus(memory: AiMemory, kind: BuildingKind) {

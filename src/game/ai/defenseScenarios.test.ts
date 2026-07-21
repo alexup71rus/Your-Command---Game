@@ -196,6 +196,74 @@ describe('deterministic AI defense scenarios with offensive waves disabled', () 
     expect(squads.some((squad) => positionDistance(squad.position, mine) > 2), summary).toBe(true)
   })
 
+  it('keeps a peacetime guard anchored on the remote outpost tower', () => {
+    const state = startAiTurn('svyatobor')
+    const ownerId = state.activeParticipantId
+    const analysis = analyzeAiWorld(state.scenario, ownerId)
+    if (!analysis) throw new Error('Missing defense analysis')
+    const settlementPlan = createSettlementPlan(analysis, state.scenario, aiProfiles.svyatobor)
+    const outpost = settlementPlan.reservedSites.outpostTower
+    if (!outpost) throw new Error('Svyatobor fixture must reserve a remote outpost tower')
+    placeTestBuilding(state, ownerId, 'tower', outpost)
+    // Place one squad already near the outpost and two farther back, so the
+    // test checks the anchoring decision rather than long-distance pathing.
+    const near = { column: outpost.column, row: outpost.row + 2 }
+    const starts = [near, { column: 21, row: 10 }, { column: 22, row: 12 }]
+    starts.forEach((position) => placeTestSquad(state, ownerId, position, spearmen(2), { health: 2.7 }))
+    const memory = {
+      ...createAiMemory(), settlementPlan, targetOwnerId: 'player', phase: 'mobilization' as const,
+    }
+    const run = runFrozenTactics(state, 'svyatobor', memory, 'mobilization', 8)
+    const squads = ownedSquads(run.state, ownerId)
+    const summary = JSON.stringify({ outpost, near, steps: run.steps, squads: squads.map((squad) => squad.position) })
+
+    expect(run.failures, summary).toEqual([])
+    // The outpost tower is remote and valuable; a squad must stay anchored on
+    // it instead of every unit drifting back toward the castle.
+    expect(squads.some((squad) => positionDistance(squad.position, outpost) <= 2), summary).toBe(true)
+  })
+
+  it('never liquidates a planned fortification wall/tower/barbican during an economic recovery', () => {
+    const fixture = createFortressConstructionState('svyatobor', 'mountain-pass')
+    const { state, ownerId, line, outpost } = fixture
+    // Build the complete planned fortification line so every planned cell exists
+    // and is therefore a candidate for liquidation if the guard is missing.
+    placeTestBuilding(state, ownerId, 'barbican', line.gate)
+    line.walls.forEach((position) => placeTestBuilding(state, ownerId, 'wall', position))
+    line.towers.forEach((position) => placeTestBuilding(state, ownerId, 'tower', position))
+    if (outpost) placeTestBuilding(state, ownerId, 'tower', outpost)
+    // Push the domain into a recovery state: gold below upkeep so
+    // economicEmergencyFor is true and demolitionCandidate enters liquidation.
+    state.domains[ownerId] = {
+      ...state.domains[ownerId],
+      resources: {
+        ...state.domains[ownerId].resources,
+        wood: 40, stone: 30, ore: 0, iron: 0,
+        flour: 2, meat: 0, fruit: 2, gold: 0,
+      },
+    }
+    const run = runAiScenario(state, 'svyatobor', { turns: 6, mode: 'development-only', cachedAnalysis: fixture.analysis })
+    const summary = JSON.stringify({
+      line, outpost,
+      builds: buildEvents(run),
+      demolishes: run.turns.flatMap((turn) => turn.executed.filter((command) => command.type === 'demolish')),
+      failures: run.turns.flatMap((turn) => turn.failures.map((failure) => ({ turn: turn.turn, ...failure }))),
+    })
+    const plannedCells = [line.gate, ...line.walls, ...line.towers, ...(outpost ? [outpost] : [])]
+    const demolished = run.turns.flatMap((turn) => turn.executed.flatMap((command) => (
+      command.type === 'demolish' ? [command.position] : []
+    )))
+    // No planned fortification cell may be demolished even under economic stress.
+    expect(demolished.some((position) => plannedCells.some((planned) => (
+      position.column === planned.column && position.row === planned.row
+    ))), summary).toBe(false)
+    // The planned line itself must still stand intact at the end.
+    expect(objectAt(run.state, line.gate), summary).toMatchObject({ type: 'building', kind: 'barbican' })
+    line.walls.forEach((position) => {
+      expect(objectAt(run.state, position), summary).toMatchObject({ type: 'building', kind: 'wall' })
+    })
+  })
+
   it('recognizes a remote raid as a home threat and sends a field squad to intercept it', () => {
     const state = startAiTurn('svyatobor')
     const ownerId = state.activeParticipantId

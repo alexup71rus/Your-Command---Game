@@ -143,6 +143,10 @@ function waveMultiplierFor(memory: AiMemory) {
   if (memory.wave === 'probe') return aiTacticalConfig.raid.probeMultiplier
   if (memory.wave === 'support') return aiTacticalConfig.raid.supportMultiplier
   if (memory.wave === 'main') return aiTacticalConfig.raid.mainMultiplier
+  // At siege range the main body is committed to the castle, but detached
+  // scouts may still cheaply raid undefended economy near the target instead
+  // of idling at the gates. The low multiplier keeps this opportunistic.
+  if (memory.wave === 'siege') return aiTacticalConfig.raid.overrunMultiplier
   return 0
 }
 

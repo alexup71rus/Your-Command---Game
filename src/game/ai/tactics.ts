@@ -4,6 +4,7 @@ import { buildingRules, combatRules, troopKinds, troopRules } from '../../config
 import type { BuildingKind, BuildingObject, GameMap, MapObject, SquadObject, TroopComposition, TroopKind } from '../map'
 import {
   buildingFootprintPositions,
+  isRangedAttack,
   moveOrAttackFailure,
   objectAt,
   squadHealth,
@@ -22,7 +23,7 @@ import { aiObjectEntries, castlePositionFor, positionDistance, positionKey, same
 import { executeAiCommand } from './commands'
 import { armyPowerFor, estimatedTargetPower, fortificationReadyFor, homeThreatFor, stagingAnchorsFor, troopCompositionPower } from './strategy'
 import { raidObjectivesFor, type RaidObjective } from './strategy/raids'
-import { forceTargetFor } from './strategy/shared'
+import { forceTargetFor, isPlannedFortification } from './strategy/shared'
 import type { AiCommand, AiMemory, AiProfileRules, AiSquadRole, AiStrategicPhase, AiWaveKind } from './model'
 
 export interface TacticalCandidate {
@@ -165,7 +166,12 @@ function possibleEnemyReplies(state: MatchState, ownerId: string, countNode: () 
     const responseState = { ...state, activeParticipantId: enemy.object.ownerId, ordersRemaining: gameConfig.turn.maxOrders }
     for (const target of ownObjects) {
       if (!countNode()) return replies
-      if (moveOrAttackFailure(responseState, enemy.position, target.position) === null) {
+      // A hostile squad can reply either by closing into melee or by shooting
+      // from range. Both are modelled as `move-or-attack`; ranged fire is only
+      // chosen when the target sits on a clear orthogonal line within archer
+      // range, which `isRangedAttack` checks against the enemy's perspective.
+      if (moveOrAttackFailure(responseState, enemy.position, target.position) === null
+        || isRangedAttack(responseState, enemy.position, target.position)) {
         replies.push({ type: 'move-or-attack', from: enemy.position, to: target.position })
       }
     }
@@ -406,6 +412,32 @@ function attackTargetsFor(state: MatchState, ownerId: string) {
       : [entry])
 }
 
+/**
+ * When the selected target's castle has fallen (or no target is selected), an
+ * assault force still needs somewhere to go. Pick the nearest hostile building
+ * or squad so the army advances on something instead of skipping every turn.
+ */
+function nearestHostileAsset(state: MatchState, from: CellPosition, ownerId: string): CellPosition | null {
+  let best: CellPosition | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const entry of aiObjectEntries(state.scenario)) {
+    if (!areOwnersHostile(state.scenario.participants, ownerId, entry.object.ownerId)) continue
+    const positions = entry.object.type === 'building'
+      ? buildingFootprintPositions(entry.object.kind, entry.position)
+      : [entry.position]
+    for (const position of positions) {
+      const distance = positionDistance(from, position)
+      if (distance < bestDistance
+        || (distance === bestDistance && best && (position.row < best.row
+          || (position.row === best.row && position.column < best.column)))) {
+        bestDistance = distance
+        best = position
+      }
+    }
+  }
+  return best
+}
+
 function attackCandidates(
   state: MatchState,
   profile: AiProfileRules,
@@ -630,14 +662,20 @@ function defensiveAssetsFor(state: MatchState, ownerId: string): DefensiveAsset[
   })
 }
 
-function propertyGuardAnchorsFor(state: MatchState, profile: AiProfileRules, ownerId: string) {
+function propertyGuardAnchorsFor(state: MatchState, profile: AiProfileRules, memory: AiMemory, ownerId: string) {
   if (profile.doctrine.propertyGuardShare <= 0) return []
   const castle = castlePositionFor(state.scenario, ownerId)
   if (!castle) return []
   return defensiveAssetsFor(state, ownerId)
-    .filter((asset) => asset.kind !== 'castle' && asset.kind !== 'wall'
-      && asset.kind !== 'barbican' && asset.kind !== 'tower'
-      && positionDistance(asset.position, castle) >= aiTacticalConfig.defense.remoteGuardMinimumCastleDistance)
+    .filter((asset) => {
+      if (asset.kind === 'castle' || asset.kind === 'wall' || asset.kind === 'barbican') return false
+      // Inline castle towers are covered by the fortress-anchor garrison
+      // logic, so they are excluded like walls. A *remote outpost* tower is a
+      // different matter: it sits far from the castle, is expensive, and has
+      // no garrison rotation of its own — it must be a property-guard anchor.
+      if (asset.kind === 'tower' && !isPlannedFortification(memory, asset.position)) return false
+      return positionDistance(asset.position, castle) >= aiTacticalConfig.defense.remoteGuardMinimumCastleDistance
+    })
     .map((asset) => ({
       ...asset,
       score: asset.value
@@ -734,7 +772,7 @@ function movementCandidates(
     )),
     ...(ownCastle ? [ownCastle] : []),
   ].filter((position, index, all) => all.findIndex((candidate) => samePosition(candidate, position)) === index)
-  const propertyAnchors = propertyGuardAnchorsFor(state, profile, ownerId)
+  const propertyAnchors = propertyGuardAnchorsFor(state, profile, memory, ownerId)
   const defensiveAnchors = [...propertyAnchors, ...fortressAnchors]
     .filter((position, index, all) => all.findIndex((candidate) => samePosition(candidate, position)) === index)
   const ownedTowers = aiObjectEntries(state.scenario, ownerId)
@@ -836,9 +874,13 @@ function movementCandidates(
     } else if (phase === 'regroup') {
       strategicTarget = role === 'reserve' || role === 'ranged' ? guardAnchor : homeAnchor
     } else if (phase === 'assault') {
+      // If the chosen target's castle is gone (or no target is selected), avoid
+      // tactical paralysis: fall back to the nearest hostile asset so an idle
+      // assault force still advances on something instead of skipping its turn.
+      const assaultFallback = targetCastle ?? nearestHostileAsset(state, squad.position, ownerId)
       strategicTarget = role === 'reserve'
         ? guardAnchor
-        : waitingForSupport ? reachableStagingAnchor(squad.position) ?? homeAnchor : raidObjective?.origin ?? targetCastle
+        : waitingForSupport ? reachableStagingAnchor(squad.position) ?? homeAnchor : raidObjective?.origin ?? assaultFallback
     } else strategicTarget = role === 'reserve' ? guardAnchor : homeAnchor
     if (!strategicTarget) continue
     if (!towerNeedingGarrison
@@ -1169,6 +1211,11 @@ export function waveFor(state: MatchState, profile: AiProfileRules, memory: AiMe
     if (nearTarget) return 'siege'
   }
   if (memory.wave === 'main' && totalArmySize(state, state.activeParticipantId) > 0) return 'support'
+  // Space successive main waves so a campaign reads as prepared strikes, not a
+  // non-stop stream. During the cooldown the army still advances toward the
+  // target (support wave) but does not commit a fresh main push every turn.
+  if (memory.lastMainWaveTurn > 0
+    && state.turn - memory.lastMainWaveTurn <= aiPlannerConfig.mainWaveCooldownTurns) return 'support'
   return 'main'
 }
 

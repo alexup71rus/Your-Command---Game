@@ -187,4 +187,60 @@ describe('deterministic AI economy with combat waves disabled', () => {
 
     expect(new Set(sitePlans).size).toBeGreaterThan(1)
   }, 60_000)
+
+  it('develops past the blueprint ceiling via overdrive when resources are abundant', () => {
+    const scenario = createEconomicScenario('svyatobor', 'highland')
+    const state = createMatch(scenario)
+    const ownerId = 'ai-svyatobor'
+    // Saturate every economy resource so overdrive tier 3 (9x reference cost)
+    // is comfortably reached for the scarcest resource.
+    state.domains[ownerId] = {
+      ...state.domains[ownerId],
+      population: 14,
+      taxRate: 'none',
+      resources: {
+        wood: 400, stone: 400, ore: 200, iron: 120,
+        flour: 200, meat: 60, fruit: 120, gold: 600,
+      },
+    }
+    const run = runAiScenario(state, 'svyatobor', { turns: 18, mode: 'development-only' })
+    const summary = behaviorSummary('overdrive-svyatobor', run)
+    const finalBuildings = run.turns.at(-1)?.buildingCounts ?? {}
+    // At least one economy building kind must exceed the static profile limit
+    // (svyatobor: house 5, kitchen 2, quarry 2, mine 2, ...). Overdrive is the
+    // only mechanism that raises these limits, so exceeding any of them proves
+    // the slot is actually open.
+    const profileLimits: Partial<Record<BuildingKind, number>> = {
+      house: 5, kitchen: 2, quarry: 2, mine: 2, smelter: 2,
+      lumberMill: 2, orchard: 2, huntingLodge: 2,
+    }
+    const overdriveKinds = (Object.entries(profileLimits) as Array<[BuildingKind, number]>)
+      .filter(([kind, limit]) => ((finalBuildings as Record<BuildingKind, number>)[kind] ?? 0) > limit)
+    expect(overdriveKinds.length, summary).toBeGreaterThanOrEqual(1)
+  }, 60_000)
+
+  it('does not open overdrive slots before the settlement has stabilized', () => {
+    const scenario = createEconomicScenario('svyatobor', 'highland')
+    const state = createMatch(scenario)
+    const ownerId = 'ai-svyatobor'
+    // Plenty of resources, but the AI starts cold (stableTurns = 0). Overdrive
+    // is gated by minStableTurns, so the first turns must stay within blueprint.
+    state.domains[ownerId] = {
+      ...state.domains[ownerId],
+      resources: {
+        wood: 400, stone: 400, ore: 200, iron: 120,
+        flour: 200, meat: 60, fruit: 120, gold: 600,
+      },
+    }
+    const run = runAiScenario(state, 'svyatobor', { turns: 3, mode: 'development-only' })
+    const summary = behaviorSummary('overdrive-gated', run)
+    const profileLimits: Partial<Record<BuildingKind, number>> = {
+      house: 5, kitchen: 2, quarry: 2, mine: 2, smelter: 2,
+      lumberMill: 2, orchard: 2, huntingLodge: 2,
+    }
+    const finalBuildings = run.turns.at(-1)?.buildingCounts ?? {}
+    const overdriveKinds = (Object.entries(profileLimits) as Array<[BuildingKind, number]>)
+      .filter(([kind, limit]) => ((finalBuildings as Record<BuildingKind, number>)[kind] ?? 0) > limit)
+    expect(overdriveKinds, summary).toEqual([])
+  }, 60_000)
 })

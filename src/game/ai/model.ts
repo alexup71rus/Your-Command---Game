@@ -74,6 +74,10 @@ export interface AiMemory {
   lastTaxChangeTurn: number
   lastArmyReorganizationTurn: number
   lastOffensiveEndTurn: number
+  // Turn of the most recent "main" assault wave. Used by `waveFor` to space
+  // successive main waves by `aiPlannerConfig.mainWaveCooldownTurns` so the AI
+  // pauses to reassemble between strikes instead of streaming troops every turn.
+  lastMainWaveTurn: number
   stableTurns: number
   idleTurns: number
   stalledTurns: number
@@ -93,6 +97,7 @@ export function createAiMemory(): AiMemory {
     lastTaxChangeTurn: 0,
     lastArmyReorganizationTurn: 0,
     lastOffensiveEndTurn: 0,
+    lastMainWaveTurn: 0,
     stableTurns: 0,
     idleTurns: 0,
     stalledTurns: 0,

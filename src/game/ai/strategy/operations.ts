@@ -66,6 +66,7 @@ import {
 import {
   canAfford,
   forceTargetFor,
+  isPlannedFortification,
   isTemporarilyBlocked,
   minimumFieldArmySize,
   plannedBuildingLimit,
@@ -494,6 +495,11 @@ function demolitionCandidate(state: MatchState, profile: AiProfileRules, memory:
     .flatMap((entry) => entry.object.type === 'building' ? [{ ...entry, object: entry.object as BuildingObject }] : [])
   const count = (kind: BuildingKind) => ownedBuildingCount(state, ownerId, kind)
   const safeToRemove = (position: CellPosition) => {
+    // A planned fortification cell (gate / wall / tower / outpost) is part of
+    // the settlement blueprint. Demolishing it would make `nextFortificationStep`
+    // rebuild the same cell next pass, producing a build-demolish oscillation.
+    // Recovery must liquidate surplus economy buildings instead.
+    if (isPlannedFortification(memory, position)) return false
     const result = demolish(state, position)
     if (!result.ok) return false
     const after = economySnapshotFor(result.state, ownerId)
