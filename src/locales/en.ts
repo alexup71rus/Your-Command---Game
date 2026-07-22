@@ -19,9 +19,10 @@ const en: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield, gather the round table, and decide whether to command a domain or watch the rulers fight.',
-    chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Round table', participantDescription: 'Seats in the coming battle',
+    battleTitle: 'Battle setup', regionHint: 'Move a participant to this domain', arrangementKicker: 'Deployment', arrangementTitle: 'Round table', arrangementHint: 'Click for actions · drag for quick deployment', selectedCount: 'At the table', dragInvite: 'Add to the table', dragAlliance: 'Create alliance', dragSwap: 'Swap domains', dragSeparate: 'Leave alliance', allianceFor: 'Alliance for', allyWith: 'Join with', alreadyAllied: 'Already allied', clearSelection: 'Clear selection',
+    chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Roster', participantDescription: 'Seats in the coming battle',
     humanAndNpc: 'You have a seat in the battle', botsOnly: 'Automated battle between rulers', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
-    openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Choose a domain', watch: 'Watch the battle', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game', backToModes: 'Game modes',
+    openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Enter battle', watch: 'Watch', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game', backToModes: 'Game modes',
     presets: {
       greenMarches: { name: 'Green Marches', description: 'Open plains, gentle heights and room for an economy.' },
       highlandPasses: { name: 'Highland Passes', description: 'Heights and narrow routes create natural defensive lines.' },
@@ -29,8 +30,7 @@ const en: LocaleDictionary = {
     },
   },
   opponents: {
-    kicker: 'ROUND TABLE', title: 'Gather the council of rulers',
-    player: 'You', playerDescription: 'Founder and commander of your domain', selected: 'Seats at the table', choose: 'Candidates', addOpponent: 'Invite ruler', removeOpponent: 'Remove participant', confirm: 'Confirm roster', close: 'Close round table', playerMark: 'YOU', mapCapacity: 'The selected map supports up to {count} participants. At least one seat must remain.', biography: 'Ruler dossier', region: 'Domain', alliance: 'Alliance', changeAlliance: 'Change alliance', regionBinding: 'Each seat number matches a domain on the map. Select an alliance crest to change sides.',
+    player: 'You', playerDescription: 'Founder and commander of your domain', choose: 'Add ruler', addOpponent: 'Invite ruler', removeOpponent: 'Remove participant', playerMark: 'YOU', region: 'Domain', alliance: 'Alliance', allies: 'Allies',
     profiles: {
       radomir: { name: 'Radomir', epithets: ['the Prudent', 'the Wise', 'the Steadfast', 'the Cunning'], role: 'Steward and field commander', strategy: 'He opens with a dependable economy, preserves his people, and commits to a direct assault only after gathering a focused force.', toolkit: 'Militia · spearmen · sustainable economy' },
       velislava: { name: 'Velislava', epithets: ['of the Frontier', 'the Vigilant', 'the Unyielding', 'the Fox'], role: 'Warden of passes and raider', strategy: 'She turns narrow approaches into defensive lines, screens her archers, and punishes domains that leave their economy exposed.', toolkit: 'Farms · archers · walls · barbicans' },

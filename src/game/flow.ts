@@ -1,5 +1,5 @@
 export type GamePhase = 'menu' | 'founding' | 'playing'
-export type Overlay = 'settings' | 'generator' | 'saved-games' | 'opponents' | null
+export type Overlay = 'settings' | 'generator' | 'saved-games' | null
 export type EscapeTarget = 'context-menu' | 'overlay' | 'outcome' | 'pending-action' | 'settings'
 
 export function overlayAfterEscape(_phase: GamePhase, overlay: Overlay): Overlay {

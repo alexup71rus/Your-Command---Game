@@ -11,7 +11,6 @@ import { SettingsModal } from './components/SettingsModal'
 import { SavedGamesModal } from './components/SavedGamesModal'
 import { StartMenu } from './components/StartMenu'
 import { UtilityControls } from './components/UtilityControls'
-import { OpponentSetupModal } from './components/OpponentSetupModal'
 import { ConfirmDialog } from './components/ui/ConfirmDialog'
 import { gameConfig, maximumParticipantsForMapSize } from './config/game'
 import { aiPlannerConfig } from './config/ai'
@@ -129,6 +128,7 @@ export function App() {
   const [hasHumanPlayer, setHasHumanPlayer] = useState(true)
   const [opponentProfileIds, setOpponentProfileIds] = useState<AiProfileId[]>(['radomir'])
   const [participantTeamIds, setParticipantTeamIds] = useState<number[]>([1, 2])
+  const [humanRegionIndex, setHumanRegionIndex] = useState(0)
   const [scenario, setScenario] = useState<MapScenario | null>(null)
   const [match, setMatch] = useState<MatchState | null>(null)
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null)
@@ -154,6 +154,7 @@ export function App() {
   const [savedGamesReturnToSettings, setSavedGamesReturnToSettings] = useState(false)
   const [recentCombat, setRecentCombat] = useState(false)
   const participantCount = opponentProfileIds.length + Number(hasHumanPlayer)
+  const normalizedHumanRegionIndex = Math.min(humanRegionIndex, Math.max(0, participantCount - 1))
   const setupParticipantMaximum = gameConfig.match.maxParticipants
   const selectedMapSize = useMemo(() => {
     const preset = mapPresets.find((candidate) => selectedMap === `preset:${candidate.id}`)
@@ -385,7 +386,7 @@ export function App() {
   const beginMatchSetup = useCallback((nextScenario: MapScenario) => {
     const automatedCandidate = !hasHumanPlayer ? foundAutomatedMatch(nextScenario, opponentProfileIds, participantTeamIds) : null
     const automatedScenario = automatedCandidate && isSpectatorScenario(automatedCandidate) ? automatedCandidate : null
-    const assignedHumanRegion = hasHumanPlayer ? nextScenario.regions[0] : undefined
+    const assignedHumanRegion = hasHumanPlayer ? nextScenario.regions[normalizedHumanRegionIndex] ?? nextScenario.regions[0] : undefined
     if (automatedScenario) resetAiPlanner()
     setScenario(automatedScenario ?? nextScenario)
     setMatch(automatedScenario ? createMatch(automatedScenario) : null)
@@ -410,7 +411,7 @@ export function App() {
     setOutcomeDismissed(false)
     setPhase(automatedScenario ? 'playing' : 'founding')
     if (automatedScenario) playSound('action')
-  }, [cancelAutoMove, hasHumanPlayer, opponentProfileIds, participantTeamIds, playSound])
+  }, [cancelAutoMove, hasHumanPlayer, normalizedHumanRegionIndex, opponentProfileIds, participantTeamIds, playSound])
 
   const openGenerator = useCallback(() => setOverlay('generator'), [])
   const closeGenerator = useCallback(() => {
@@ -458,13 +459,18 @@ export function App() {
     setParticipantTeamIds((current) => teamsForSetup(current, nextProfiles.length + Number(hasHumanPlayer)))
   }, [hasHumanPlayer, opponentProfileIds, setupParticipantMaximum])
 
-  const confirmOpponents = useCallback((nextHasHumanPlayer: boolean, profiles: AiProfileId[], teamIds: number[]) => {
+  const changeBattleRoster = useCallback((nextHasHumanPlayer: boolean, profiles: AiProfileId[], teamIds: number[]) => {
     const allowed = profilesForSetup(nextHasHumanPlayer, profiles, selectedMapParticipantLimit)
     setHasHumanPlayer(nextHasHumanPlayer)
     setOpponentProfileIds(allowed)
     setParticipantTeamIds(teamsForSetup(teamIds, allowed.length + Number(nextHasHumanPlayer)))
-    setOverlay(null)
   }, [selectedMapParticipantLimit])
+
+  const changeBattleArrangement = useCallback((nextHumanRegionIndex: number, profiles: AiProfileId[], teamIds: number[]) => {
+    setHumanRegionIndex(nextHumanRegionIndex)
+    setOpponentProfileIds(profiles)
+    setParticipantTeamIds(teamIds)
+  }, [])
 
   const returnToMainMenu = useCallback(() => {
     setScenario(null)
@@ -1049,12 +1055,11 @@ export function App() {
           ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
           : menuPage === 'modes'
             ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
-            : <StartMenu text={text.startMenu} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} hasHumanPlayer={hasHumanPlayer} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onOpenOpponents={() => setOverlay('opponents')} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} onPrimaryHover={() => playSound('primary-hover')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
+            : <StartMenu text={text.startMenu} opponentsText={text.opponents} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} participantTeamIds={participantTeamIds} hasHumanPlayer={hasHumanPlayer} humanRegionIndex={normalizedHumanRegionIndex} participantMaximum={selectedMapParticipantLimit} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onRosterChange={changeBattleRoster} onArrangementChange={changeBattleArrangement} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} onPrimaryHover={() => playSound('primary-hover')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
         <ClickEffects bursts={bursts} />
         {overlay === 'generator' && (
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} participantMaximum={setupParticipantMaximum} savedMapCount={savedMaps.length} onParticipantChange={changeParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />
         )}
-        {overlay === 'opponents' && <OpponentSetupModal text={text.opponents} hasHumanPlayer={hasHumanPlayer} selected={opponentProfileIds} selectedTeamIds={participantTeamIds} maxParticipants={selectedMapParticipantLimit} onClose={() => setOverlay(null)} onConfirm={confirmOpponents} />}
         {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} />}
         {overlay === 'saved-games' && <SavedGamesModal locale={locale} text={text} saves={savedGames} showSaveAction={false} canSave={false} busy={savedGamesBusy} feedback={savedGamesFeedback} onClose={closeSavedGames} onSave={saveCurrentGame} onLoad={requestLoadGame} onDelete={removeSavedGame} />}
         {pendingLoadId && <ConfirmDialog title={text.savedGames.loadTitle} description={text.savedGames.loadDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.loadConfirm} onCancel={() => setPendingLoadId(null)} onConfirm={() => { const id = pendingLoadId; setPendingLoadId(null); void loadGame(id) }} />}

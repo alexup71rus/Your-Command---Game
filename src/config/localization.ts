@@ -24,6 +24,20 @@ export interface LocaleDictionary {
     eyebrow: string
     title: string
     description: string
+    battleTitle: string
+    regionHint: string
+    arrangementKicker: string
+    arrangementTitle: string
+    arrangementHint: string
+    selectedCount: string
+    dragInvite: string
+    dragAlliance: string
+    dragSwap: string
+    dragSeparate: string
+    allianceFor: string
+    allyWith: string
+    alreadyAllied: string
+    clearSelection: string
     chooseMap: string
     builtInMaps: string
     myMaps: string
@@ -51,23 +65,15 @@ export interface LocaleDictionary {
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
   opponents: {
-    title: string
-    kicker: string
     player: string
     playerDescription: string
-    selected: string
     choose: string
     addOpponent: string
     removeOpponent: string
-    confirm: string
-    close: string
     playerMark: string
-    mapCapacity: string
-    biography: string
     region: string
     alliance: string
-    changeAlliance: string
-    regionBinding: string
+    allies: string
     profiles: Record<AiProfileId, { name: string; epithets: string[]; role: string; strategy: string; toolkit: string }>
   }
   founding: {
