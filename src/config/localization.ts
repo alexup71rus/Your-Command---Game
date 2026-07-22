@@ -4,10 +4,33 @@ export type TabId = 'buildings' | 'barracks' | 'castle'
 
 export interface LocaleDictionary {
   localeName: string
+  mainMenu: {
+    eyebrow: string
+    title: string
+    tagline: string
+    continue: string
+    modeTitle: string
+    back: string
+    select: string
+    inDevelopment: string
+    modes: Record<'story' | 'economy' | 'siege' | 'battle', { title: string; description: string }>
+  }
   startMenu: {
     eyebrow: string
     title: string
     description: string
+    battleTitle: string
+    regionHint: string
+    arrangementTitle: string
+    selectedCount: string
+    dragInvite: string
+    dragAlliance: string
+    dragSwap: string
+    dragSeparate: string
+    allianceFor: string
+    allyWith: string
+    alreadyAllied: string
+    clearSelection: string
     chooseMap: string
     builtInMaps: string
     myMaps: string
@@ -31,26 +54,19 @@ export interface LocaleDictionary {
     mapDeleteFailed: string
     mapReadFailed: string
     loadGame: string
+    backToModes: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
   opponents: {
-    title: string
-    kicker: string
     player: string
     playerDescription: string
-    selected: string
     choose: string
     addOpponent: string
     removeOpponent: string
-    confirm: string
-    close: string
     playerMark: string
-    mapCapacity: string
-    biography: string
     region: string
     alliance: string
-    changeAlliance: string
-    regionBinding: string
+    allies: string
     profiles: Record<AiProfileId, { name: string; epithets: string[]; role: string; strategy: string; toolkit: string }>
   }
   founding: {
@@ -214,9 +230,9 @@ export interface LocaleDictionary {
   sound: {
     title: string
     description: string
+    effectsTitle: string
     effectsVolume: string
     musicTitle: string
-    musicDescription: string
     musicVolume: string
     enable: string
     disable: string
@@ -246,6 +262,8 @@ export interface LocaleDictionary {
   settings: {
     title: string
     close: string
+    gameplayTitle: string
+    sessionTitle: string
     language: string
     languageDescription: string
     grid: string
@@ -260,7 +278,6 @@ export interface LocaleDictionary {
     mainMenuDescription: string
     saveGame: string
     saveGameDescription: string
-    manageGames: string
   }
   savedGames: {
     kicker: string

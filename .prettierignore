@@ -1,0 +1,7 @@
+dist
+node_modules
+coverage
+public/assets
+src/styles/*.css
+src/game/wasm
+wasm

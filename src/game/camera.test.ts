@@ -4,6 +4,7 @@ import {
   cameraForOverview,
   clampCamera,
   screenToWorld,
+  worldToScreen,
   zoomAtPoint,
   type Camera,
   type Point,
@@ -22,11 +23,24 @@ describe('camera', () => {
     expect(overview).toEqual({ x: 2500, y: 2500, zoom: 0.16 })
     expect(5000 * overview.zoom).toBeLessThanOrEqual(900 - 100)
   })
-  it('keeps the visible area inside the world', () => {
+  it('keeps a small screen-space margin around the map at its pan limits', () => {
     const result = clampCamera({ x: -500, y: 10_000, zoom: 1 }, viewport, world)
+    const topLeft = worldToScreen({ x: 0, y: 0 }, result, viewport)
+    const bottomRight = worldToScreen({ x: world.width, y: world.height }, result, viewport)
 
-    expect(result.x).toBe(viewport.width / 2)
-    expect(result.y).toBe(world.height - viewport.height / 2)
+    expect(topLeft.x).toBe(gameConfig.camera.edgePanPadding)
+    expect(bottomRight.y).toBe(viewport.height - gameConfig.camera.edgePanPadding)
+  })
+
+  it('uses the decorative map edge instead of empty pan space when padding is disabled', () => {
+    const borderSize = gameConfig.camera.decorativeBorderCells * gameConfig.map.cellSize
+    const visualWorld = { width: world.width + borderSize * 2, height: world.height + borderSize * 2 }
+    const result = clampCamera({ x: -500, y: 10_000, zoom: 1 }, viewport, visualWorld, undefined, 0)
+    const topLeft = worldToScreen({ x: 0, y: 0 }, result, viewport)
+    const bottomRight = worldToScreen({ x: visualWorld.width, y: visualWorld.height }, result, viewport)
+
+    expect(topLeft.x).toBe(0)
+    expect(bottomRight.y).toBe(viewport.height)
   })
 
   it('keeps the world point under the cursor while zooming', () => {

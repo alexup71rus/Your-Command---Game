@@ -1,5 +1,5 @@
 import { gameConfig, maximumParticipantsForMapSize } from '../config/game'
-import { aiPlannerConfig } from '../config/ai'
+import { aiPlannerConfig, aiSpatialConfig } from '../config/ai'
 import { buildingKinds, buildingRules, resourceIds, taxRates, tradeableResources, troopKinds, troopRules } from '../config/rules'
 import type { BuildingKind, MapObject, ResourceId, TroopComposition } from './map'
 import type { MatchEvent, MatchState, TurnReport } from './match'
@@ -68,7 +68,10 @@ function isFortificationLine(value: unknown, size: number) {
     || !aiFortificationKinds.some((kind) => kind === value.kind)
     || !isPosition(value.approach, size) || !isPosition(value.gate, size)
     || !Array.isArray(value.walls) || value.walls.length < 2
-    || !isPositionList(value.walls, size, 12)
+    // The wall ceiling tracks the settlement planner so that raising the AI
+    // geometric limit cannot silently make every save unreadable. The planner
+    // distributes a bounded tower budget across lines, so 4 stays a safe cap.
+    || !isPositionList(value.walls, size, aiSpatialConfig.settlementPlan.fortification.maximumWallsPerLine)
     || !Array.isArray(value.towers) || !isPositionList(value.towers, size, 4)) return false
   const positions = [value.gate, ...value.walls, ...value.towers]
   return new Set(positions.map((position) => `${position.column}:${position.row}`)).size === positions.length

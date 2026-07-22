@@ -48,8 +48,8 @@ export function useLocalization() {
 
   useEffect(() => {
     document.documentElement.lang = loaded?.locale ?? requestedLocale
-    if (loaded?.dictionary.startMenu.title) document.title = loaded.dictionary.startMenu.title
-  }, [loaded?.dictionary.startMenu.title, loaded?.locale, requestedLocale])
+    if (loaded?.dictionary.mainMenu.title) document.title = loaded.dictionary.mainMenu.title
+  }, [loaded?.dictionary.mainMenu.title, loaded?.locale, requestedLocale])
 
   const setLocale = useCallback((nextLocale: Locale) => {
     try {

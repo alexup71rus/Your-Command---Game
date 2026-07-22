@@ -37,7 +37,13 @@ export function cameraForOverview(viewport: Size, world: Size, padding = 48): Ca
   }
 }
 
-export function clampCamera(camera: Camera, viewport: Size, world: Size, minimumZoom = effectiveMinimumZoom(viewport, world)): Camera {
+export function clampCamera(
+  camera: Camera,
+  viewport: Size,
+  world: Size,
+  minimumZoom: number = effectiveMinimumZoom(viewport, world),
+  edgePadding: number = gameConfig.camera.edgePanPadding,
+): Camera {
   const zoom = clamp(
     camera.zoom,
     minimumZoom,
@@ -45,16 +51,21 @@ export function clampCamera(camera: Camera, viewport: Size, world: Size, minimum
   )
   const halfWorldWidth = viewport.width / (2 * zoom)
   const halfWorldHeight = viewport.height / (2 * zoom)
+  const edgePaddingWorld = edgePadding / zoom
+  const minimumX = halfWorldWidth - edgePaddingWorld
+  const maximumX = world.width - halfWorldWidth + edgePaddingWorld
+  const minimumY = halfWorldHeight - edgePaddingWorld
+  const maximumY = world.height - halfWorldHeight + edgePaddingWorld
 
   return {
     x:
-      halfWorldWidth * 2 >= world.width
+      minimumX >= maximumX
         ? world.width / 2
-        : clamp(camera.x, halfWorldWidth, world.width - halfWorldWidth),
+        : clamp(camera.x, minimumX, maximumX),
     y:
-      halfWorldHeight * 2 >= world.height
+      minimumY >= maximumY
         ? world.height / 2
-        : clamp(camera.y, halfWorldHeight, world.height - halfWorldHeight),
+        : clamp(camera.y, minimumY, maximumY),
     zoom,
   }
 }
@@ -87,7 +98,8 @@ export function zoomAtPoint(
   nextZoom: number,
   viewport: Size,
   world: Size,
-  minimumZoom = effectiveMinimumZoom(viewport, world),
+  minimumZoom: number = effectiveMinimumZoom(viewport, world),
+  edgePadding: number = gameConfig.camera.edgePanPadding,
 ): Camera {
   const anchor = screenToWorld(screenPoint, camera, viewport)
   const zoom = clamp(nextZoom, minimumZoom, MAX_ZOOM)
@@ -101,5 +113,6 @@ export function zoomAtPoint(
     viewport,
     world,
     minimumZoom,
+    edgePadding,
   )
 }

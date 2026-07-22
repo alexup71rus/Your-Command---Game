@@ -140,11 +140,17 @@ function SelectionSummary({ match, position, text, locked, onSplit, onDismiss, o
   const towerEnterDisabled = towerTransferDisabled || (towerGarrison?.archers ?? 0) >= towerRule.capacity
   const towerExitDisabled = towerTransferDisabled || !towerGarrison
   const formatEndurance = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1)
+  const activeSquadUnits = object?.type === 'squad'
+    ? troopKinds.flatMap((kind) => {
+        const amount = object.units[kind] ?? 0
+        return amount > 0 ? [{ kind, amount, name: troopName(text, kind) }] : []
+      })
+    : []
   return (
     <aside className="selection-summary">
       <h3>{title}</h3>
       {!object && <p>{terrain}</p>}
-      {object?.type === 'squad' && <div className="selection-unit-line">{troopKinds.map((kind) => (object.units[kind] ?? 0) > 0 && <small key={kind}><TroopIcon kind={kind} /><span>{troopName(text, kind)}</span><b>{object.units[kind]}</b></small>)}</div>}
+      {activeSquadUnits.length > 0 && <div className="selection-unit-line" role="list" aria-label={activeSquadUnits.map(({ name, amount }) => `${name}: ${amount}`).join(', ')}>{activeSquadUnits.map(({ kind, amount, name }) => <span className="selection-unit-token" role="listitem" key={kind} tabIndex={0} aria-label={`${name}: ${amount}`}><TroopIcon kind={kind} /><b aria-hidden="true">{amount}</b><span className="selection-unit-tooltip" role="tooltip"><strong>{name}</strong><small>{amount}</small></span></span>)}</div>}
       {object?.type === 'squad' && <div className="selection-health squad-health"><i style={{ width: `${maxEndurance > 0 ? Math.max(0, squadEndurance / maxEndurance * 100) : 0}%` }} /><small>{text.game.squadHealth} {formatEndurance(squadEndurance)}/{formatEndurance(maxEndurance)}</small></div>}
       {(object?.type === 'building' || object?.type === 'castle') && <div className="selection-health"><i style={{ width: `${Math.max(0, object.hitPoints / object.maxHitPoints * 100)}%` }} /><small>{text.game.hitPoints} {object.hitPoints}/{object.maxHitPoints}</small></div>}
       {workerAssignment && <div className={`selection-workers${workerAssignment.assigned < workerAssignment.required ? ' understaffed' : ''}`}><span>{text.game.workers} <b>{workerAssignment.assigned}/{workerAssignment.required}</b></span><small>{workerStatus}</small></div>}
