@@ -103,11 +103,12 @@ interface StartMenuProps {
   hasSavedGames: boolean
   onOpenSavedGames: () => void
   onBack: () => void
+  onPrimaryHover: () => void
   storageFeedback?: string | null
   utilityControls: ReactNode
 }
 
-export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, hasHumanPlayer, onMapChange, onDeleteSavedMap, onOpenOpponents, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, onBack, storageFeedback, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, hasHumanPlayer, onMapChange, onDeleteSavedMap, onOpenOpponents, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, onBack, onPrimaryHover, storageFeedback, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
@@ -146,11 +147,10 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
     <main className="start-screen">
       <img className="start-hero-art" src={`${import.meta.env.BASE_URL}assets/start-menu-hero.webp`} alt="" aria-hidden="true" fetchPriority="high" />
       <div className="start-atmosphere" aria-hidden="true" />
-      <section className="start-menu" aria-labelledby="start-title">
-        <header className="start-header"><button type="button" className="start-back-button" onClick={onBack}><span aria-hidden="true">←</span>{text.backToModes}</button><span>{text.eyebrow}</span><h1 id="start-title">{text.title}</h1><p>{text.description}</p></header>
-
+      <section className="start-menu battle-setup-menu" aria-label={text.chooseMap}>
+        <button type="button" className="menu-back-button battle-setup-back" onClick={onBack}><span aria-hidden="true">←</span>{text.backToModes}</button>
         <div className="start-setup-workspace">
-          <section className="selected-map-showcase" aria-labelledby="selected-map-title">
+          <section className="selected-map-showcase" aria-label={selectedDefinition.name}>
             <div className="showcase-map-art">
               <MapPreview cacheKey={selectedMap} settings={selectedDefinition.settings} manualGrid={selectedDefinition.manualGrid} large scenario={preparedResult?.ok ? preparedResult.scenario : null} />
             </div>
@@ -185,7 +185,7 @@ export function StartMenu({ text, confirmationText, selectedMap, savedMaps, part
           <button type="button" className="participant-control opponent-control" onClick={onOpenOpponents}><span><strong>{text.participants}</strong><small>{text.participantDescription}</small></span><span className="opponent-avatar-stack" aria-label={`${participantCount} · ${hasHumanPlayer ? text.humanAndNpc : text.botsOnly}`}>{opponentProfileIds.map((profileId, index) => <img key={`${profileId}-${index}`} src={`${import.meta.env.BASE_URL}${aiAvatarPaths[profileId]}`} alt="" />)}<b>{participantCount}</b></span></button>
           <div className="match-primary-actions">
             {hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}</button>}
-            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : hasHumanPlayer ? text.start : text.watch}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
+            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onPointerEnter={onPrimaryHover} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : hasHumanPlayer ? text.start : text.watch}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
           </div>
           <div className="start-utility-slot">{utilityControls}</div>
         </footer>

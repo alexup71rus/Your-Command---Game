@@ -1,11 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { createManualHeightGrid, generateMap } from './generator'
-import { build, createMatch } from './match'
+import { build, createMatch, endTurn } from './match'
 import { mapPresets } from './presets'
 import { createMapScenario, foundMatch } from './scenario'
 import { CURRENT_SAVE_FORMAT_VERSION, isSavedGameRecord, transactionCompletion, type SavedGameRecord } from './savedGames'
-import { aiProfiles } from '../config/ai'
+import { aiProfiles, aiSpatialConfig } from '../config/ai'
 import { analyzeAiWorld, createSettlementPlan } from './ai/analysis'
+import { executeAiCommand, rememberAiCommandFailure } from './ai/commands'
+import { createAiMemory } from './ai/model'
+import { planAiTurn } from './ai/planner'
 
 let validRecord: SavedGameRecord
 
@@ -168,6 +171,94 @@ describe('saved game schema', () => {
     const invalidRegion = structuredClone(validRecord) as unknown as { match: { scenario: { regions: Array<{ reservedBuildSites?: unknown }> } } }
     delete invalidRegion.match.scenario.regions[0].reservedBuildSites
     expect(isSavedGameRecord(invalidRegion)).toBe(false)
+  })
+})
+
+describe('saved game schema stays readable after real AI turns', () => {
+  // Regression: the AI settlement planner can emit a fortification line with
+  // up to `maximumWallsPerLine` walls. The schema must accept that ceiling
+  // instead of rejecting the whole match with "could not be saved". This
+  // plays an authoritative 1v2 match and asserts the player can save on
+  // every human turn.
+  it('keeps a 1v2 match saveable across several rounds of AI play', { timeout: 30_000 }, () => {
+    const preset = mapPresets[0]
+    const map = generateMap(preset.settings, createManualHeightGrid())
+    const scenario = createMapScenario(map, 3, preset.settings.seed, { id: preset.id, name: preset.id })
+    if (!scenario.ok) throw new Error(`Expected a valid scenario, got ${scenario.reason}`)
+    const region = scenario.scenario.regions[0]
+    let state = createMatch(foundMatch(scenario.scenario, region.id, region.validCastleCells[0]))
+    const analyses = new Map(state.scenario.participants.map((participant) => [
+      participant.id, analyzeAiWorld(state.scenario, participant.id)!,
+    ]))
+
+    const recordFor = (): SavedGameRecord => ({
+      version: CURRENT_SAVE_FORMAT_VERSION,
+      id: 'regression',
+      name: `${state.scenario.name} · ${state.turn}`,
+      mapName: state.scenario.name,
+      turn: state.turn,
+      updatedAt: 1,
+      match: state,
+    })
+
+    for (let round = 0; round < 6 && state.status === 'playing'; round += 1) {
+      if (state.activeParticipantId === state.playerId) {
+        expect(isSavedGameRecord(recordFor()), `match not saveable on human turn ${state.turn}`).toBe(true)
+        const ended = endTurn(state)
+        if (!ended.ok) throw new Error(`Could not finish the player's turn: ${ended.reason}`)
+        state = ended.state
+      }
+      while (state.activeParticipantId !== state.playerId && state.status === 'playing') {
+        const ownerId = state.activeParticipantId
+        const participant = state.scenario.participants.find((candidate) => candidate.id === ownerId)!
+        const plan = planAiTurn(state, state.aiMemory[ownerId] ?? createAiMemory(), participant.profileId!, { cachedAnalysis: analyses.get(ownerId) })
+        let working = state
+        let failed = false
+        for (const command of plan.commands) {
+          const result = executeAiCommand(working, command)
+          if (!result.ok) {
+            working = rememberAiCommandFailure(working, ownerId, command, result.reason)
+            failed = true
+            break
+          }
+          working = result.state
+        }
+        if (!failed) working = { ...working, aiMemory: { ...working.aiMemory, [ownerId]: plan.memory } }
+        const ended = endTurn(working)
+        if (!ended.ok) throw new Error(`Could not finish ${ownerId}'s turn: ${ended.reason}`)
+        state = ended.state
+      }
+    }
+  })
+
+  it('accepts a fortification line with the configured maximum wall count', () => {
+    const wallCeiling = aiSpatialConfig.settlementPlan.fortification.maximumWallsPerLine
+    const record = structuredClone(validRecord)
+    const participant = record.match.scenario.participants.find((candidate) => candidate.kind === 'ai')!
+    if (!participant?.profileId) throw new Error('Expected an AI participant')
+    const analysis = analyzeAiWorld(record.match.scenario, participant.id)
+    if (!analysis) throw new Error('Expected an AI world analysis')
+    record.match.aiMemory[participant.id].settlementPlan = createSettlementPlan(analysis, record.match.scenario, aiProfiles[participant.profileId])
+    const plan = record.match.aiMemory[participant.id].settlementPlan
+    if (!plan?.fortification) {
+      // The chosen region may not produce a fortifiable line. Force one so the
+      // ceiling is exercised regardless of seed.
+      const wall = plan ?? { layout: 'courtyard', opening: 'forest', front: { column: 0, row: 0 }, reservedCorridors: [], reservedSites: {}, fortification: null, zones: {} as never }
+      wall.fortification = {
+        lines: [{
+          kind: 'curtain', approach: { column: 1, row: 1 }, gate: { column: 1, row: 1 },
+          walls: Array.from({ length: wallCeiling }, (_, index) => ({ column: 2 + index, row: 1 })),
+          towers: [],
+        }],
+      }
+      record.match.aiMemory[participant.id].settlementPlan = wall as typeof plan
+    }
+    expect(isSavedGameRecord(record)).toBe(true)
+
+    const overTheCeiling = structuredClone(record)
+    const line = overTheCeiling.match.aiMemory[participant.id].settlementPlan!.fortification!.lines[0]
+    line.walls = Array.from({ length: wallCeiling + 1 }, (_, index) => ({ column: 2 + index, row: 1 }))
+    expect(isSavedGameRecord(overTheCeiling)).toBe(false)
   })
 })
 

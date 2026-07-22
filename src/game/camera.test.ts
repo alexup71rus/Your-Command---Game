@@ -4,6 +4,7 @@ import {
   cameraForOverview,
   clampCamera,
   screenToWorld,
+  worldToScreen,
   zoomAtPoint,
   type Camera,
   type Point,
@@ -22,11 +23,13 @@ describe('camera', () => {
     expect(overview).toEqual({ x: 2500, y: 2500, zoom: 0.16 })
     expect(5000 * overview.zoom).toBeLessThanOrEqual(900 - 100)
   })
-  it('keeps the visible area inside the world', () => {
+  it('keeps a small screen-space margin around the map at its pan limits', () => {
     const result = clampCamera({ x: -500, y: 10_000, zoom: 1 }, viewport, world)
+    const topLeft = worldToScreen({ x: 0, y: 0 }, result, viewport)
+    const bottomRight = worldToScreen({ x: world.width, y: world.height }, result, viewport)
 
-    expect(result.x).toBe(viewport.width / 2)
-    expect(result.y).toBe(world.height - viewport.height / 2)
+    expect(topLeft.x).toBe(gameConfig.camera.edgePanPadding)
+    expect(bottomRight.y).toBe(viewport.height - gameConfig.camera.edgePanPadding)
   })
 
   it('keeps the world point under the cursor while zooming', () => {

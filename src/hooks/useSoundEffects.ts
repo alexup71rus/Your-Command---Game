@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { gameConfig } from '../config/game'
 
-export type SoundEffect = 'map' | 'tab' | 'context' | 'action' | 'attack' | 'dismiss' | 'enable'
+export type SoundEffect = 'map' | 'tab' | 'context' | 'action' | 'attack' | 'dismiss' | 'enable' | 'hover' | 'primary-hover'
 
 const clampVolume = (volume: number) => Math.max(0, Math.min(100, Math.round(volume)))
 
@@ -103,6 +103,8 @@ export function useSoundEffects() {
   const play = useCallback((effect: SoundEffect, force = false) => {
     if (volumeRef.current === 0 && !force) return
     switch (effect) {
+      case 'hover': playNoise(0.035, 0.006, 0, 2_300); playTone(392, 0.075, 0.015, 0, 'sine', 1.06); playTone(523, 0.09, 0.009, 0.014, 'triangle', 0.96); break
+      case 'primary-hover': playNoise(0.055, 0.011, 0, 1_100); playTone(196, 0.11, 0.026, 0, 'triangle', 1.12); playTone(294, 0.14, 0.016, 0.026, 'sine', 1.04); break
       case 'map': playNoise(0.045, 0.012, 0, 900); playTone(178, 0.07, 0.028, 0, 'triangle', 0.7); break
       case 'tab': playTone(360, 0.08, 0.034, 0, 'sine', 1.04); playTone(540, 0.11, 0.024, 0.018, 'triangle', 0.92); break
       case 'context': playTone(220, 0.12, 0.036, 0, 'triangle', 1.18); playTone(330, 0.15, 0.025, 0.025, 'sine', 1.08); break

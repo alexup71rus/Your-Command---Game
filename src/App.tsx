@@ -499,7 +499,7 @@ export function App() {
     else setCameraCommand({ kind: 'overview', key: ++focusId.current })
   }, [focusRegion])
 
-  const applyCommand = useCallback((result: CommandResult, nextSelection?: CellPosition, sound: SoundEffect = 'action') => {
+  const applyCommand = useCallback((result: CommandResult, nextSelection?: CellPosition | null, sound: SoundEffect = 'action') => {
     if (!result.ok) {
       if (text) setCommandFeedback(text.game.failures[result.reason] || result.reason)
       playSound('dismiss')
@@ -507,7 +507,7 @@ export function App() {
     }
     setMatch(result.state)
     setScenario(result.state.scenario)
-    if (nextSelection) setSelectedCell(nextSelection)
+    if (nextSelection !== undefined) setSelectedCell(nextSelection)
     setPendingAction(null)
     setCommandFeedback(null)
     setHoveredOrderCost(0)
@@ -604,12 +604,14 @@ export function App() {
         const attacking = Boolean(target && areOwnersHostile(match.scenario.participants, match.playerId, target.ownerId))
         const result = moveOrAttack(match, selectedCell, position)
         if (result.ok || result.reason !== 'not-adjacent') {
-          const sourceAfterAttack = result.ok && attacking ? objectAt(result.state, selectedCell) : null
-          const nextSelection = sourceAfterAttack?.type === 'squad' && sourceAfterAttack.ownerId === match.playerId ? selectedCell : position
+          let nextSelection: CellPosition | null = selectedCell
           if (result.ok) {
-            const movedSquad = objectAt(result.state, position)
             const sourceAfter = objectAt(result.state, selectedCell)
-            if (!sourceAfter && movedSquad?.type === 'squad' && movedSquad.ownerId === match.playerId && (result.state.lastEvent?.kind === 'moved' || result.state.lastEvent?.kind === 'destroyed')) {
+            const destinationAfter = objectAt(result.state, position)
+            const sourceSurvived = sourceAfter?.type === 'squad' && sourceAfter.ownerId === match.playerId
+            const moved = !sourceAfter && destinationAfter?.type === 'squad' && destinationAfter.ownerId === match.playerId
+            nextSelection = sourceSurvived ? selectedCell : moved ? position : null
+            if (moved) {
               setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: position })
             }
           }
@@ -864,8 +866,12 @@ export function App() {
       setScenario(result.state.scenario)
       setSelectedCell(sourceAfter?.type === 'squad' && sourceAfter.ownerId === match.playerId ? selectedCell : moved ? next : null)
       setCommandFeedback(null)
-      if (result.state.lastEvent?.kind === 'attacked' || result.state.lastEvent?.kind === 'destroyed') markRecentCombat()
-      playSound(result.state.lastEvent?.kind === 'attacked' || result.state.lastEvent?.kind === 'destroyed' ? 'attack' : 'action')
+      const combatEvent = result.state.lastEvent?.kind === 'attacked' || result.state.lastEvent?.kind === 'destroyed'
+      if (combatEvent) {
+        markRecentCombat()
+        cancelAutoMove()
+      }
+      playSound(combatEvent ? 'attack' : 'action')
     }, gameConfig.turn.autoMoveStepDelayMs)
     return () => window.clearTimeout(timeout)
   }, [autoMoveTarget, cancelAutoMove, markRecentCombat, match, opponentTurn, overlay, pendingAction, phase, playSound, selectedCell, text, visibility])
@@ -1040,10 +1046,10 @@ export function App() {
     return (
       <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
         {menuPage === 'welcome'
-          ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} />
+          ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
           : menuPage === 'modes'
-            ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} />
-            : <StartMenu text={text.startMenu} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} hasHumanPlayer={hasHumanPlayer} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onOpenOpponents={() => setOverlay('opponents')} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
+            ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
+            : <StartMenu text={text.startMenu} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} hasHumanPlayer={hasHumanPlayer} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onOpenOpponents={() => setOverlay('opponents')} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} onPrimaryHover={() => playSound('primary-hover')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
         <ClickEffects bursts={bursts} />
         {overlay === 'generator' && (
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} participantMaximum={setupParticipantMaximum} savedMapCount={savedMaps.length} onParticipantChange={changeParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />

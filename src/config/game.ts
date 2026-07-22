@@ -137,6 +137,7 @@ export const gameConfig = {
     gameStartZoom: 1.05,
     wheelSensitivity: 0.0015,
     dragThreshold: 5,
+    edgePanPadding: 88,
     unitMoveAnimationMs: 260,
   },
   navigationHint: {

@@ -11,6 +11,7 @@ interface MainMenuProps {
   onContinue: () => void
   onBack: () => void
   onSelectBattle: () => void
+  onModeHover: () => void
 }
 
 function MenuBackdrop({ eager = false }: { eager?: boolean }) {
@@ -35,7 +36,7 @@ function ModeEmblem({ mode }: { mode: ModeId }) {
   return <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 51h20V25l-5-5-5 5-5-5-5 5v26ZM36 51h20V25l-5-5-5 5-5-5-5 5v26Z" /><path d="M15 51V38h7v13M43 51V38h7v13M27 33h10M32 28v10" /></svg>
 }
 
-export function MainMenu({ screen, text, utilityControls, onContinue, onBack, onSelectBattle }: MainMenuProps) {
+export function MainMenu({ screen, text, utilityControls, onContinue, onBack, onSelectBattle, onModeHover }: MainMenuProps) {
   if (screen === 'welcome') {
     return (
       <main className="welcome-screen">
@@ -61,19 +62,21 @@ export function MainMenu({ screen, text, utilityControls, onContinue, onBack, on
         <header className="mode-menu-header">
           <button type="button" className="menu-back-button" onClick={onBack}><span aria-hidden="true">←</span>{text.back}</button>
           <div><span>{text.modeEyebrow}</span><h1 id="mode-menu-title">{text.modeTitle}</h1><p>{text.modeDescription}</p></div>
-          <div className="mode-utility-slot">{utilityControls}</div>
         </header>
 
         <div className="mode-grid">
           {modes.map(({ id, copy, available }, index) => (
-            <button key={id} type="button" className={`mode-card mode-${id}${available ? ' available' : ''}`} disabled={!available} onClick={available ? onSelectBattle : undefined}>
-              <span className="mode-number" aria-hidden="true">0{index + 1}</span>
-              <span className="mode-emblem"><ModeEmblem mode={id} /></span>
-              <span className="mode-card-copy"><span className="mode-status">{available ? text.available : text.comingSoon}</span><strong>{copy.title}</strong><small>{copy.description}</small></span>
-              <span className="mode-card-action" aria-hidden="true">{available ? text.select : text.inDevelopment}<b>{available ? '→' : '·'}</b></span>
-            </button>
+            <div key={id} className="mode-card-slot" onPointerEnter={onModeHover}>
+              <button type="button" className={`mode-card mode-${id}${available ? ' available' : ''}`} disabled={!available} onClick={available ? onSelectBattle : undefined}>
+                <span className="mode-number" aria-hidden="true">0{index + 1}</span>
+                <span className="mode-emblem"><ModeEmblem mode={id} /></span>
+                <span className="mode-card-copy"><span className="mode-status">{available ? text.available : text.comingSoon}</span><strong>{copy.title}</strong><small>{copy.description}</small></span>
+                <span className="mode-card-action" aria-hidden="true">{available ? text.select : text.inDevelopment}<b>{available ? '→' : '·'}</b></span>
+              </button>
+            </div>
           ))}
         </div>
+        <div className="mode-utility-slot">{utilityControls}</div>
       </section>
     </main>
   )
