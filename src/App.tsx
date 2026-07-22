@@ -6,6 +6,7 @@ import { GameHud } from './components/GameHud'
 import { GameOutcomeModal } from './components/GameOutcomeModal'
 import { GridCanvas, type CameraCommand, type MapClickRequest, type MapContextRequest } from './components/GridCanvas'
 import { MapGeneratorModal } from './components/MapGeneratorModal'
+import { MainMenu } from './components/MainMenu'
 import { SettingsModal } from './components/SettingsModal'
 import { SavedGamesModal } from './components/SavedGamesModal'
 import { StartMenu } from './components/StartMenu'
@@ -75,6 +76,8 @@ interface ContextMenuState extends MapContextRequest {
   top: number
 }
 
+type MenuPage = 'welcome' | 'modes' | 'battle-setup'
+
 function turnReportMessage(report: TurnReport | undefined, text: LocaleDictionary) {
   if (!report) return null
   const messages: string[] = []
@@ -113,6 +116,7 @@ function teamsForSetup(teams: number[], participantCount: number) {
 
 export function App() {
   const [phase, setPhase] = useState<GamePhase>('menu')
+  const [menuPage, setMenuPage] = useState<MenuPage>('welcome')
   const [selectedMap, setSelectedMap] = useState<MapSelection>(defaultMapSelection)
   const [initialSavedMaps] = useState(loadSavedMapsResult)
   const [savedMaps, setSavedMaps] = useState(initialSavedMaps.maps)
@@ -484,6 +488,7 @@ export function App() {
     setSavedGamesReturnToSettings(false)
     setOverlay(null)
     setPhase('menu')
+    setMenuPage('modes')
     setRecentCombat(false)
   }, [cancelAutoMove])
 
@@ -873,6 +878,7 @@ export function App() {
       if (event.repeat) return
       setTerritoriesHeld(false)
       cancelAutoMove()
+      if (phase === 'menu' && menuPage === 'welcome' && overlay === null) return
       const target = escapeTarget({
         contextMenuOpen: Boolean(contextMenu),
         overlay,
@@ -897,7 +903,7 @@ export function App() {
     window.addEventListener('keyup', releaseShift)
     window.addEventListener('blur', releaseShiftOnBlur)
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', releaseShift); window.removeEventListener('blur', releaseShiftOnBlur) }
-  }, [cancelAutoMove, closeSavedGames, contextMenu, match?.status, outcomeDismissed, overlay, pendingAction, phase])
+  }, [cancelAutoMove, closeSavedGames, contextMenu, match?.status, menuPage, outcomeDismissed, overlay, pendingAction, phase])
 
   useEffect(() => {
     const initial = matchRef.current
@@ -1033,7 +1039,11 @@ export function App() {
   if (phase === 'menu') {
     return (
       <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
-        <StartMenu text={text.startMenu} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} hasHumanPlayer={hasHumanPlayer} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onOpenOpponents={() => setOverlay('opponents')} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />
+        {menuPage === 'welcome'
+          ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} />
+          : menuPage === 'modes'
+            ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} />
+            : <StartMenu text={text.startMenu} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} hasHumanPlayer={hasHumanPlayer} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onOpenOpponents={() => setOverlay('opponents')} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
         <ClickEffects bursts={bursts} />
         {overlay === 'generator' && (
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} participantMaximum={setupParticipantMaximum} savedMapCount={savedMaps.length} onParticipantChange={changeParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />

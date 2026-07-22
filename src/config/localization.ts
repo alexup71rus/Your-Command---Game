@@ -4,6 +4,22 @@ export type TabId = 'buildings' | 'barracks' | 'castle'
 
 export interface LocaleDictionary {
   localeName: string
+  mainMenu: {
+    eyebrow: string
+    title: string
+    tagline: string
+    continue: string
+    continueHint: string
+    modeEyebrow: string
+    modeTitle: string
+    modeDescription: string
+    back: string
+    available: string
+    comingSoon: string
+    select: string
+    inDevelopment: string
+    modes: Record<'story' | 'economy' | 'siege' | 'battle', { title: string; description: string }>
+  }
   startMenu: {
     eyebrow: string
     title: string
@@ -31,6 +47,7 @@ export interface LocaleDictionary {
     mapDeleteFailed: string
     mapReadFailed: string
     loadGame: string
+    backToModes: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
   }
   opponents: {

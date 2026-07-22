@@ -2,12 +2,26 @@ import type { LocaleDictionary } from '../config/localization'
 
 const en: LocaleDictionary = {
   localeName: 'English',
+  mainMenu: {
+    eyebrow: 'Turn-based strategy', title: 'Your Command',
+    tagline: 'Raise a stronghold. Muster an army. Redraw the frontier.',
+    continue: 'Click to continue', continueHint: 'Your first click will awaken the music',
+    modeEyebrow: 'Four paths to power', modeTitle: 'Choose a game mode',
+    modeDescription: 'Each campaign offers a different view of rule, survival, and war. A free battle between rulers is available now.',
+    back: 'Back', available: 'Available', comingSoon: 'Coming soon', select: 'Select mode', inDevelopment: 'In development',
+    modes: {
+      story: { title: 'Story', description: 'Follow a frontier domain through a branching chronicle shaped by decisions at court and on the battlefield.' },
+      economy: { title: 'Economy', description: 'Develop your castle, answer shifting demands, and endure raids, disease, and shortages.' },
+      siege: { title: 'Siege', description: 'Command a limited force and take a fortified castle before your soldiers and supplies run out.' },
+      battle: { title: 'Castle vs. castle', description: 'Found a domain, build its economy, muster an army, and bring down your rivals’ castles.' },
+    },
+  },
   startMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield, gather the round table, and decide whether to command a domain or watch the rulers fight.',
     chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Round table', participantDescription: 'Seats in the coming battle',
     humanAndNpc: 'You have a seat in the battle', botsOnly: 'Automated battle between rulers', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
-    openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Choose a domain', watch: 'Watch the battle', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game',
+    openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Choose a domain', watch: 'Watch the battle', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game', backToModes: 'Game modes',
     presets: {
       greenMarches: { name: 'Green Marches', description: 'Open plains, gentle heights and room for an economy.' },
       highlandPasses: { name: 'Highland Passes', description: 'Heights and narrow routes create natural defensive lines.' },
