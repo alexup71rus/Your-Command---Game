@@ -1,22 +1,37 @@
-import type { GameMap } from './map'
+import type { GameMap, MapCell } from './map'
+import { cardinalDirections } from './geometry'
 import { friendlyBarbicanPassage, terrainMovementOrderMultiplier } from './movement'
 import type { CellPosition } from './scenario'
 
-interface MovementPathOptions {
+export interface MovementPathOptions {
   canEnterOccupiedCell?: (position: CellPosition) => boolean
+  cellCost?: (position: CellPosition, cell: MapCell) => number
   ownerId?: string
 }
 
-const directions = [
-  { column: 1, row: 0 },
-  { column: -1, row: 0 },
-  { column: 0, row: 1 },
-  { column: 0, row: -1 },
-]
-
 const samePosition = (first: CellPosition, second: CellPosition) => first.column === second.column && first.row === second.row
 
-export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions = {}): CellPosition[] | null {
+type CachedPath = CellPosition[] | null
+
+let activePathCache: WeakMap<GameMap, Map<string, CachedPath>> | null = null
+
+const clonePath = (path: CachedPath): CachedPath => path?.map((position) => ({ ...position })) ?? null
+
+/**
+ * Keeps callback-free path searches local to one synchronous planning request.
+ * The scope prevents stale routes from surviving state changes between turns.
+ */
+export function withMovementPathCache<T>(run: () => T): T {
+  const previousCache = activePathCache
+  activePathCache = new WeakMap()
+  try {
+    return run()
+  } finally {
+    activePathCache = previousCache
+  }
+}
+
+function findMovementPathUncached(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions): CellPosition[] | null {
   const rows = map.length
   const columns = map[0]?.length ?? 0
   const insideMap = (position: CellPosition) => position.column >= 0 && position.column < columns && position.row >= 0 && position.row < rows
@@ -29,9 +44,16 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
   const targetIndex = to.row * columns + to.column
   const previous = new Int32Array(rows * columns).fill(-1)
   const distances = new Float64Array(rows * columns).fill(Number.POSITIVE_INFINITY)
-  const queue: Array<{ index: number; cost: number; order: number }> = []
+  const heuristic = (index: number) => {
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    return Math.abs(to.column - column) + Math.abs(to.row - row)
+  }
+  const queue: Array<{ index: number; cost: number; priority: number; order: number }> = []
   let insertionOrder = 0
-  const comesBefore = (first: (typeof queue)[number], second: (typeof queue)[number]) => first.cost < second.cost || (first.cost === second.cost && first.order < second.order)
+  const comesBefore = (first: (typeof queue)[number], second: (typeof queue)[number]) => first.priority < second.priority
+    || (first.priority === second.priority && (first.cost < second.cost
+      || (first.cost === second.cost && first.order < second.order)))
   const push = (entry: (typeof queue)[number]) => {
     queue.push(entry)
     let child = queue.length - 1
@@ -63,7 +85,7 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
 
   distances[sourceIndex] = 0
   previous[sourceIndex] = sourceIndex
-  push({ index: sourceIndex, cost: 0, order: insertionOrder++ })
+  push({ index: sourceIndex, cost: 0, priority: heuristic(sourceIndex), order: insertionOrder++ })
 
   while (queue.length > 0) {
     const currentEntry = pop()
@@ -71,17 +93,17 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
     const currentIndex = currentEntry.index
     if (currentIndex === targetIndex) break
     const current = { column: currentIndex % columns, row: Math.floor(currentIndex / columns) }
-    for (const direction of directions) {
+    for (const direction of cardinalDirections) {
       const next = { column: current.column + direction.column, row: current.row + direction.row }
       if (!insideMap(next)) continue
       const cell = map[next.row]?.[next.column]
       if (cell && cell.landform !== 'peak' && (!cell.object || options.canEnterOccupiedCell?.(next))) {
         const nextIndex = next.row * columns + next.column
-        const cost = currentEntry.cost + terrainMovementOrderMultiplier(cell)
+        const cost = currentEntry.cost + (options.cellCost?.(next, cell) ?? terrainMovementOrderMultiplier(cell))
         if (cost < distances[nextIndex]) {
           distances[nextIndex] = cost
           previous[nextIndex] = currentIndex
-          push({ index: nextIndex, cost, order: insertionOrder++ })
+          push({ index: nextIndex, cost, priority: cost + heuristic(nextIndex), order: insertionOrder++ })
         }
       }
 
@@ -92,12 +114,17 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
         if (!passage) continue
         const landingIndex = landing.row * columns + landing.column
         const passageCost = currentEntry.cost
-          + terrainMovementOrderMultiplier(passage.middleCell)
-          + terrainMovementOrderMultiplier(passage.destination)
+          + (options.cellCost?.(passage.middle, passage.middleCell) ?? terrainMovementOrderMultiplier(passage.middleCell))
+          + (options.cellCost?.(landing, passage.destination) ?? terrainMovementOrderMultiplier(passage.destination))
         if (passageCost >= distances[landingIndex]) continue
         distances[landingIndex] = passageCost
         previous[landingIndex] = currentIndex
-        push({ index: landingIndex, cost: passageCost, order: insertionOrder++ })
+        push({
+          index: landingIndex,
+          cost: passageCost,
+          priority: passageCost + heuristic(landingIndex),
+          order: insertionOrder++,
+        })
       }
     }
   }
@@ -109,4 +136,22 @@ export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosit
     if (index === sourceIndex) break
   }
   return path.reverse()
+}
+
+export function findMovementPath(map: GameMap, from: CellPosition, to: CellPosition, options: MovementPathOptions = {}): CellPosition[] | null {
+  if (!activePathCache || options.canEnterOccupiedCell || options.cellCost) {
+    return findMovementPathUncached(map, from, to, options)
+  }
+
+  let pathsForMap = activePathCache.get(map)
+  if (!pathsForMap) {
+    pathsForMap = new Map()
+    activePathCache.set(map, pathsForMap)
+  }
+  const key = `${options.ownerId ?? ''}:${from.column},${from.row}>${to.column},${to.row}`
+  if (pathsForMap.has(key)) return clonePath(pathsForMap.get(key) ?? null)
+
+  const path = findMovementPathUncached(map, from, to, options)
+  pathsForMap.set(key, clonePath(path))
+  return path
 }

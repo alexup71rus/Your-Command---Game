@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildingKinds, troopKinds } from './rules'
-import { loadLocale } from './localization'
+import { aiParticipantDisplayName, aiProfileDisplayName, loadLocale } from './localization'
+import type { MatchParticipant } from '../game/scenario'
 
 describe('lazy locale loading', () => {
   it('loads locale modules independently', async () => {
@@ -24,5 +25,16 @@ describe('lazy locale loading', () => {
     })
     expect(JSON.stringify(ru)).not.toContain('undefined')
     expect(JSON.stringify(en)).not.toContain('undefined')
+  })
+
+  it('adds distinct localized epithets only to seated AI rulers', async () => {
+    const ru = await loadLocale('ru')
+    const participants: MatchParticipant[] = [
+      { id: 'ai-radomir-1', kind: 'ai', profileId: 'radomir', regionId: 'region-0', color: '#aaa' },
+      { id: 'ai-radomir-2', kind: 'ai', profileId: 'radomir', regionId: 'region-1', color: '#bbb' },
+    ]
+    expect(ru.opponents.profiles.radomir.name).toBe('Радомир')
+    expect(aiProfileDisplayName(ru.opponents, 'radomir', 0)).toBe('Радомир Рассудительный')
+    expect(aiParticipantDisplayName(ru.opponents, participants, 'ai-radomir-2')).toBe('Радомир Мудрый')
   })
 })

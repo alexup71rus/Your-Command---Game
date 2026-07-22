@@ -1,7 +1,7 @@
 {
   "name": "your-command",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "homepage": "https://alexup71rus.github.io/Your-Command---Game/",
   "repository": {
     "type": "git",
@@ -18,7 +18,14 @@
     "precommit": "node scripts/precommit.mjs",
     "prepare": "node scripts/setup-hooks.mjs",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:ai": "vitest run src/game/ai/combatScenarios.test.ts src/game/ai/defenseScenarios.test.ts src/game/ai/economyScenarios.test.ts src/game/ai/planner.test.ts src/game/ai/skirmishScenarios.test.ts --pool=threads",
+    "test:ai:soak": "RUN_AI_SOAK=1 vitest run src/game/ai/soakScenarios.test.ts --reporter=verbose --pool=threads",
+    "inspect:ai": "vite-node scripts/generate-ai-replay.ts",
+    "profile:ai": "vite-node scripts/profile-ai-planner.ts",
+    "test:fast": "vitest run --exclude \"src/game/ai/**/*.test.ts\"",
+    "test:stable": "npm run test:fast",
+    "build:wasm": "node scripts/build-wasm.mjs"
   },
   "dependencies": {
     "react": "^19.1.1",

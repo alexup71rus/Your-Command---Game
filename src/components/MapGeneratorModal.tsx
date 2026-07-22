@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
-import { gameConfig } from '../config/game'
+import { gameConfig, maximumParticipantsForMapSize } from '../config/game'
 import type { Locale, LocaleDictionary } from '../config/localization'
 import {
   createManualHeightGrid,
@@ -13,8 +13,8 @@ import { clearMapObjects } from '../game/map'
 import type { MapScenario, ScenarioResult } from '../game/scenario'
 import type { SavedMapDraft } from '../game/savedMaps'
 import { calculateScenarioInWorker } from '../game/scenarioWorkerClient'
-import { CloseIcon } from './InterfaceIcons'
 import { SelectField } from './ui/SelectField'
+import { ModalCloseButton } from './ui/ModalCloseButton'
 import { useModalFocus } from '../hooks/useModalFocus'
 
 interface MapGeneratorModalProps {
@@ -23,6 +23,7 @@ interface MapGeneratorModalProps {
   text: LocaleDictionary['generator']
   locale: Locale
   participantCount: number
+  participantMaximum: number
   savedMapCount: number
   onParticipantChange: (count: number) => void
   onSave: (draft: SavedMapDraft) => boolean
@@ -58,7 +59,7 @@ function RangeControl({
   )
 }
 
-export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
+export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, participantCount, participantMaximum, savedMapCount, onParticipantChange }: MapGeneratorModalProps) {
   const modalRef = useModalFocus<HTMLElement>()
   const [settings, setSettings] = useState<GeneratorSettings>(defaultGeneratorSettings)
   const [manualGrid, setManualGrid] = useState<ManualHeightGrid>(createManualHeightGrid)
@@ -73,6 +74,7 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [saveError, setSaveError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
+  const participantLimit = Math.min(participantMaximum, maximumParticipantsForMapSize(settings.mapSize))
   const previewMap = useMemo(
     () => generateMap(deferredSettings, deferredManualGrid),
     [deferredManualGrid, deferredSettings],
@@ -87,6 +89,10 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
   const workerError = workerErrorKey === scenarioKey
   const previewPending = deferredSettings !== settings || deferredManualGrid !== manualGrid
   const generationPending = previewPending || !scenarioCalculationSettled
+
+  useEffect(() => {
+    if (participantCount > participantLimit) onParticipantChange(participantLimit)
+  }, [onParticipantChange, participantCount, participantLimit])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -234,15 +240,16 @@ export function MapGeneratorModal({ onApply, onClose, onSave, text, locale, part
       <section ref={modalRef} tabIndex={-1} className="generator-modal" role="dialog" aria-modal="true" aria-labelledby="generator-title" onPointerDown={(event) => event.stopPropagation()}>
         <header className="generator-header">
           <div><h2 id="generator-title">{text.title}</h2></div>
-          <button className="generator-close" type="button" onClick={onClose} aria-label={text.close} data-modal-autofocus><CloseIcon /></button>
+          <ModalCloseButton label={text.close} onClick={onClose} data-modal-autofocus />
         </header>
 
         <div className="generator-body">
           <aside className="generator-controls">
             <section>
               <h3>{text.relief}</h3>
-              <RangeControl label={text.participants} value={participantCount} min={gameConfig.match.minParticipants} max={gameConfig.match.maxParticipants} suffix="" onChange={onParticipantChange} />
+              <RangeControl label={text.participants} value={Math.min(participantCount, participantLimit)} min={gameConfig.match.minParticipants} max={participantLimit} suffix="" onChange={onParticipantChange} />
               <RangeControl label={text.mapSize} value={settings.mapSize} min={gameConfig.generator.minMapSize} max={gameConfig.generator.maxMapSize} suffix={` × ${settings.mapSize}`} onChange={(value) => updateSetting('mapSize', value)} />
+              <small className="generator-participant-limit">{text.participantLimit.replaceAll('{size}', String(settings.mapSize)).replace('{count}', String(participantLimit))}</small>
               <SelectField label={text.source} value={settings.reliefMode} options={[{ value: 'automatic', label: text.automatic }, { value: 'hybrid', label: text.hybrid }, { value: 'manual', label: text.manual }]} onChange={(value) => updateSetting('reliefMode', value)} />
               <RangeControl label={text.hills} value={settings.hillCoverage} min={5} max={75} onChange={(value) => updateSetting('hillCoverage', Math.max(value, settings.peakCoverage))} />
               <RangeControl label={text.peaks} value={settings.peakCoverage} max={25} onChange={(value) => updateSetting('peakCoverage', Math.min(value, settings.hillCoverage))} />

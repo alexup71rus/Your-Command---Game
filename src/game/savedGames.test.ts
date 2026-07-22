@@ -3,7 +3,9 @@ import { createManualHeightGrid, generateMap } from './generator'
 import { build, createMatch } from './match'
 import { mapPresets } from './presets'
 import { createMapScenario, foundMatch } from './scenario'
-import { isSavedGameRecord, SAVE_VERSION, transactionCompletion, type SavedGameRecord } from './savedGames'
+import { CURRENT_SAVE_FORMAT_VERSION, isSavedGameRecord, transactionCompletion, type SavedGameRecord } from './savedGames'
+import { aiProfiles } from '../config/ai'
+import { analyzeAiWorld, createSettlementPlan } from './ai/analysis'
 
 let validRecord: SavedGameRecord
 
@@ -15,7 +17,7 @@ beforeAll(() => {
   const region = result.scenario.regions[0]
   const match = createMatch(foundMatch(result.scenario, region.id, region.validCastleCells[0]))
   validRecord = {
-    version: SAVE_VERSION,
+    version: CURRENT_SAVE_FORMAT_VERSION,
     id: 'save-1',
     name: `${result.scenario.name} · 1`,
     mapName: result.scenario.name,
@@ -30,8 +32,9 @@ describe('saved game schema', () => {
     expect(isSavedGameRecord(validRecord)).toBe(true)
   })
 
-  it('rejects an older incompatible version', () => {
-    expect(isSavedGameRecord({ ...validRecord, version: SAVE_VERSION - 1 })).toBe(false)
+  it('accepts only the current format without backward or forward migrations', () => {
+    expect(isSavedGameRecord({ ...validRecord, version: CURRENT_SAVE_FORMAT_VERSION - 1 })).toBe(false)
+    expect(isSavedGameRecord({ ...validRecord, version: CURRENT_SAVE_FORMAT_VERSION + 1 })).toBe(false)
   })
 
   it('rejects invalid numeric values and inconsistent summaries', () => {
@@ -39,6 +42,43 @@ describe('saved game schema', () => {
     invalidResource.match.domains[invalidResource.match.playerId].resources.gold = Number.NaN
     expect(isSavedGameRecord(invalidResource)).toBe(false)
     expect(isSavedGameRecord({ ...validRecord, turn: validRecord.turn + 1 })).toBe(false)
+    const fractionalResource = structuredClone(validRecord)
+    fractionalResource.match.domains[fractionalResource.match.playerId].resources.wood = 1.5
+    expect(isSavedGameRecord(fractionalResource)).toBe(false)
+  })
+
+  it('only accepts human-turn saves and bounded AI memory', () => {
+    const opponentTurn = structuredClone(validRecord)
+    const aiId = opponentTurn.match.scenario.participants.find((participant) => participant.kind === 'ai')!.id
+    opponentTurn.match.activeParticipantId = aiId
+    expect(isSavedGameRecord(opponentTurn)).toBe(false)
+
+    const futureMemory = structuredClone(validRecord)
+    futureMemory.match.aiMemory[aiId].contacts = [{ ownerId: futureMemory.match.playerId, kind: 'squad', position: { column: 0, row: 0 }, lastSeenTurn: futureMemory.match.turn + 1 }]
+    expect(isSavedGameRecord(futureMemory)).toBe(false)
+
+    const selfTarget = structuredClone(validRecord)
+    selfTarget.match.aiMemory[aiId].targetOwnerId = aiId
+    expect(isSavedGameRecord(selfTarget)).toBe(false)
+  })
+
+  it('validates persisted settlement blueprints and dynamic squad roles', () => {
+    const record = structuredClone(validRecord)
+    const participant = record.match.scenario.participants.find((candidate) => candidate.kind === 'ai')
+    if (!participant?.profileId) throw new Error('Expected an AI participant')
+    const analysis = analyzeAiWorld(record.match.scenario, participant.id)
+    if (!analysis) throw new Error('Expected an AI world analysis')
+    record.match.aiMemory[participant.id].settlementPlan = createSettlementPlan(analysis, record.match.scenario, aiProfiles[participant.profileId])
+    record.match.aiMemory[participant.id].squadRoles = { '0:0': 'reserve' }
+    expect(isSavedGameRecord(record)).toBe(true)
+
+    const invalidCapacity = structuredClone(record)
+    invalidCapacity.match.aiMemory[participant.id].settlementPlan!.zones.housing.maxOrigins = 0
+    expect(isSavedGameRecord(invalidCapacity)).toBe(false)
+
+    const invalidRole = structuredClone(record) as unknown as SavedGameRecord
+    invalidRole.match.aiMemory[participant.id].squadRoles = { '0:0': 'left-flank' as never }
+    expect(isSavedGameRecord(invalidRole)).toBe(false)
   })
 
   it('rejects malformed fruit stocks and per-turn market activity', () => {

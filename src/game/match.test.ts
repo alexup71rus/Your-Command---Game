@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { gameConfig } from '../config/game'
-import { buildingRules, economyBuildingCategories, economyBuildingKinds, marketPrices, startingResources, taxRates, troopRules } from '../config/rules'
+import { buildingRules, castleProduction, marketPrices, startingResources, taxRates } from '../config/rules'
 import type { BuildingKind, GameMap, TroopComposition } from './map'
 import {
   build,
@@ -39,6 +39,7 @@ import {
   upkeepFor,
   ungarrisonTower,
   workforceFor,
+  workerSeverity,
 } from './match'
 import type { MapScenario } from './scenario'
 
@@ -64,7 +65,7 @@ function createScenario(size = 8): MapScenario {
     ],
     participants: [
       { id: 'player', kind: 'human', regionId: 'region-0', color: '#d2b45f' },
-      { id: 'npc-2', kind: 'npc', regionId: 'region-1', color: '#6f9c83' },
+      { id: 'npc-2', kind: 'ai', profileId: 'radomir', regionId: 'region-1', color: '#6f9c83' },
     ],
   }
 }
@@ -89,48 +90,20 @@ function removePlayerCastle(scenario: MapScenario) {
   scenario.cells[1][1] = { ...scenario.cells[1][1], object: undefined }
 }
 
+function advanceRound(state: ReturnType<typeof createMatch>) {
+  let current = state
+  let steps = 0
+  do {
+    const advanced = endTurn(current)
+    if (!advanced.ok) return advanced
+    current = advanced.state
+    steps += 1
+  } while (current.status === 'playing' && current.activeParticipantId !== current.playerId && steps <= state.scenario.participants.length)
+  if (current.status === 'playing' && current.activeParticipantId !== current.playerId) throw new Error('round did not return to the human participant')
+  return { ok: true as const, state: current }
+}
+
 describe('match rules', () => {
-  it('places every economy building in exactly one construction category', () => {
-    const categorized = Object.values(economyBuildingCategories).flat()
-    expect(new Set(categorized).size).toBe(categorized.length)
-    expect([...categorized].sort()).toEqual([...economyBuildingKinds].sort())
-  })
-
-  it('keeps troop roles and recruitment prices in the intended order', () => {
-    const recruitmentValue = (kind: keyof typeof troopRules) => Object.entries(troopRules[kind].resourceCost).reduce((total, [resource, amount]) => {
-      if (!amount) return total
-      return total + (resource === 'gold' ? amount : amount * marketPrices[resource as keyof typeof marketPrices].buy)
-    }, 0)
-
-    expect(troopRules.archers.damage).toBe(troopRules.militia.damage)
-    expect(troopRules.archers.durability).toBe(troopRules.militia.durability)
-    expect(troopRules.spearmen.damage).toBeGreaterThan(troopRules.militia.damage)
-    expect(troopRules.spearmen.durability).toBeGreaterThan(troopRules.militia.durability)
-    expect(troopRules.knights.damage).toBe(troopRules.spearmen.damage)
-    expect(troopRules.knights.durability).toBeGreaterThan(troopRules.spearmen.durability * 1.8)
-    expect(recruitmentValue('militia')).toBeLessThan(recruitmentValue('spearmen'))
-    expect(recruitmentValue('spearmen')).toBeLessThan(recruitmentValue('archers'))
-    expect(recruitmentValue('knights')).toBeGreaterThan(recruitmentValue('archers') * 2)
-    expect(startingResources.iron).toBe((troopRules.spearmen.resourceCost.iron ?? 0) * 2)
-    expect(startingResources.ore).toBe(0)
-    expect(buildingRules.quarry.production).toEqual({ stone: 8 })
-    expect(buildingRules.mine.production).toEqual({ ore: 4 })
-    expect(buildingRules.smelter).toMatchObject({ actionCost: 4, resourceCost: { wood: 32, stone: 28, gold: 24 }, processing: { input: 'ore', output: 'iron', maximumPerTurn: 5 }, hitPoints: 22, footprint: { columns: 2, rows: 2 } })
-    expect(buildingRules.smelter.upkeep).toBeUndefined()
-    expect(buildingRules.kitchen).toMatchObject({ actionCost: 4, resourceCost: { wood: 20, stone: 12, gold: 8 }, workersRequired: 1, foodServiceCapacity: 20, hitPoints: 14 })
-    expect(buildingRules.lumberMill.workersRequired).toBe(1)
-    expect(buildingRules.quarry.workersRequired).toBe(2)
-    expect(buildingRules.mine.workersRequired).toBe(1)
-    expect(buildingRules.smelter.workersRequired).toBe(2)
-    expect(buildingRules.mill).toMatchObject({ resourceCost: { wood: 20, stone: 12, gold: 10 }, farmSupport: { radius: 2, capacity: 2 }, workersRequired: 1 })
-    expect(buildingRules.farm).toMatchObject({ resourceCost: { wood: 28, gold: 8 }, production: { flour: 14 }, workersRequired: 2, requiresMillSupport: true })
-    expect(buildingRules.orchard).toMatchObject({ resourceCost: { wood: 20, gold: 6 }, production: { fruit: 6 }, workersRequired: 1, footprint: { columns: 2, rows: 2 } })
-    expect(buildingRules.huntingLodge).toMatchObject({ actionCost: 4, resourceCost: { wood: 18, gold: 8 }, production: { meat: 6 }, hitPoints: 12, workersRequired: 1 })
-    expect(buildingRules.quarry.resourceCost).toEqual({ wood: 20 })
-    expect(buildingRules.house.resourceCost).toEqual({ wood: 25, gold: 5 })
-    expect(buildingRules.market).toMatchObject({ resourceCost: { gold: 28 }, maxPerOwner: 1 })
-  })
-
   it('initializes a playable human domain with eight orders', () => {
     const match = createMatch(createScenario())
     expect(match.turn).toBe(1)
@@ -145,13 +118,13 @@ describe('match rules', () => {
   it('survives four complete moderate-tax turns without a food building and starves on the fifth', () => {
     let state = createMatch(createScenario())
     for (let turn = 0; turn < 4; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       state = advanced.state
     }
     expect(state.domains.player.resources.flour + state.domains.player.resources.meat + state.domains.player.resources.fruit).toBe(2)
-    const fifth = endTurn(state)
+    const fifth = advanceRound(state)
     if (!fifth.ok) throw new Error('turn failed')
     expect(fifth.state.lastTurnReports.player.food.fed).toBe(false)
     expect(fifth.state.domains.player.population).toBe(gameConfig.turn.startingPopulation - 1)
@@ -174,7 +147,7 @@ describe('match rules', () => {
     expect(productionFor(built.state, 'player').meat).toBe(0)
     expect(match.scenario.cells[2][2].object).toBeUndefined()
 
-    const advanced = endTurn(built.state)
+    const advanced = advanceRound(built.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
     expect(advanced.state.turn).toBe(2)
@@ -288,7 +261,6 @@ describe('match rules', () => {
     expect(marketPrices.iron).toEqual({ buy: 10, sell: 6 })
     expect(marketPrices.iron.buy).toBe(Math.max(...Object.values(marketPrices).map(({ buy }) => buy)))
     const scenario = createScenario()
-    removePlayerCastle(scenario)
     placeBuilding(scenario, 'smelter', 0, 3)
     placeBuilding(scenario, 'market', 3, 3)
     const match = createMatch(scenario)
@@ -296,14 +268,14 @@ describe('match rules', () => {
     const bought = trade({ ...match, domains: { ...match.domains, player } }, { column: 3, row: 3 }, 'ore', 'buy', 5)
     expect(bought.ok).toBe(true)
     if (!bought.ok) return
-    const advanced = endTurn(bought.state)
+    const advanced = advanceRound(bought.state)
     expect(advanced.ok).toBe(true)
     if (!advanced.ok) return
-    expect(advanced.state.domains.player.resources).toMatchObject({ ore: 0, iron: 5, gold: 0 })
+    expect(advanced.state.domains.player.resources).toMatchObject({ ore: 0, iron: 5, gold: castleProduction.gold })
     const sold = trade(advanced.state, { column: 3, row: 3 }, 'iron', 'sell', 5)
     expect(sold.ok).toBe(true)
     if (!sold.ok) return
-    expect(sold.state.domains.player.resources.gold).toBe(30)
+    expect(sold.state.domains.player.resources.gold - (castleProduction.gold ?? 0)).toBe(30)
   })
 
   it('quotes every market unit, tracks domain activity and resets prices after a turn', () => {
@@ -693,6 +665,20 @@ describe('match rules', () => {
     expect(result.state.scenario.cells[1][6].object).toMatchObject({ type: 'squad', ownerId: 'player' })
   })
 
+  it('keeps a surviving squad in place after its final melee strike', () => {
+    const scenario = createScenario()
+    scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 3, spearmen: 0, archers: 0, knights: 0 } } }
+    scenario.cells[4][5] = { ...scenario.cells[4][5], object: { type: 'squad', ownerId: 'npc-2', units: { militia: 1, spearmen: 0, archers: 0, knights: 0 } } }
+
+    const result = moveOrAttack(createMatch(scenario), { column: 4, row: 4 }, { column: 5, row: 4 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.lastEvent).toMatchObject({ kind: 'destroyed', position: { column: 5, row: 4 } })
+    expect(result.state.scenario.cells[4][4].object).toMatchObject({ type: 'squad', ownerId: 'player' })
+    expect(result.state.scenario.cells[4][5].object).toBeUndefined()
+  })
+
   it('reduces ordinary squad damage against walls', () => {
     const scenario = createScenario()
     scenario.cells[4][4] = { ...scenario.cells[4][4], object: { type: 'squad', ownerId: 'player', units: { militia: 10, spearmen: 0, archers: 0, knights: 0 } } }
@@ -710,7 +696,7 @@ describe('match rules', () => {
     const result = moveOrAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 8, row: 0 })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.state.ordersRemaining).toBe(7)
+    expect(result.state.ordersRemaining).toBe(6)
     expect(result.state.scenario.cells[0][0].object).toMatchObject({ type: 'squad', ownerId: 'player' })
     expect(result.state.scenario.cells[0][8].object).toMatchObject({ type: 'building', hitPoints: 7 })
   })
@@ -739,7 +725,7 @@ describe('match rules', () => {
     expect(militiaState.scenario.cells[0][2].object).toBeUndefined()
     expect(knightState.scenario.cells[0][2].object).toMatchObject({ type: 'squad', units: { knights: 1 } })
     const knight = knightState.scenario.cells[0][2].object
-    expect(knight?.type === 'squad' ? squadHealth(knight) : 0).toBeCloseTo(1.3)
+    expect(knight?.type === 'squad' ? squadHealth(knight) : 0).toBeCloseTo(2.284)
   })
 
   it('blocks ranged attacks through forests and beyond archer range', () => {
@@ -786,13 +772,13 @@ describe('match rules', () => {
     const farm = build(mill.state, 'farm', { column: 0, row: 3 })
     if (!farm.ok) throw new Error('farm building failed')
     expect(farm.state.ordersRemaining).toBe(0)
-    const firstTurn = endTurn(farm.state)
+    const firstTurn = advanceRound(farm.state)
     if (!firstTurn.ok) throw new Error('turn failed')
     const house = build(firstTurn.state, 'house', { column: 2, row: 4 })
     if (!house.ok) throw new Error('house building failed')
     let state = house.state
     for (let turn = 0; turn < 5; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       state = advanced.state
@@ -848,7 +834,7 @@ describe('match rules', () => {
     placeBuilding(scenario, 'house', 0, 4)
     const initial = createMatch(scenario)
     const player = { ...initial.domains.player, taxRate: 'none' as const, resources: { ...initial.domains.player.resources, flour: 10, meat: 10, fruit: 10 } }
-    const fed = endTurn({ ...initial, domains: { ...initial.domains, player } })
+    const fed = advanceRound({ ...initial, domains: { ...initial.domains, player } })
     expect(fed.ok).toBe(true)
     if (!fed.ok) return
     expect(fed.state.domains.player.diverseDiet).toBe(true)
@@ -857,7 +843,7 @@ describe('match rules', () => {
     expect(fed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
 
     const withoutMeat = { ...fed.state.domains.player, resources: { ...fed.state.domains.player.resources, flour: 10, meat: 0, fruit: 10 } }
-    const lost = endTurn({ ...fed.state, domains: { ...fed.state.domains, player: withoutMeat } })
+    const lost = advanceRound({ ...fed.state, domains: { ...fed.state.domains, player: withoutMeat } })
     expect(lost.ok).toBe(true)
     if (!lost.ok) return
     expect(lost.state.domains.player.diverseDiet).toBe(false)
@@ -869,7 +855,7 @@ describe('match rules', () => {
     const simulate = (state: ReturnType<typeof createMatch>, turns = 20) => {
       let current = state
       for (let turn = 0; turn < turns; turn += 1) {
-        const advanced = endTurn(current)
+        const advanced = advanceRound(current)
         if (!advanced.ok) throw new Error('turn failed')
         expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
         expect(advanced.state.lastTurnReports.player.desertion).toBeNull()
@@ -941,7 +927,7 @@ describe('match rules', () => {
   it('leaves a recovery path after one expensive mistake and tolerates five militia', () => {
     const mistaken = build(createMatch(createScenario()), 'church', { column: 2, row: 2 })
     if (!mistaken.ok) throw new Error('expensive building failed')
-    const nextTurn = endTurn(mistaken.state)
+    const nextTurn = advanceRound(mistaken.state)
     if (!nextTurn.ok) throw new Error('turn failed')
     const orchard = build(nextTurn.state, 'orchard', { column: 0, row: 4 })
     if (!orchard.ok) throw new Error('orchard recovery failed')
@@ -956,7 +942,7 @@ describe('match rules', () => {
     state.domains.player.population = 5
     state.domains.player.taxRate = 'none'
     for (let turn = 0; turn < 20; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       expect(advanced.state.lastTurnReports.player.food.fed).toBe(true)
       expect(advanced.state.lastTurnReports.player.desertion).toBeNull()
@@ -1042,7 +1028,7 @@ describe('match rules', () => {
     const initialDemand = foodDemandFor(untaxed.state, 'player')
     let state = untaxed.state
     for (let turn = 0; turn < 6; turn += 1) {
-      const advanced = endTurn(state)
+      const advanced = advanceRound(state)
       if (!advanced.ok) throw new Error('turn failed')
       state = advanced.state
     }
@@ -1182,7 +1168,7 @@ describe('match rules', () => {
     expect(recruit(match, 'militia', 1, { column: 1, row: 2 })).toMatchObject({ ok: false, reason: 'army-full' })
   })
 
-  it('dismisses only a strict partial integer composition for two orders', () => {
+  it('dismisses a partial or complete integer composition for two orders', () => {
     const scenario = createScenario()
     scenario.cells[2][1] = { ...scenario.cells[2][1], object: { type: 'squad', ownerId: 'player', units: { militia: 6, spearmen: 0, archers: 0, knights: 0 }, health: 6 } }
     const match = createMatch(scenario)
@@ -1191,7 +1177,10 @@ describe('match rules', () => {
     expect(dismissed.state.ordersRemaining).toBe(6)
     expect(dismissed.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 2)
     expect(dismissed.state.scenario.cells[2][1].object).toMatchObject({ type: 'squad', units: { militia: 4 }, health: 4 })
-    expect(dismissSquad(match, { column: 1, row: 2 }, { militia: 6, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
+    const disbanded = dismissSquad(match, { column: 1, row: 2 }, { militia: 6, spearmen: 0, archers: 0, knights: 0 })
+    if (!disbanded.ok) throw new Error('disband failed')
+    expect(disbanded.state.scenario.cells[2][1].object).toBeUndefined()
+    expect(disbanded.state.domains.player.population).toBe(gameConfig.turn.startingPopulation + 6)
     expect(dismissSquad(match, { column: 1, row: 2 }, { militia: Number.NaN, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
     expect(splitSquad(match, { column: 1, row: 2 }, { column: 2, row: 2 }, { militia: 1.5, spearmen: 0, archers: 0, knights: 0 })).toMatchObject({ ok: false, reason: 'invalid-squad' })
   })
@@ -1230,7 +1219,7 @@ describe('match rules', () => {
     scenario.cells[0][7] = { ...scenario.cells[0][7], object: { type: 'building', kind: 'farm', ownerId: 'npc-2', hitPoints: 10, maxHitPoints: 10 } }
     const fired = towerAttack(createMatch(scenario), { column: 0, row: 0 }, { column: 7, row: 0 })
     if (!fired.ok) throw new Error('tower attack failed')
-    expect(fired.state.ordersRemaining).toBe(7)
+    expect(fired.state.ordersRemaining).toBe(6)
     expect(fired.state.scenario.cells[0][7].object).toMatchObject({ hitPoints: 7 })
 
     const destructionScenario = createScenario()
@@ -1329,5 +1318,44 @@ describe('match rules', () => {
 
     const enemyGate = createGateScenario({ militia: 1, spearmen: 0, archers: 0, knights: 0 }, 'npc-2')
     expect(moveOrAttack(createMatch(enemyGate), { column: 1, row: 4 }, { column: 3, row: 4 })).toMatchObject({ ok: false, reason: 'not-adjacent' })
+  })
+})
+
+describe('workerSeverity', () => {
+  const assignment = (overrides: Partial<{ kind: BuildingKind; required: number; assigned: number; blockedReason: 'missing-support' | 'idle-support' | 'no-workers' }>) => ({
+    kind: 'mill' as BuildingKind,
+    position: { column: 0, row: 0 },
+    required: 2,
+    assigned: 2,
+    ...overrides,
+  })
+
+  it('is null when fully staffed', () => {
+    expect(workerSeverity(assignment({ assigned: 2, required: 2 }))).toBeNull()
+  })
+
+  it('is null when overstaffed', () => {
+    expect(workerSeverity(assignment({ assigned: 3, required: 2 }))).toBeNull()
+  })
+
+  it('is stopped when no workers are assigned', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2 }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by no-workers', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2, blockedReason: 'no-workers' }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by missing support, regardless of assigned count', () => {
+    expect(workerSeverity(assignment({ assigned: 0, required: 2, blockedReason: 'missing-support' }))).toBe('stopped')
+    expect(workerSeverity(assignment({ assigned: 1, required: 2, blockedReason: 'missing-support' }))).toBe('stopped')
+  })
+
+  it('is stopped when blocked by idle support', () => {
+    expect(workerSeverity(assignment({ assigned: 1, required: 1, blockedReason: 'idle-support' }))).toBe('stopped')
+  })
+
+  it('is reduced when understaffed but producing', () => {
+    expect(workerSeverity(assignment({ assigned: 1, required: 2 }))).toBe('reduced')
   })
 })

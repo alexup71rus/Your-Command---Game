@@ -14,12 +14,14 @@ export interface LocaleDictionary {
     participants: string
     participantDescription: string
     humanAndNpc: string
+    botsOnly: string
     customMap: string
     customMapDescription: string
     openGenerator: string
     seedShort: string
     deleteSavedMap: string
     start: string
+    watch: string
     starting: string
     mapError: string
     mapUnviable: string
@@ -30,6 +32,26 @@ export interface LocaleDictionary {
     mapReadFailed: string
     loadGame: string
     presets: Record<'greenMarches' | 'highlandPasses' | 'woodedBorder', { name: string; description: string }>
+  }
+  opponents: {
+    title: string
+    kicker: string
+    player: string
+    playerDescription: string
+    selected: string
+    choose: string
+    addOpponent: string
+    removeOpponent: string
+    confirm: string
+    close: string
+    playerMark: string
+    mapCapacity: string
+    biography: string
+    region: string
+    alliance: string
+    changeAlliance: string
+    regionBinding: string
+    profiles: Record<AiProfileId, { name: string; epithets: string[]; role: string; strategy: string; toolkit: string }>
   }
   founding: {
     chooseTitle: string
@@ -42,6 +64,7 @@ export interface LocaleDictionary {
     hills: string
     selected: string
     changeRegion: string
+    assignedRegion: string
     chooseSite: string
     validSite: string
     invalidSite: string
@@ -57,6 +80,12 @@ export interface LocaleDictionary {
     workers: string
     freePeople: string
     diverseDiet: string
+    thinking: string
+    longThinking: string
+    yourTurn: string
+    spectator: string
+    viewingRuler: string
+    aiPhase: Record<AiStrategicPhase, string>
   }
   tabs: Array<{ id: TabId; label: string }>
   game: {
@@ -77,6 +106,7 @@ export interface LocaleDictionary {
     squadHealth: string
     damage: string
     movementCost: string
+    rangedDefense: string
     cost: string
     free: string
     emergencyFree: string
@@ -113,7 +143,6 @@ export interface LocaleDictionary {
     garrisonExit: string
     towerAttack: string
     towerRange: string
-    towerSight: string
     towerCapacity: string
     armyLimit: string
     endTurn: string
@@ -158,6 +187,11 @@ export interface LocaleDictionary {
     sell: string
     victoryTitle: string
     victoryDescription: string
+    defeatTitle: string
+    defeatDescription: string
+    spectatorVictoryTitle: string
+    spectatorVictoryDescription: string
+    autoBattle: string
     continue: string
     turnDesertion: string
     turnStarvation: string
@@ -218,6 +252,10 @@ export interface LocaleDictionary {
     gridDescription: string
     gridEnabled: string
     gridDisabled: string
+    autoCamera: string
+    autoCameraDescription: string
+    autoCameraEnabled: string
+    autoCameraDisabled: string
     mainMenu: string
     mainMenuDescription: string
     saveGame: string
@@ -290,6 +328,7 @@ export interface LocaleDictionary {
     cells: string
     note: string
     participants: string
+    participantLimit: string
     regionsCalculating: string
     regionsError: string
     regionsUnbalanced: string
@@ -318,8 +357,25 @@ export function isLocale(value: string | null): value is Locale {
   return value !== null && supportedLocales.includes(value as Locale)
 }
 
+export function aiProfileDisplayName(text: LocaleDictionary['opponents'], profileId: AiProfileId, occurrence = 0) {
+  const profile = text.profiles[profileId]
+  const epithet = profile.epithets[occurrence % profile.epithets.length]
+  return epithet ? `${profile.name} ${epithet}` : profile.name
+}
+
+export function aiParticipantDisplayName(text: LocaleDictionary['opponents'], participants: MatchParticipant[], participantId: string) {
+  const participantIndex = participants.findIndex((participant) => participant.id === participantId)
+  const participant = participants[participantIndex]
+  if (!participant?.profileId) return participant?.kind === 'human' ? text.player : participantId
+  const occurrence = participants.slice(0, participantIndex)
+    .filter((candidate) => candidate.profileId === participant.profileId).length
+  return aiProfileDisplayName(text, participant.profileId, occurrence)
+}
+
 export async function loadLocale(locale: Locale) {
   return (await localeLoaders[locale]()).default
 }
 import type { BuildingKind, ResourceId, TroopKind } from '../game/map'
 import type { CommandFailure } from '../game/match'
+import type { AiProfileId, MatchParticipant } from '../game/scenario'
+import type { AiStrategicPhase } from '../game/ai/model'

@@ -2,7 +2,7 @@ export const gameIdentity = {
   name: 'Ваш приказ',
   englishName: 'Your Command',
   slug: 'your-command',
-  version: '1.0.0',
+  version: '1.1.0',
 } as const
 
 const storageKey = (name: string) => `${gameIdentity.slug}:${name}`
@@ -22,7 +22,7 @@ export const gameConfig = {
     defaultMapSize: 100,
   },
   match: {
-    minParticipants: 2,
+    minParticipants: 1,
     maxParticipants: 4,
     defaultParticipants: 2,
     castleBoundaryBuffer: 2,
@@ -36,6 +36,36 @@ export const gameConfig = {
     maxRegionCenterOffset: 0.58,
     maxRegionPerimeterRatio: 8,
     minimumClearStartCells: 24,
+    minimumMapSizeByParticipants: { 2: 50, 3: 75, 4: 100 },
+    regionGeneration: {
+      minimumPassableCellsPerParticipant: 64,
+      centerMarginMinimum: 3,
+      centerMarginShare: 0.06,
+      twoParticipantRadiusSteps: [0.25, 0.3, 0.35],
+      multiParticipantRadiusSteps: [0.23, 0.29, 0.35],
+      centerAngleJitterShare: 0.24,
+      centerRadiusJitterShare: 0.07,
+      territoryAreaWeight: 0.4,
+      territoryQualityWeight: 0.6,
+      maximumPenaltyWeight: 10,
+      castleCandidateHillBonus: 4,
+      castleCandidateDistancePenalty: 0.1,
+      castleSiteRadii: { near: 5, medium: 8, far: 12 },
+      castleSiteWeights: {
+        nearPassable: 2.4,
+        mediumPassable: 0.55,
+        farPassable: 0.12,
+        nearPlain: 1.4,
+        mediumHill: 0.8,
+        mediumForestEdge: 1.1,
+        mediumSquares: 1.7,
+        exit: 18,
+        boundary: 2,
+      },
+      maximumBoundaryDistanceBonus: 8,
+      minimumCastleExits: 2,
+      invalidCastleExitPenalty: 1_000,
+    },
   },
   turn: {
     maxOrders: 8,
@@ -45,13 +75,17 @@ export const gameConfig = {
     squadReorganizationOrderCost: 2,
     demolishOrderCost: 2,
     demolitionRefundRate: 0.5,
+    archerMinimumRange: 2,
     archerRange: 8,
     squadCapacity: 10,
     castleHitPoints: 100,
     basePopulationCapacity: 5,
     startingPopulation: 5,
-    opponentDelayMs: 1_000,
     autoMoveStepDelayMs: 300,
+  },
+  ai: {
+    hiddenActionDelayMs: 20,
+    memoryRouteAvoidanceTurns: 6,
   },
   army: {
     capacity: 100,
@@ -70,6 +104,7 @@ export const gameConfig = {
     foodServiceRadius: 5,
   },
   visibility: {
+    enabled: false,
     buildingRadius: 8,
     squadRadius: 10,
     elevatedSquadRadius: 12,
@@ -88,6 +123,7 @@ export const gameConfig = {
     musicVolumeStorageKey: storageKey('music-volume'),
     musicCrossfadeMs: 1_800,
     combatMusicHoldMs: 12_000,
+    combatThreatRadius: 12,
     musicTracks: {
       menu: 'assets/music/the-old-tower-inn.mp3',
       settlement: 'assets/music/woodland-fantasy.mp3',
@@ -112,6 +148,24 @@ export const gameConfig = {
   display: {
     showGridByDefault: true,
     gridStorageKey: storageKey('map-grid-visible'),
+    autoCameraByDefault: false,
+    autoCameraStorageKey: storageKey('auto-camera-enabled'),
+    clickBurst: {
+      maximumVisible: 8,
+      lifetimeMs: 720,
+      rotationRange: 90,
+      minimumScale: 1.25,
+      scaleRange: 0.22,
+      minimumSpread: 0.9,
+      spreadRange: 0.22,
+    },
+    contextMenu: {
+      width: 270,
+      height: 220,
+      viewportPadding: 16,
+      pointerOffset: 8,
+    },
+    commandFeedbackDurationMs: 3_200,
   },
   savedMaps: {
     storageKey: storageKey('saved-maps'),
@@ -120,6 +174,12 @@ export const gameConfig = {
   savedGames: {
     databaseName: 'your-command',
     storeName: 'saved-games',
-    version: 1,
+    databaseSchemaVersion: 1,
   },
 } as const
+
+export function maximumParticipantsForMapSize(mapSize: number) {
+  if (mapSize >= gameConfig.match.minimumMapSizeByParticipants[4]) return 4
+  if (mapSize >= gameConfig.match.minimumMapSizeByParticipants[3]) return 3
+  return 2
+}

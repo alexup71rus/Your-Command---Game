@@ -48,6 +48,8 @@ export interface TroopRule {
   populationCost: number
   damage: number
   durability: number
+  /** Multiplier applied to incoming ranged damage; lower values mean better armour or shields. */
+  rangedDamageTakenMultiplier: number
   upkeep: ResourceAmount
 }
 
@@ -72,6 +74,24 @@ export const buildingKinds: BuildingKind[] = [...economyBuildingKinds, ...fortif
 export const troopKinds: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
 export const workerBuildingKinds: BuildingKind[] = ['mill', 'orchard', 'huntingLodge', 'farm', 'kitchen', 'lumberMill', 'quarry', 'mine', 'smelter']
 export const starvationTroopOrder: TroopKind[] = ['militia', 'spearmen', 'archers', 'knights']
+
+/** Shared combat coefficients used by the authoritative domain and simulations. */
+export const combatRules = {
+  melee: {
+    hillDamageMultiplier: 1.12,
+    forestDamageMultiplier: 1.08,
+    defenderDamageDivisor: 2.2,
+    retaliationDamageDivisor: 3,
+  },
+  ranged: {
+    orderCost: 2,
+    hillDamageMultiplier: 1.2,
+    forestCoverMultiplier: 0.75,
+    squadDamageDivisor: 2.5,
+    structureDamageMultiplier: 0.5,
+  },
+  casualtyOrder: ['militia', 'archers', 'spearmen', 'knights'] as TroopKind[],
+} as const
 
 export const buildingRules: Record<BuildingKind, BuildingRule> = {
   mill: {
@@ -210,7 +230,7 @@ export const buildingRules: Record<BuildingKind, BuildingRule> = {
       troop: 'archers',
       capacity: 5,
       transferOrderCost: 2,
-      attackOrderCost: 1,
+      attackOrderCost: combatRules.ranged.orderCost,
       attackRange: 10,
       visibilityRadius: 12,
       heightDamageMultiplier: 1.2,
@@ -233,6 +253,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
     populationCost: 1,
     damage: 1,
     durability: 1,
+    rangedDamageTakenMultiplier: 1,
     upkeep: { gold: 0.5 },
   },
   spearmen: {
@@ -241,6 +262,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
     populationCost: 1,
     damage: 1.2,
     durability: 1.35,
+    rangedDamageTakenMultiplier: 0.6,
     upkeep: { gold: 1 },
   },
   archers: {
@@ -249,6 +271,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
     populationCost: 1,
     damage: 1,
     durability: 1,
+    rangedDamageTakenMultiplier: 1,
     upkeep: { gold: 1.25 },
   },
   knights: {
@@ -257,6 +280,7 @@ export const troopRules: Record<TroopKind, TroopRule> = {
     populationCost: 1,
     damage: 1.2,
     durability: 2.5,
+    rangedDamageTakenMultiplier: 0.18,
     upkeep: { gold: 2.5 },
   },
 }

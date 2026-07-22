@@ -1,7 +1,7 @@
 import { gameConfig } from '../config/game'
 import { buildingRules } from '../config/rules'
 import type { GameMap, MapObject } from './map'
-import type { CellPosition } from './scenario'
+import { areOwnersHostile, type CellPosition, type MatchParticipant } from './scenario'
 
 export type VisibilityMap = Uint8Array[]
 
@@ -23,7 +23,12 @@ function revealRadius(visibility: VisibilityMap, center: CellPosition, radius: n
   }
 }
 
-export function calculateVisibility(map: GameMap, playerId: string): VisibilityMap {
+export function calculateVisibility(
+  map: GameMap,
+  playerId: string,
+  fogEnabled: boolean = gameConfig.visibility.enabled,
+): VisibilityMap {
+  if (!fogEnabled) return map.map((row) => Uint8Array.from({ length: row.length }, () => 1))
   const visibility = map.map((row) => new Uint8Array(row.length))
 
   for (let row = 0; row < map.length; row += 1) {
@@ -47,7 +52,7 @@ export function calculateVisibility(map: GameMap, playerId: string): VisibilityM
  * Memoizes visibility by immutable map identity. Economy-only state updates can
  * reuse the result while map-changing commands naturally invalidate it.
  */
-export function createVisibilitySelector() {
+export function createVisibilitySelector(fogEnabled: boolean = gameConfig.visibility.enabled) {
   let previousMap: GameMap | null = null
   let previousPlayerId: string | null = null
   let previousVisibility: VisibilityMap | null = null
@@ -56,7 +61,7 @@ export function createVisibilitySelector() {
     if (map === previousMap && playerId === previousPlayerId && previousVisibility) return previousVisibility
     previousMap = map
     previousPlayerId = playerId
-    previousVisibility = calculateVisibility(map, playerId)
+    previousVisibility = calculateVisibility(map, playerId, fogEnabled)
     return previousVisibility
   }
 }
@@ -65,11 +70,22 @@ export function isCellVisible(visibility: VisibilityMap | null | undefined, posi
   return !visibility || visibility[position.row]?.[position.column] === 1
 }
 
-export function hasVisibleEnemyThreat(map: GameMap, visibility: VisibilityMap | null | undefined, playerId: string) {
-  return map.some((row, rowIndex) => row.some((cell, column) => {
+export function hasNearbyEnemyThreat(map: GameMap, playerId: string, radius: number, participants?: readonly MatchParticipant[]) {
+  const ownedPositions: CellPosition[] = []
+  const enemyThreats: CellPosition[] = []
+  map.forEach((row, rowIndex) => row.forEach((cell, column) => {
     const object = cell.object
-    if (!object || object.ownerId === playerId || !isCellVisible(visibility, { column, row: rowIndex })) return false
-    return object.type === 'squad' || (object.type === 'building' && object.kind === 'tower' && Boolean(object.garrison))
+    if (!object) return
+    const position = { column, row: rowIndex }
+    if (object.ownerId === playerId) ownedPositions.push(position)
+    else if ((!participants || areOwnersHostile(participants, playerId, object.ownerId)) && (object.type === 'squad'
+      || (object.type === 'building' && object.kind === 'tower' && Boolean(object.garrison)))) enemyThreats.push(position)
+  }))
+  const radiusSquared = radius * radius
+  return enemyThreats.some((threat) => ownedPositions.some((owned) => {
+    const columnDistance = threat.column - owned.column
+    const rowDistance = threat.row - owned.row
+    return columnDistance * columnDistance + rowDistance * rowDistance <= radiusSquared
   }))
 }
 

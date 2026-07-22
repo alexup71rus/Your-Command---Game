@@ -1,4 +1,5 @@
-import { gameConfig } from '../config/game'
+import { gameConfig, maximumParticipantsForMapSize } from '../config/game'
+import { cardinalDirections, clockwiseCardinalDirections } from './geometry'
 import type { GameMap } from './map'
 
 export interface CellPosition {
@@ -6,13 +7,16 @@ export interface CellPosition {
   row: number
 }
 
-export type ParticipantKind = 'human' | 'npc'
+export type ParticipantKind = 'human' | 'ai'
+export type AiProfileId = 'radomir' | 'velislava' | 'svyatobor'
 
 export interface MatchParticipant {
   id: string
   kind: ParticipantKind
   regionId: string
   color: string
+  profileId?: AiProfileId
+  teamId?: number
 }
 
 export interface RegionScore {
@@ -66,6 +70,12 @@ export interface MatchSetup {
   scenarioId: string
   participantCount: number
   humanRegionId: string
+  opponentProfileIds: AiProfileId[]
+}
+
+export interface OpponentRegionAssignment {
+  profileId: AiProfileId
+  region: StartRegion
 }
 
 export type ScenarioResult =
@@ -74,6 +84,20 @@ export type ScenarioResult =
   | { ok: false; reason: 'unbalanced-regions'; balance: RegionBalance }
 
 export const REGION_COLORS = ['#d2b45f', '#6f9c83', '#a26f61', '#718cac'] as const
+
+export function participantTeamId(participant: MatchParticipant) {
+  return participant.teamId ?? participant.id
+}
+
+export function areOwnersAllied(participants: readonly MatchParticipant[], firstOwnerId: string, secondOwnerId: string) {
+  const first = participants.find((participant) => participant.id === firstOwnerId)
+  const second = participants.find((participant) => participant.id === secondOwnerId)
+  return Boolean(first && second && participantTeamId(first) === participantTeamId(second))
+}
+
+export function areOwnersHostile(participants: readonly MatchParticipant[], firstOwnerId: string, secondOwnerId: string) {
+  return firstOwnerId !== secondOwnerId && !areOwnersAllied(participants, firstOwnerId, secondOwnerId)
+}
 
 const keyOf = (column: number, row: number, columns: number) => row * columns + column
 
@@ -86,8 +110,6 @@ function largestPassableComponent(map: GameMap) {
   const columns = map[0]?.length ?? 0
   const visited = new Uint8Array(rows * columns)
   let largest: CellPosition[] = []
-  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
-
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < columns; column += 1) {
       const startKey = keyOf(column, row, columns)
@@ -98,9 +120,9 @@ function largestPassableComponent(map: GameMap) {
       for (let cursor = 0; cursor < queue.length; cursor += 1) {
         const current = queue[cursor]
         component.push(current)
-        for (const [dx, dy] of directions) {
-          const nextColumn = current.column + dx
-          const nextRow = current.row + dy
+        for (const direction of cardinalDirections) {
+          const nextColumn = current.column + direction.column
+          const nextRow = current.row + direction.row
           if (nextColumn < 0 || nextColumn >= columns || nextRow < 0 || nextRow >= rows) continue
           const nextKey = keyOf(nextColumn, nextRow, columns)
           if (visited[nextKey] || !isPassable(map, nextColumn, nextRow)) continue
@@ -130,20 +152,23 @@ function cellRegionValue(map: GameMap, position: CellPosition) {
 function chooseCenters(map: GameMap, component: CellPosition[], count: number, seed: number, attempt: number) {
   const rows = map.length
   const columns = map[0].length
-  const margin = Math.max(3, Math.floor(Math.min(rows, columns) * 0.06))
+  const generation = gameConfig.match.regionGeneration
+  const margin = Math.max(generation.centerMarginMinimum, Math.floor(Math.min(rows, columns) * generation.centerMarginShare))
   const candidates = component.filter(({ column, row }) => (
     column >= margin && column < columns - margin && row >= margin && row < rows - margin
     && !map[row][column].vegetation
   ))
   if (candidates.length < count) return []
   const centers: CellPosition[] = []
-  const radiusSteps = count === 2 ? [0.25, 0.3, 0.35] : [0.23, 0.29, 0.35]
+  const radiusSteps = count === 2 ? generation.twoParticipantRadiusSteps : generation.multiParticipantRadiusSteps
   const radius = Math.min(rows, columns) * radiusSteps[attempt % radiusSteps.length]
   const baseRotation = (hashCell(count, seed % 997, seed) / 4294967295) * Math.PI * 2
   const rotation = baseRotation + attempt * Math.PI * (3 - Math.sqrt(5))
   for (let index = 0; index < count; index += 1) {
-    const angleJitter = (hashCell(index, attempt + 101, seed) / 4294967295 - 0.5) * (Math.PI * 2 / count) * 0.24
-    const radiusJitter = (hashCell(attempt + 211, index, seed) / 4294967295 - 0.5) * Math.min(rows, columns) * 0.07
+    const angleJitter = (hashCell(index, attempt + 101, seed) / 4294967295 - 0.5)
+      * (Math.PI * 2 / count) * generation.centerAngleJitterShare
+    const radiusJitter = (hashCell(attempt + 211, index, seed) / 4294967295 - 0.5)
+      * Math.min(rows, columns) * generation.centerRadiusJitterShare
     const angle = rotation + index / count * Math.PI * 2 + angleJitter
     const target = {
       column: (columns - 1) / 2 + Math.cos(angle) * (radius + radiusJitter),
@@ -205,7 +230,8 @@ export function evaluateRegionResourceBalance(scores: RegionScore[]): RegionReso
     areaRatio,
     forestCoverageSpread,
     hillCoverageSpread,
-    score: Math.max(...normalizedPenalties) * 10 + normalizedPenalties.reduce((sum, penalty) => sum + penalty, 0),
+    score: Math.max(...normalizedPenalties) * gameConfig.match.regionGeneration.maximumPenaltyWeight
+      + normalizedPenalties.reduce((sum, penalty) => sum + penalty, 0),
   }
 }
 
@@ -241,7 +267,8 @@ function addTerritoryShape(balance: RegionResourceBalance, territories: Territor
     ...balance,
     centerOffset,
     perimeterRatio,
-    score: balance.score + Math.max(...shapePenalties) * 10 + shapePenalties.reduce((sum, penalty) => sum + penalty, 0),
+    score: balance.score + Math.max(...shapePenalties) * gameConfig.match.regionGeneration.maximumPenaltyWeight
+      + shapePenalties.reduce((sum, penalty) => sum + penalty, 0),
   }
 }
 
@@ -260,7 +287,6 @@ function assignTerritories(map: GameMap, component: CellPosition[], centers: Cel
   const territories: TerritoryMap = Array.from({ length: rows }, () => Array.from({ length: columns }, () => null))
   const componentSet = new Uint8Array(rows * columns)
   component.forEach(({ column, row }) => { componentSet[keyOf(column, row, columns)] = 1 })
-  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const
   const frontiers: CellPosition[][] = centers.map(() => [])
   const cursors = centers.map(() => 0)
   const sizes = centers.map(() => 1)
@@ -270,9 +296,9 @@ function assignTerritories(map: GameMap, component: CellPosition[], centers: Cel
   let assigned = centers.length
 
   const enqueueNeighbours = (regionIndex: number, position: CellPosition) => {
-    for (const [dx, dy] of directions) {
-      const column = position.column + dx
-      const row = position.row + dy
+    for (const direction of cardinalDirections) {
+      const column = position.column + direction.column
+      const row = position.row + direction.row
       if (column < 0 || column >= columns || row < 0 || row >= rows) continue
       if (!componentSet[keyOf(column, row, columns)] || territories[row][column] !== null) continue
       frontiers[regionIndex].push({ column, row })
@@ -291,7 +317,8 @@ function assignTerritories(map: GameMap, component: CellPosition[], centers: Cel
         cursors[index] += 1
       }
       if (cursors[index] >= frontiers[index].length) continue
-      const load = sizes[index] / targetCells * 0.4 + values[index] / targetValue * 0.6
+      const load = sizes[index] / targetCells * gameConfig.match.regionGeneration.territoryAreaWeight
+        + values[index] / targetValue * gameConfig.match.regionGeneration.territoryQualityWeight
       if (load < smallestLoad) {
         selectedRegion = index
         smallestLoad = load
@@ -448,8 +475,10 @@ function buildRegions(map: GameMap, territories: TerritoryMap, centers: CellPosi
       .sort((a, b) => {
         const score = (position: CellPosition) => {
           const distance = Math.hypot(position.column - centers[index].column, position.row - centers[index].row)
-          const hillBonus = map[position.row][position.column].landform === 'hill' ? 4 : 0
-          return hillBonus - distance * 0.1
+          const hillBonus = map[position.row][position.column].landform === 'hill'
+            ? gameConfig.match.regionGeneration.castleCandidateHillBonus
+            : 0
+          return hillBonus - distance * gameConfig.match.regionGeneration.castleCandidateDistancePenalty
         }
         return score(b) - score(a)
       })
@@ -482,8 +511,11 @@ export function createMapScenario(
 ): ScenarioResult {
   const requestedCount = Number.isFinite(participantCount) ? Math.round(participantCount) : gameConfig.match.defaultParticipants
   const count = Math.max(gameConfig.match.minParticipants, Math.min(gameConfig.match.maxParticipants, requestedCount))
+  if (count > maximumParticipantsForMapSize(map.length)) return { ok: false, reason: 'not-enough-land' }
   const component = largestPassableComponent(map)
-  if (component.length < count * 64) return { ok: false, reason: 'not-enough-land' }
+  if (component.length < count * gameConfig.match.regionGeneration.minimumPassableCellsPerParticipant) {
+    return { ok: false, reason: 'not-enough-land' }
+  }
   let sawCandidate = false
   let sawCastleSites = false
   let firstViableBalance: RegionBalance | null = null
@@ -521,22 +553,94 @@ export function createMapScenario(
   return { ok: false, reason: 'unbalanced-regions', balance: firstViableBalance }
 }
 
-export function foundMatch(scenario: MapScenario, humanRegionId: string, humanCastle: CellPosition): MapScenario {
-  if (!isCastleSiteValid(scenario, humanRegionId, humanCastle)) return scenario
-  const participants: MatchParticipant[] = scenario.regions.map((region) => ({
-    id: region.id === humanRegionId ? 'player' : `npc-${region.index + 1}`,
-    kind: region.id === humanRegionId ? 'human' : 'npc',
-    regionId: region.id,
-    color: region.color,
-  }))
-  const placements = scenario.regions.map((region) => ({
-    region,
-    position: region.id === humanRegionId ? humanCastle : region.validCastleCells[0],
-    participant: participants.find((participant) => participant.regionId === region.id)!,
-  }))
+export function assignOpponentRegions(
+  scenario: MapScenario,
+  humanRegionId: string,
+  opponentProfileIds: AiProfileId[],
+): OpponentRegionAssignment[] {
+  const humanRegionIndex = scenario.regions.findIndex((region) => region.id === humanRegionId)
+  if (humanRegionIndex < 0) return []
+  return scenario.regions
+    .filter((region) => region.id !== humanRegionId)
+    .sort((first, second) => {
+      const firstOffset = (first.index - humanRegionIndex + scenario.regions.length) % scenario.regions.length
+      const secondOffset = (second.index - humanRegionIndex + scenario.regions.length) % scenario.regions.length
+      return firstOffset - secondOffset
+    })
+    .flatMap((region, index) => opponentProfileIds[index] ? [{ region, profileId: opponentProfileIds[index] }] : [])
+}
+
+function castleSiteScore(scenario: MapScenario, region: StartRegion, position: CellPosition) {
+  const within = (radius: number) => {
+    let passable = 0
+    let plain = 0
+    let hill = 0
+    let forestEdge = 0
+    let squares = 0
+    for (let row = Math.max(0, position.row - radius); row <= Math.min(scenario.cells.length - 1, position.row + radius); row += 1) {
+      for (let column = Math.max(0, position.column - radius); column <= Math.min((scenario.cells[row]?.length ?? 1) - 1, position.column + radius); column += 1) {
+        if (Math.abs(column - position.column) + Math.abs(row - position.row) > radius || scenario.territories[row]?.[column] !== region.id) continue
+        const cell = scenario.cells[row][column]
+        if (cell.landform === 'peak') continue
+        passable += 1
+        if (!cell.vegetation && cell.landform === 'plain') plain += 1
+        if (!cell.vegetation && cell.landform === 'hill') hill += 1
+        if (!cell.vegetation && clockwiseCardinalDirections.some((direction) => scenario.cells[row + direction.row]?.[column + direction.column]?.vegetation)) forestEdge += 1
+        const square = [
+          scenario.cells[row]?.[column], scenario.cells[row]?.[column + 1],
+          scenario.cells[row + 1]?.[column], scenario.cells[row + 1]?.[column + 1],
+        ]
+        if (square.every((candidate) => candidate && candidate.landform !== 'peak' && !candidate.vegetation)
+          && [
+            scenario.territories[row]?.[column], scenario.territories[row]?.[column + 1],
+            scenario.territories[row + 1]?.[column], scenario.territories[row + 1]?.[column + 1],
+          ].every((candidate) => candidate === region.id)) squares += 1
+      }
+    }
+    return { passable, plain, hill, forestEdge, squares }
+  }
+  const generation = gameConfig.match.regionGeneration
+  const near = within(generation.castleSiteRadii.near)
+  const medium = within(generation.castleSiteRadii.medium)
+  const far = within(generation.castleSiteRadii.far)
+  const exits = clockwiseCardinalDirections.filter((direction) => {
+    const cell = scenario.cells[position.row + direction.row]?.[position.column + direction.column]
+    return cell && cell.landform !== 'peak' && scenario.territories[position.row + direction.row]?.[position.column + direction.column] === region.id
+  }).length
+  const boundaryDistance = Math.min(position.column, position.row, scenario.cells.length - 1 - position.row, (scenario.cells[0]?.length ?? 1) - 1 - position.column)
+  const weights = generation.castleSiteWeights
+  return near.passable * weights.nearPassable
+    + medium.passable * weights.mediumPassable
+    + far.passable * weights.farPassable
+    + near.plain * weights.nearPlain
+    + medium.hill * weights.mediumHill
+    + medium.forestEdge * weights.mediumForestEdge
+    + medium.squares * weights.mediumSquares
+    + exits * weights.exit
+    + Math.min(generation.maximumBoundaryDistanceBonus, boundaryDistance) * weights.boundary
+    - (exits < generation.minimumCastleExits ? generation.invalidCastleExitPenalty : 0)
+}
+
+export function chooseCastleSiteForRegion(scenario: MapScenario, region: StartRegion) {
+  return [...region.validCastleCells]
+    .map((position) => ({ position, score: castleSiteScore(scenario, region, position) }))
+    .sort((first, second) => second.score - first.score
+      || hashCell(first.position.column, first.position.row, scenario.seed) - hashCell(second.position.column, second.position.row, scenario.seed)
+      || first.position.row - second.position.row || first.position.column - second.position.column)[0]?.position
+    ?? region.validCastleCells[0]
+}
+
+function placeFoundingCastles(
+  scenario: MapScenario,
+  participants: MatchParticipant[],
+  castleForRegion: (region: StartRegion) => CellPosition,
+) {
   const changedRows = new Map<number, GameMap[number]>()
   const cells = [...scenario.cells]
-  placements.forEach(({ position, participant }) => {
+  scenario.regions.forEach((region) => {
+    const participant = participants.find((candidate) => candidate.regionId === region.id)
+    if (!participant) return
+    const position = castleForRegion(region)
     const row = changedRows.get(position.row) ?? [...cells[position.row]]
     changedRows.set(position.row, row)
     cells[position.row] = row
@@ -551,4 +655,69 @@ export function foundMatch(scenario: MapScenario, humanRegionId: string, humanCa
     }
   })
   return { ...scenario, cells, participants }
+}
+
+function aiParticipantIds(profileIds: AiProfileId[]) {
+  const totals = new Map<AiProfileId, number>()
+  profileIds.forEach((profileId) => totals.set(profileId, (totals.get(profileId) ?? 0) + 1))
+  const occurrences = new Map<AiProfileId, number>()
+  return profileIds.map((profileId) => {
+    const occurrence = (occurrences.get(profileId) ?? 0) + 1
+    occurrences.set(profileId, occurrence)
+    return totals.get(profileId) === 1 ? `ai-${profileId}` : `ai-${profileId}-${occurrence}`
+  })
+}
+
+export function foundMatch(
+  scenario: MapScenario,
+  humanRegionId: string,
+  humanCastle: CellPosition,
+  opponentProfileIds: AiProfileId[] = ['radomir', 'velislava', 'svyatobor'],
+  participantTeamIds: number[] = [],
+): MapScenario {
+  if (!isCastleSiteValid(scenario, humanRegionId, humanCastle)) return scenario
+  const humanRegionIndex = scenario.regions.findIndex((region) => region.id === humanRegionId)
+  const opponentAssignments = assignOpponentRegions(scenario, humanRegionId, opponentProfileIds)
+  if (opponentAssignments.length !== scenario.regions.length - 1) return scenario
+  const participantIds = aiParticipantIds(opponentAssignments.map(({ profileId }) => profileId))
+  const participants: MatchParticipant[] = [
+    {
+      id: 'player',
+      kind: 'human',
+      regionId: humanRegionId,
+      color: scenario.regions[humanRegionIndex].color,
+      ...(participantTeamIds[0] ? { teamId: participantTeamIds[0] } : {}),
+    },
+    ...opponentAssignments.map(({ region, profileId }, index) => {
+      const teamId = participantTeamIds[index + 1]
+      return { id: participantIds[index], kind: 'ai' as const, regionId: region.id, color: region.color, profileId, ...(teamId ? { teamId } : {}) }
+    }),
+  ]
+  return placeFoundingCastles(
+    scenario,
+    participants,
+    (region) => region.id === humanRegionId ? humanCastle : chooseCastleSiteForRegion(scenario, region),
+  )
+}
+
+export function foundAutomatedMatch(
+  scenario: MapScenario,
+  profileIds: AiProfileId[],
+  participantTeamIds: number[] = [],
+): MapScenario {
+  if (profileIds.length !== scenario.regions.length) return scenario
+  const participantIds = aiParticipantIds(profileIds)
+  const participants: MatchParticipant[] = scenario.regions.map((region, index) => ({
+    id: participantIds[index],
+    kind: 'ai',
+    regionId: region.id,
+    color: region.color,
+    profileId: profileIds[index],
+    ...(participantTeamIds[index] ? { teamId: participantTeamIds[index] } : {}),
+  }))
+  return placeFoundingCastles(scenario, participants, (region) => chooseCastleSiteForRegion(scenario, region))
+}
+
+export function isSpectatorScenario(scenario: MapScenario) {
+  return scenario.participants.length > 0 && scenario.participants.every((participant) => participant.kind === 'ai')
 }

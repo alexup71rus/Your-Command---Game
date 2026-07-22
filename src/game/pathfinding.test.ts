@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GameMap } from './map'
-import { findMovementPath } from './pathfinding'
+import { findMovementPath, withMovementPathCache } from './pathfinding'
 
 function createMap(size = 5): GameMap {
   return Array.from({ length: size }, () => Array.from({ length: size }, () => ({ landform: 'plain' as const, vegetation: false })))
@@ -72,5 +72,21 @@ describe('movement pathfinding', () => {
       { column: 2, row: 1 },
     ])
     expect(findMovementPath(map, { column: 0, row: 1 }, { column: 2, row: 1 }, { ownerId: 'npc' })).toBeNull()
+  })
+
+  it('keeps cached routes request-scoped and isolated from caller mutation', () => {
+    const map = createMap()
+    const from = { column: 0, row: 0 }
+    const to = { column: 2, row: 0 }
+
+    withMovementPathCache(() => {
+      const first = findMovementPath(map, from, to)
+      expect(first).not.toBeNull()
+      first?.splice(1)
+      expect(findMovementPath(map, from, to)).toHaveLength(3)
+    })
+
+    map[0][1] = { ...map[0][1], landform: 'peak' }
+    expect(withMovementPathCache(() => findMovementPath(map, from, to))).toHaveLength(5)
   })
 })
