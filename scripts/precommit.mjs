@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 
 const checks = [
   ['npm', ['run', 'lint']],
+  ['npm', ['run', 'format:check']],
   ['npm', ['run', 'typecheck']],
   // AI tests are intentionally behavioral and can take minutes. Run them via
   // `npm run test:ai` or `npm run test:ai:soak` when finalizing AI changes.
