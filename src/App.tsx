@@ -4,7 +4,7 @@ import { FoundingPanel } from './components/FoundingPanel'
 import { GameCommandDock } from './components/GameCommandDock'
 import { GameHud } from './components/GameHud'
 import { GameOutcomeModal } from './components/GameOutcomeModal'
-import { GridCanvas, type CameraCommand, type MapClickRequest, type MapContextRequest } from './components/GridCanvas'
+import { GridCanvas, type CameraCommand, type MapClickRequest, type MapContextRequest, type MapObjectHoverRequest } from './components/GridCanvas'
 import { MapGeneratorModal } from './components/MapGeneratorModal'
 import { MainMenu } from './components/MainMenu'
 import { SettingsModal } from './components/SettingsModal'
@@ -13,7 +13,7 @@ import { StartMenu } from './components/StartMenu'
 import { UtilityControls } from './components/UtilityControls'
 import { ConfirmDialog } from './components/ui/ConfirmDialog'
 import { gameConfig, maximumParticipantsForMapSize } from './config/game'
-import { aiPlannerConfig } from './config/ai'
+import { aiAvatarPaths, aiPlannerConfig } from './config/ai'
 import { aiParticipantDisplayName, type LocaleDictionary, type TabId } from './config/localization'
 import { buildingRules, resourceIds, troopRules, type TaxRate } from './config/rules'
 import { escapeTarget, overlayAfterEscape, savedGameLoadNeedsConfirmation, type GamePhase, type Overlay } from './game/flow'
@@ -149,6 +149,7 @@ export function App() {
   const [aiBusy, setAiBusy] = useState(false)
   const [aiSlow, setAiSlow] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [hoveredMapObject, setHoveredMapObject] = useState<MapObjectHoverRequest | null>(null)
   const [bursts, setBursts] = useState<ClickBurst[]>([])
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [savedGamesReturnToSettings, setSavedGamesReturnToSettings] = useState(false)
@@ -163,6 +164,45 @@ export function App() {
     return savedMaps.find((candidate) => candidate.id === savedId)?.settings.mapSize ?? gameConfig.generator.defaultMapSize
   }, [savedMaps, selectedMap])
   const selectedMapParticipantLimit = maximumParticipantsForMapSize(selectedMapSize)
+  const objectHintShowTimer = useRef<number | null>(null)
+  const objectHintHideTimer = useRef<number | null>(null)
+  const pendingMapObject = useRef<MapObjectHoverRequest | null>(null)
+  const visibleMapObject = useRef<MapObjectHoverRequest | null>(null)
+  const showObjectOwner = useCallback((request: MapObjectHoverRequest | null) => {
+    pendingMapObject.current = request
+    if (objectHintShowTimer.current !== null) {
+      window.clearTimeout(objectHintShowTimer.current)
+      objectHintShowTimer.current = null
+    }
+    if (objectHintHideTimer.current !== null) {
+      window.clearTimeout(objectHintHideTimer.current)
+      objectHintHideTimer.current = null
+    }
+    if (!request) {
+      objectHintHideTimer.current = window.setTimeout(() => {
+        visibleMapObject.current = null
+        setHoveredMapObject(null)
+        objectHintHideTimer.current = null
+      }, 80)
+      return
+    }
+    if (visibleMapObject.current && (
+      visibleMapObject.current.ownerId !== request.ownerId
+      || visibleMapObject.current.object.type !== request.object.type
+      || (visibleMapObject.current.object.type === 'building' && request.object.type === 'building' && visibleMapObject.current.object.kind !== request.object.kind)
+      || visibleMapObject.current.column !== request.column
+      || visibleMapObject.current.row !== request.row
+    )) {
+      visibleMapObject.current = null
+      setHoveredMapObject(null)
+    }
+    objectHintShowTimer.current = window.setTimeout(() => {
+      objectHintShowTimer.current = null
+      if (pendingMapObject.current !== request) return
+      visibleMapObject.current = request
+      setHoveredMapObject(request)
+    }, 180)
+  }, [])
   const constrainParticipants = useCallback((limit: number) => {
     const nextProfiles = profilesForSetup(hasHumanPlayer, opponentProfileIds, limit)
     setOpponentProfileIds(nextProfiles)
@@ -243,6 +283,25 @@ export function App() {
   useEffect(() => () => {
     if (combatMusicTimer.current !== null) window.clearTimeout(combatMusicTimer.current)
   }, [])
+  useEffect(() => {
+    let resetTimer: number | null = null
+    if (phase !== 'playing') {
+      pendingMapObject.current = null
+      visibleMapObject.current = null
+      resetTimer = window.setTimeout(() => setHoveredMapObject(null), 0)
+    }
+    return () => {
+      if (resetTimer !== null) window.clearTimeout(resetTimer)
+      if (objectHintShowTimer.current !== null) {
+        window.clearTimeout(objectHintShowTimer.current)
+        objectHintShowTimer.current = null
+      }
+      if (objectHintHideTimer.current !== null) {
+        window.clearTimeout(objectHintHideTimer.current)
+        objectHintHideTimer.current = null
+      }
+    }
+  }, [phase])
 
   useEffect(() => {
     listSavedGames()
@@ -615,9 +674,15 @@ export function App() {
             const sourceAfter = objectAt(result.state, selectedCell)
             const destinationAfter = objectAt(result.state, position)
             const sourceSurvived = sourceAfter?.type === 'squad' && sourceAfter.ownerId === match.playerId
-            const moved = !sourceAfter && destinationAfter?.type === 'squad' && destinationAfter.ownerId === match.playerId
+            const attackedSquad = attacking && target?.type === 'squad'
+            const movementEvent = result.state.lastEvent?.kind === 'moved'
+              || result.state.lastEvent?.kind === 'merged'
+              || (attacking && target?.type !== 'squad' && result.state.lastEvent?.kind === 'destroyed')
+            const moved = movementEvent && !sourceAfter && destinationAfter?.type === 'squad' && destinationAfter.ownerId === match.playerId
             nextSelection = sourceSurvived ? selectedCell : moved ? position : null
-            if (moved) {
+            if (attackedSquad) {
+              setUnitAnimation(null)
+            } else if (moved) {
               setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: position })
             }
           }
@@ -866,8 +931,14 @@ export function App() {
       }
       const sourceAfter = objectAt(result.state, selectedCell)
       const destinationAfter = objectAt(result.state, next)
-      const moved = !sourceAfter && destinationAfter?.type === 'squad' && destinationAfter.ownerId === match.playerId
-      if (moved) setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: next })
+      const attackedSquad = destination.object?.type === 'squad'
+        && areOwnersHostile(match.scenario.participants, match.playerId, destination.object.ownerId)
+      const movementEvent = result.state.lastEvent?.kind === 'moved'
+        || result.state.lastEvent?.kind === 'merged'
+        || (!attackedSquad && result.state.lastEvent?.kind === 'destroyed')
+      const moved = movementEvent && !sourceAfter && destinationAfter?.type === 'squad' && destinationAfter.ownerId === match.playerId
+      if (attackedSquad) setUnitAnimation(null)
+      else if (moved) setUnitAnimation({ key: ++unitAnimationId.current, from: selectedCell, to: next })
       setMatch(result.state)
       setScenario(result.state.scenario)
       setSelectedCell(sourceAfter?.type === 'squad' && sourceAfter.ownerId === match.playerId ? selectedCell : moved ? next : null)
@@ -1138,16 +1209,36 @@ export function App() {
         .map((participant) => aiParticipantDisplayName(text.opponents, match.scenario.participants, participant.id))
         .join(' · ')
     : undefined
+  const mapObjectOwner = match && hoveredMapObject
+    ? match.scenario.participants.find((participant) => participant.id === hoveredMapObject.ownerId)
+    : undefined
+  const mapObjectOwnerName = match && hoveredMapObject
+    ? aiParticipantDisplayName(text.opponents, match.scenario.participants, hoveredMapObject.ownerId)
+    : undefined
+  const hoveredMapObjectName = hoveredMapObject?.object.type === 'building'
+    ? text.game.buildingNames[hoveredMapObject.object.kind]
+    : hoveredMapObject?.object.type === 'squad'
+      ? text.game.squad
+      : text.game.castle
 
   return (
     <main className={`game-shell phase-${phase}${spectatorMatch ? ' spectator-match' : ''}`} onPointerDownCapture={handleInterfacePointerDown}>
-      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} workforceByOwner={workforceByOwner} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
+      <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} workforceByOwner={workforceByOwner} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onObjectHover={phase === 'playing' ? showObjectOwner : undefined} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
       {phase === 'playing' && match && <>
         <GameHud match={match} text={text} opponentTurn={opponentTurn} aiBusy={aiBusy} aiSlow={aiSlow} spectator={spectatorMatch} spectatorParticipantId={visibleSpectatorParticipantId} previewOrderCost={pendingOrderCost || hoveredOrderCost} onEndTurn={finishTurn} />
         {!spectatorMatch && <GameCommandDock match={match} selectedCell={interfaceSelectedCell} activeTab={activeTab} pendingAction={pendingAction} locked={opponentTurn} text={text} feedback={commandFeedback} onOrderPreview={setHoveredOrderCost} onTabChange={(tab) => { cancelAutoMove(); setActiveTab(tab); setSelectedCell(null); setPendingAction(null); setCommandFeedback(null); setHoveredOrderCost(0) }} onChooseBuild={startBuilding} onChooseRecruit={startRecruitment} onSplit={startSplit} onDismiss={startDismiss} onCompositionChange={changeComposition} onConfirmDismiss={confirmDismiss} onTowerAction={startTowerAction} onCancelAction={() => { setPendingAction(null); setHoveredOrderCost(0) }} onSetTaxRate={changeTaxRate} onTrade={tradeAtMarket} />}
-        {navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
+        {hoveredMapObject && mapObjectOwner && mapObjectOwnerName
+          ? <div className="map-hint map-owner-hint" role="status" aria-live="polite">
+              <span className="map-owner-avatar" style={{ borderColor: mapObjectOwner.color, boxShadow: `0 0 0 1px ${mapObjectOwner.color}66, 0 0 14px ${mapObjectOwner.color}88` }} aria-hidden="true">
+                {mapObjectOwner.profileId
+                  ? <img src={`${import.meta.env.BASE_URL}${aiAvatarPaths[mapObjectOwner.profileId]}`} alt="" />
+                  : <b>{text.opponents.playerMark}</b>}
+              </span>
+              <span><small>{hoveredMapObjectName}</small><strong>{mapObjectOwnerName}</strong></span>
+            </div>
+          : navigationHintVisible && <div className="map-hint" aria-live="polite"><span className="mouse-symbol" />{text.interface.mapHint}</div>}
       </>}
 
       {phase === 'founding' && <FoundingPanel scenario={activeScenario} selectedRegionId={selectedRegionId} castleDraft={castleDraft} draftValid={draftValid} locale={locale} text={text.founding} regionLocked onSelectRegion={selectRegion} onConfirm={confirmFounding} />}

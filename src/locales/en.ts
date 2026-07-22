@@ -5,10 +5,10 @@ const en: LocaleDictionary = {
   mainMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     tagline: 'Raise a stronghold. Muster an army. Redraw the frontier.',
-    continue: 'Click to continue', continueHint: 'Your first click will awaken the music',
-    modeEyebrow: 'Four paths to power', modeTitle: 'Choose a game mode',
-    modeDescription: 'Each campaign offers a different view of rule, survival, and war. A free battle between rulers is available now.',
-    back: 'Back', available: 'Available', comingSoon: 'Coming soon', select: 'Select mode', inDevelopment: 'In development',
+    continue: 'Click to continue',
+    modeTitle: 'Choose a game mode',
+    modeDescription: 'Each campaign offers a different view of rule, survival, and war.',
+    back: 'Back', select: 'Select mode', inDevelopment: 'In development',
     modes: {
       story: { title: 'Story', description: 'Follow a frontier domain through a branching chronicle shaped by decisions at court and on the battlefield.' },
       economy: { title: 'Economy', description: 'Develop your castle, answer shifting demands, and endure raids, disease, and shortages.' },

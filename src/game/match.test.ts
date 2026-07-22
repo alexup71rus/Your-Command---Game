@@ -675,6 +675,7 @@ describe('match rules', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.lastEvent).toMatchObject({ kind: 'destroyed', position: { column: 5, row: 4 } })
+    expect(result.state.ordersRemaining).toBe(gameConfig.turn.maxOrders - gameConfig.turn.movementOrderCost)
     expect(result.state.scenario.cells[4][4].object).toMatchObject({ type: 'squad', ownerId: 'player' })
     expect(result.state.scenario.cells[4][5].object).toBeUndefined()
   })

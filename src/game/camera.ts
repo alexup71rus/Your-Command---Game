@@ -41,8 +41,8 @@ export function clampCamera(
   camera: Camera,
   viewport: Size,
   world: Size,
-  minimumZoom = effectiveMinimumZoom(viewport, world),
-  edgePadding = gameConfig.camera.edgePanPadding,
+  minimumZoom: number = effectiveMinimumZoom(viewport, world),
+  edgePadding: number = gameConfig.camera.edgePanPadding,
 ): Camera {
   const zoom = clamp(
     camera.zoom,
@@ -98,7 +98,8 @@ export function zoomAtPoint(
   nextZoom: number,
   viewport: Size,
   world: Size,
-  minimumZoom = effectiveMinimumZoom(viewport, world),
+  minimumZoom: number = effectiveMinimumZoom(viewport, world),
+  edgePadding: number = gameConfig.camera.edgePanPadding,
 ): Camera {
   const anchor = screenToWorld(screenPoint, camera, viewport)
   const zoom = clamp(nextZoom, minimumZoom, MAX_ZOOM)
@@ -112,5 +113,6 @@ export function zoomAtPoint(
     viewport,
     world,
     minimumZoom,
+    edgePadding,
   )
 }

@@ -32,6 +32,17 @@ describe('camera', () => {
     expect(bottomRight.y).toBe(viewport.height - gameConfig.camera.edgePanPadding)
   })
 
+  it('uses the decorative map edge instead of empty pan space when padding is disabled', () => {
+    const borderSize = gameConfig.camera.decorativeBorderCells * gameConfig.map.cellSize
+    const visualWorld = { width: world.width + borderSize * 2, height: world.height + borderSize * 2 }
+    const result = clampCamera({ x: -500, y: 10_000, zoom: 1 }, viewport, visualWorld, undefined, 0)
+    const topLeft = worldToScreen({ x: 0, y: 0 }, result, viewport)
+    const bottomRight = worldToScreen({ x: visualWorld.width, y: visualWorld.height }, result, viewport)
+
+    expect(topLeft.x).toBe(0)
+    expect(bottomRight.y).toBe(viewport.height)
+  })
+
   it('keeps the world point under the cursor while zooming', () => {
     const camera: Camera = { x: 3200, y: 3200, zoom: 1 }
     const cursor: Point = { x: 900, y: 240 }

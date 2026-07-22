@@ -9,13 +9,9 @@ export interface LocaleDictionary {
     title: string
     tagline: string
     continue: string
-    continueHint: string
-    modeEyebrow: string
     modeTitle: string
     modeDescription: string
     back: string
-    available: string
-    comingSoon: string
     select: string
     inDevelopment: string
     modes: Record<'story' | 'economy' | 'siege' | 'battle', { title: string; description: string }>

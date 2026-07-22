@@ -47,6 +47,7 @@ interface GridCanvasProps {
   cameraCommand?: CameraCommand | null
   combatEffect?: ({ key: number } & CellPosition) | null
   onCombatEffect?: (request: Pick<MapClickRequest, 'clientX' | 'clientY'>) => void
+  onObjectHover?: (request: MapObjectHoverRequest | null) => void
   onContextRequest: (request: MapContextRequest) => void
   onMapClick: (request: MapClickRequest) => void
   onNavigate: (skill: 'move' | 'zoom') => void
@@ -65,6 +66,11 @@ export interface MapContextRequest {
 }
 
 export type MapClickRequest = MapContextRequest
+
+export interface MapObjectHoverRequest extends MapClickRequest {
+  ownerId: string
+  object: { type: 'castle' } | { type: 'building'; kind: BuildingKind } | { type: 'squad' }
+}
 
 type HoveredCell = CellPosition
 
@@ -89,8 +95,9 @@ export function GridCanvas(props: GridCanvasProps) {
   const initialCameraCommandRef = useRef(cameraCommand)
   const mapRows = props.map.length
   const mapColumns = props.map[0]?.length ?? 0
+  const hasDecorativeBorder = props.mode !== undefined
 
-  useEffect(() => { propsRef.current = props })
+  useLayoutEffect(() => { propsRef.current = props })
   useEffect(() => requestDrawRef.current(), [props.map, props.showTerritories, props.showGrid, props.selectedRegionId, props.castleDraft, props.regions, props.territories, props.participants, props.foundingOpponents, props.selectedCell, props.movementSource, props.movementPath, props.movementOrdersRemaining, props.unitAnimation, props.visibility, props.viewerId, props.actionPreview, props.workforceByOwner])
   useEffect(() => {
     props.foundingOpponents?.forEach(({ profileId }) => {
@@ -121,11 +128,16 @@ export function GridCanvas(props: GridCanvasProps) {
 
     const rows = mapRows
     const columns = mapColumns
-    const world: Size = { width: columns * CELL_SIZE, height: rows * CELL_SIZE }
+    const decorativeBorderCells = hasDecorativeBorder ? gameConfig.camera.decorativeBorderCells : 0
+    const mapOffset = decorativeBorderCells * CELL_SIZE
+    const visualRows = rows + decorativeBorderCells * 2
+    const visualColumns = columns + decorativeBorderCells * 2
+    const world: Size = { width: visualColumns * CELL_SIZE, height: visualRows * CELL_SIZE }
+    const cameraEdgePadding = decorativeBorderCells > 0 ? 0 : gameConfig.camera.edgePanPadding
     const initialCameraCommand = initialCameraCommandRef.current
     let viewport: Size = { width: 1, height: 1 }
     let camera: Camera = initialCameraCommand?.kind === 'cell'
-      ? { x: (initialCameraCommand.column + 0.5) * CELL_SIZE, y: (initialCameraCommand.row + 0.5) * CELL_SIZE, zoom: initialCameraCommand.zoom ?? 1 }
+      ? { x: mapOffset + (initialCameraCommand.column + 0.5) * CELL_SIZE, y: mapOffset + (initialCameraCommand.row + 0.5) * CELL_SIZE, zoom: initialCameraCommand.zoom ?? 1 }
       : { x: world.width / 2, y: world.height / 2, zoom: initialCameraCommand?.kind === 'overview' ? gameConfig.camera.minZoom : 1 }
     let hoveredCell: HoveredCell | null = null
     let overviewActive = initialCameraCommand?.kind === 'overview'
@@ -135,6 +147,8 @@ export function GridCanvas(props: GridCanvasProps) {
     let pointerStart: Point | null = null
     let dragged = false
     let ctrlClickContextUntil = 0
+    let reportedObjectKey: string | null = null
+    let reportedObjectHandler: GridCanvasProps['onObjectHover']
     let animationFrame: number | null = null
     let lastUnitAnimationKey = 0
     let activeUnitAnimation: { key: number; from: CellPosition; to: CellPosition; startedAt: number } | null = null
@@ -149,23 +163,34 @@ export function GridCanvas(props: GridCanvasProps) {
       overviewActive = command.kind === 'overview'
       camera = command.kind === 'overview'
         ? cameraForOverview(viewport, world)
-        : clampCamera({ x: (command.column + 0.5) * CELL_SIZE, y: (command.row + 0.5) * CELL_SIZE, zoom: command.zoom ?? gameConfig.camera.foundingZoom }, viewport, world)
+        : clampCamera({ x: mapOffset + (command.column + 0.5) * CELL_SIZE, y: mapOffset + (command.row + 0.5) * CELL_SIZE, zoom: command.zoom ?? gameConfig.camera.foundingZoom }, viewport, world, undefined, cameraEdgePadding)
       sessionMinimumZoom = command.kind === 'overview' ? camera.zoom : undefined
       requestDraw()
     }
     cellClientPointRef.current = (position) => {
       if (position.column < 0 || position.column >= columns || position.row < 0 || position.row >= rows) return null
-      const point = worldToScreen({ x: (position.column + 0.5) * CELL_SIZE, y: (position.row + 0.5) * CELL_SIZE }, camera, viewport)
+      const point = worldToScreen({ x: mapOffset + (position.column + 0.5) * CELL_SIZE, y: mapOffset + (position.row + 0.5) * CELL_SIZE }, camera, viewport)
       const bounds = canvas.getBoundingClientRect()
       return { x: bounds.left + point.x, y: bounds.top + point.y }
     }
 
     const drawSquad = (x: number, y: number, size: number, units: TroopComposition, color: string, ghost = false) => {
+      if (!ghost && size < 18) {
+        const offset = (18 - size) / 2
+        x -= offset
+        y -= offset
+        size = 18
+      }
       context.save()
       context.globalAlpha = ghost ? 0.7 : 1
       context.fillStyle = ghost ? color : '#1a211b'
       context.strokeStyle = color
       context.lineWidth = Math.max(1.3, size * 0.055)
+      if (!ghost) {
+        context.shadowColor = 'rgba(0, 0, 0, .55)'
+        context.shadowBlur = Math.min(8, size * .16)
+        context.shadowOffsetY = Math.max(1, size * .04)
+      }
       context.beginPath()
       context.moveTo(x + size * 0.5, y + size * 0.14)
       context.lineTo(x + size * 0.78, y + size * 0.25)
@@ -173,12 +198,20 @@ export function GridCanvas(props: GridCanvasProps) {
       context.quadraticCurveTo(x + size * 0.5, y + size * 0.88, x + size * 0.28, y + size * 0.65)
       context.lineTo(x + size * 0.22, y + size * 0.25)
       context.closePath(); context.fill(); context.stroke()
+      context.shadowColor = 'transparent'
+      context.shadowBlur = 0
+      context.shadowOffsetY = 0
       const activeTroops = troopKinds.filter((kind) => (units[kind] ?? 0) > 0)
       const total = activeTroops.reduce((sum, kind) => sum + (units[kind] ?? 0), 0)
       context.textAlign = 'center'; context.textBaseline = 'middle'
-      if (size < 25 || activeTroops.length === 0) {
+      const detailMinimumSize = 34 + activeTroops.length * 10
+      if (size < detailMinimumSize || activeTroops.length === 0) {
+        const fontSize = Math.max(11, Math.min(18, size * .31))
+        context.lineWidth = Math.max(2.5, fontSize * .24)
+        context.strokeStyle = 'rgba(7, 10, 8, .92)'
+        context.font = `800 ${fontSize}px system-ui`
+        context.strokeText(String(total), x + size * 0.5, y + size * 0.48)
         context.fillStyle = ghost ? '#192019' : '#ead99f'
-        context.font = `700 ${Math.max(10, size * 0.27)}px system-ui`
         context.fillText(String(total), x + size * 0.5, y + size * 0.48)
         context.restore()
         return
@@ -222,16 +255,25 @@ export function GridCanvas(props: GridCanvasProps) {
         context.lineWidth = Math.max(1, size * .025)
         context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.fill(); context.stroke()
         drawGlyph(kind, centerX, centerY)
-        const badgeRadius = Math.max(2.4, radius * .52)
+        const badgeRadius = Math.max(6, Math.min(8, radius * .58))
         const badgeX = centerX + radius * .72
         const badgeY = centerY + radius * .68
+        context.fillStyle = ghost ? 'rgba(25, 32, 25, .7)' : '#111711'
+        context.beginPath(); context.arc(badgeX, badgeY, badgeRadius + 1.5, 0, Math.PI * 2); context.fill()
         context.fillStyle = ghost ? color : '#c5a950'
         context.beginPath(); context.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2); context.fill()
         context.fillStyle = '#172018'
-        context.font = `800 ${Math.max(5.5, badgeRadius * 1.35)}px system-ui`
+        context.font = `800 ${Math.max(10, Math.min(13, badgeRadius * 1.35))}px system-ui`
         context.fillText(String(units[kind] ?? 0), badgeX, badgeY + .2)
       })
       context.restore()
+    }
+
+    const reflectedMapIndex = (index: number, length: number) => {
+      if (length <= 1) return 0
+      if (index < 0) return Math.min(length - 1, -index - 1)
+      if (index >= length) return Math.max(0, length * 2 - index - 1)
+      return index
     }
 
     const draw = () => {
@@ -242,6 +284,7 @@ export function GridCanvas(props: GridCanvasProps) {
         lastUnitAnimationKey = current.unitAnimation.key
         activeUnitAnimation = reducedMotionQuery.matches ? null : { ...current.unitAnimation, startedAt: performance.now() }
       }
+      if (!current.unitAnimation) activeUnitAnimation = null
       if (activeUnitAnimation && reducedMotionQuery.matches) activeUnitAnimation = null
       const animationElapsed = activeUnitAnimation ? performance.now() - activeUnitAnimation.startedAt : gameConfig.camera.unitMoveAnimationMs
       const animationProgress = Math.min(1, animationElapsed / gameConfig.camera.unitMoveAnimationMs)
@@ -252,18 +295,25 @@ export function GridCanvas(props: GridCanvasProps) {
       context.fillStyle = BACKGROUND_COLOR
       context.fillRect(0, 0, viewport.width, viewport.height)
 
-      const mapOrigin = worldToScreen({ x: 0, y: 0 }, camera, viewport)
-      const mapWidth = world.width * camera.zoom
-      const mapHeight = world.height * camera.zoom
+      const visualOrigin = worldToScreen({ x: 0, y: 0 }, camera, viewport)
+      const mapOrigin = worldToScreen({ x: mapOffset, y: mapOffset }, camera, viewport)
+      const visualWidth = world.width * camera.zoom
+      const visualHeight = world.height * camera.zoom
+      const mapWidth = columns * CELL_SIZE * camera.zoom
+      const mapHeight = rows * CELL_SIZE * camera.zoom
       context.fillStyle = MAP_COLOR
-      context.fillRect(mapOrigin.x, mapOrigin.y, mapWidth, mapHeight)
+      context.fillRect(visualOrigin.x, visualOrigin.y, visualWidth, visualHeight)
 
       const topLeft = screenToWorld({ x: 0, y: 0 }, camera, viewport)
       const bottomRight = screenToWorld({ x: viewport.width, y: viewport.height }, camera, viewport)
-      const firstColumn = Math.max(0, Math.floor(topLeft.x / CELL_SIZE))
-      const lastColumn = Math.min(columns, Math.ceil(bottomRight.x / CELL_SIZE))
-      const firstRow = Math.max(0, Math.floor(topLeft.y / CELL_SIZE))
-      const lastRow = Math.min(rows, Math.ceil(bottomRight.y / CELL_SIZE))
+      const firstVisualColumn = Math.max(0, Math.floor(topLeft.x / CELL_SIZE))
+      const lastVisualColumn = Math.min(visualColumns, Math.ceil(bottomRight.x / CELL_SIZE))
+      const firstVisualRow = Math.max(0, Math.floor(topLeft.y / CELL_SIZE))
+      const lastVisualRow = Math.min(visualRows, Math.ceil(bottomRight.y / CELL_SIZE))
+      const firstColumn = Math.max(0, Math.floor((topLeft.x - mapOffset) / CELL_SIZE))
+      const lastColumn = Math.min(columns, Math.ceil((bottomRight.x - mapOffset) / CELL_SIZE))
+      const firstRow = Math.max(0, Math.floor((topLeft.y - mapOffset) / CELL_SIZE))
+      const lastRow = Math.min(rows, Math.ceil((bottomRight.y - mapOffset) / CELL_SIZE))
       const cellSize = CELL_SIZE * camera.zoom
 
       const workforceByOwner = current.workforceByOwner
@@ -276,15 +326,25 @@ export function GridCanvas(props: GridCanvasProps) {
         })
       }
 
-      for (let row = firstRow; row < lastRow; row += 1) {
-        for (let column = firstColumn; column < lastColumn; column += 1) {
-          const cell = map[row][column]
+      for (let visualRow = firstVisualRow; visualRow < lastVisualRow; visualRow += 1) {
+        for (let visualColumn = firstVisualColumn; visualColumn < lastVisualColumn; visualColumn += 1) {
+          const row = visualRow - decorativeBorderCells
+          const column = visualColumn - decorativeBorderCells
+          const cell = map[reflectedMapIndex(row, rows)]?.[reflectedMapIndex(column, columns)]
+          if (!cell) continue
           if (cell.elevation === undefined) continue
           if (cell.landform === 'peak') context.fillStyle = cell.vegetation ? '#778174' : '#77766a'
           else if (cell.vegetation) context.fillStyle = cell.landform === 'hill' ? '#344d36' : '#263f2c'
           else if (cell.landform === 'hill') context.fillStyle = '#4c5140'
           else context.fillStyle = (cell.elevation ?? 0) > 0.4 ? '#344634' : '#2b3d30'
-          context.fillRect(mapOrigin.x + column * cellSize, mapOrigin.y + row * cellSize, Math.ceil(cellSize), Math.ceil(cellSize))
+          const x = visualOrigin.x + visualColumn * cellSize
+          const y = visualOrigin.y + visualRow * cellSize
+          context.fillRect(x, y, Math.ceil(cellSize), Math.ceil(cellSize))
+          if (row < 0 || row >= rows || column < 0 || column >= columns) {
+            const edgeDistance = Math.max(-row, row - rows + 1, -column, column - columns + 1)
+            context.fillStyle = `rgba(6, 10, 7, ${0.035 + edgeDistance / Math.max(1, decorativeBorderCells) * 0.08})`
+            context.fillRect(x, y, Math.ceil(cellSize), Math.ceil(cellSize))
+          }
         }
       }
 
@@ -309,7 +369,7 @@ export function GridCanvas(props: GridCanvasProps) {
         }
         if (current.mode === 'founding' && !current.selectedRegionId) {
           current.regions.forEach((region) => {
-            const center = worldToScreen({ x: (region.center.column + 0.5) * CELL_SIZE, y: (region.center.row + 0.5) * CELL_SIZE }, camera, viewport)
+            const center = worldToScreen({ x: mapOffset + (region.center.column + 0.5) * CELL_SIZE, y: mapOffset + (region.center.row + 0.5) * CELL_SIZE }, camera, viewport)
             context.fillStyle = region.color
             context.beginPath(); context.arc(center.x, center.y, 14, 0, Math.PI * 2); context.fill()
             context.fillStyle = '#121712'; context.font = '700 11px system-ui'; context.textAlign = 'center'; context.textBaseline = 'middle'
@@ -319,7 +379,7 @@ export function GridCanvas(props: GridCanvasProps) {
         if (current.mode === 'founding' && current.selectedRegionId) {
           current.foundingOpponents?.forEach(({ profileId, region }) => {
             const image = opponentImagesRef.current.get(profileId)
-            const center = worldToScreen({ x: (region.center.column + 0.5) * CELL_SIZE, y: (region.center.row + 0.5) * CELL_SIZE }, camera, viewport)
+            const center = worldToScreen({ x: mapOffset + (region.center.column + 0.5) * CELL_SIZE, y: mapOffset + (region.center.row + 0.5) * CELL_SIZE }, camera, viewport)
             const radius = Math.max(18, Math.min(27, 18 * Math.sqrt(camera.zoom)))
             context.save()
             context.shadowColor = 'rgba(0, 0, 0, .62)'
@@ -340,15 +400,17 @@ export function GridCanvas(props: GridCanvasProps) {
 
       if (current.showGrid !== false) {
         context.lineWidth = 1
-        for (let column = firstColumn; column <= lastColumn; column += 1) {
-          const x = Math.round(mapOrigin.x + column * CELL_SIZE * camera.zoom) + 0.5
+        for (let visualColumn = firstVisualColumn; visualColumn <= lastVisualColumn; visualColumn += 1) {
+          const column = visualColumn - decorativeBorderCells
+          const x = Math.round(visualOrigin.x + visualColumn * CELL_SIZE * camera.zoom) + 0.5
           context.beginPath(); context.strokeStyle = column % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
-          context.moveTo(x, Math.max(0, mapOrigin.y)); context.lineTo(x, Math.min(viewport.height, mapOrigin.y + mapHeight)); context.stroke()
+          context.moveTo(x, Math.max(0, visualOrigin.y)); context.lineTo(x, Math.min(viewport.height, visualOrigin.y + visualHeight)); context.stroke()
         }
-        for (let row = firstRow; row <= lastRow; row += 1) {
-          const y = Math.round(mapOrigin.y + row * CELL_SIZE * camera.zoom) + 0.5
+        for (let visualRow = firstVisualRow; visualRow <= lastVisualRow; visualRow += 1) {
+          const row = visualRow - decorativeBorderCells
+          const y = Math.round(visualOrigin.y + visualRow * CELL_SIZE * camera.zoom) + 0.5
           context.beginPath(); context.strokeStyle = row % 10 === 0 ? MAJOR_GRID_COLOR : GRID_COLOR
-          context.moveTo(Math.max(0, mapOrigin.x), y); context.lineTo(Math.min(viewport.width, mapOrigin.x + mapWidth), y); context.stroke()
+          context.moveTo(Math.max(0, visualOrigin.x), y); context.lineTo(Math.min(viewport.width, visualOrigin.x + visualWidth), y); context.stroke()
         }
       }
 
@@ -445,14 +507,18 @@ export function GridCanvas(props: GridCanvasProps) {
             const centerX = x + cellSize * .75
             const centerY = y + cellSize * .25
             const radius = Math.max(7, cellSize * .15)
+            const countRadius = Math.max(7, Math.min(9, radius * .58))
+            const countX = centerX + radius * .72
+            const countY = centerY + radius * .7
             context.save()
             context.fillStyle = '#1b241d'; context.strokeStyle = color; context.lineWidth = Math.max(1, cellSize * .025)
             context.beginPath(); context.arc(centerX, centerY, radius, 0, Math.PI * 2); context.fill(); context.stroke()
             context.strokeStyle = '#ead99f'; context.lineWidth = Math.max(1, radius * .14); context.lineCap = 'round'
             context.beginPath(); context.arc(centerX - radius * .18, centerY, radius * .46, -Math.PI * .5, Math.PI * .5); context.stroke()
             context.beginPath(); context.moveTo(centerX - radius * .18, centerY - radius * .46); context.lineTo(centerX + radius * .08, centerY); context.lineTo(centerX - radius * .18, centerY + radius * .46); context.moveTo(centerX - radius * .35, centerY); context.lineTo(centerX + radius * .42, centerY); context.stroke()
-            context.fillStyle = '#c7aa51'; context.beginPath(); context.arc(centerX + radius * .68, centerY + radius * .65, radius * .48, 0, Math.PI * 2); context.fill()
-            context.fillStyle = '#172018'; context.font = `800 ${Math.max(7, radius * .7)}px system-ui`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(String(object.garrison.archers), centerX + radius * .68, centerY + radius * .67)
+            context.fillStyle = '#111711'; context.beginPath(); context.arc(countX, countY, countRadius + 1.5, 0, Math.PI * 2); context.fill()
+            context.fillStyle = '#c7aa51'; context.beginPath(); context.arc(countX, countY, countRadius, 0, Math.PI * 2); context.fill()
+            context.fillStyle = '#172018'; context.font = `800 ${Math.max(10, Math.min(13, countRadius * 1.35))}px system-ui`; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(String(object.garrison.archers), countX, countY + .2)
             context.restore()
           }
           if (object.type === 'squad' && squadHealth(object) < maxSquadHealth(object) && cellSize >= 18) {
@@ -679,8 +745,10 @@ export function GridCanvas(props: GridCanvasProps) {
         context.fillStyle = HOVER_COLOR; context.fillRect(x, y, hoverWidth, hoverHeight)
         context.strokeStyle = BORDER_COLOR; context.lineWidth = 1.5; context.strokeRect(x + 0.75, y + 0.75, hoverWidth - 1.5, hoverHeight - 1.5)
       }
-      context.strokeStyle = BORDER_COLOR; context.lineWidth = 1
-      context.strokeRect(Math.round(mapOrigin.x) + 0.5, Math.round(mapOrigin.y) + 0.5, Math.round(mapWidth), Math.round(mapHeight))
+      if (decorativeBorderCells === 0) {
+        context.strokeStyle = BORDER_COLOR; context.lineWidth = 1
+        context.strokeRect(Math.round(mapOrigin.x) + 0.5, Math.round(mapOrigin.y) + 0.5, Math.round(mapWidth), Math.round(mapHeight))
+      }
       if (activeUnitAnimation) requestDraw()
     }
 
@@ -690,17 +758,55 @@ export function GridCanvas(props: GridCanvasProps) {
     }
     const updateHoveredCell = (point: Point) => {
       const worldPoint = screenToWorld(point, camera, viewport)
-      const column = Math.floor(worldPoint.x / CELL_SIZE)
-      const row = Math.floor(worldPoint.y / CELL_SIZE)
+      const column = Math.floor((worldPoint.x - mapOffset) / CELL_SIZE)
+      const row = Math.floor((worldPoint.y - mapOffset) / CELL_SIZE)
       hoveredCell = column >= 0 && column < columns && row >= 0 && row < rows ? { column, row } : null
     }
     const requestForEvent = (event: PointerEvent | MouseEvent) => {
       const point = pointFromEvent(event)
       const worldPoint = screenToWorld(point, camera, viewport)
-      const column = Math.floor(worldPoint.x / CELL_SIZE)
-      const row = Math.floor(worldPoint.y / CELL_SIZE)
+      const column = Math.floor((worldPoint.x - mapOffset) / CELL_SIZE)
+      const row = Math.floor((worldPoint.y - mapOffset) / CELL_SIZE)
       if (column < 0 || column >= columns || row < 0 || row >= rows) return null
       return { clientX: event.clientX, clientY: event.clientY, column, row }
+    }
+    const reportHoveredObject = (event: PointerEvent | MouseEvent) => {
+      const current = propsRef.current
+      const request = requestForEvent(event)
+      const mapObject = request
+        ? current.viewerId
+          ? visibleObjectAt(current.map, current.visibility, current.viewerId, request)
+          : current.map[request.row]?.[request.column]?.object
+        : undefined
+      const object = mapObject?.type === 'castle'
+        ? { type: 'castle' as const }
+        : mapObject?.type === 'building'
+          ? { type: 'building' as const, kind: mapObject.kind }
+          : mapObject?.type === 'squad'
+            ? { type: 'squad' as const }
+            : null
+      const ownedByViewer = Boolean(current.viewerId && mapObject?.ownerId === current.viewerId)
+      const origin = mapObject?.type === 'building' ? mapObject.footprint : undefined
+      const objectKey = request && mapObject && object && !ownedByViewer
+        ? `${mapObject.ownerId}:${object.type}:${object.type === 'building' ? object.kind : ''}:${origin?.originColumn ?? request.column}:${origin?.originRow ?? request.row}`
+        : null
+      const hoverHandler = current.onObjectHover
+      if (!hoverHandler) {
+        reportedObjectKey = null
+        reportedObjectHandler = undefined
+        return
+      }
+      if (objectKey === reportedObjectKey && hoverHandler === reportedObjectHandler) return
+      reportedObjectKey = objectKey
+      reportedObjectHandler = hoverHandler
+      if (objectKey && request && mapObject && object) hoverHandler({ ...request, ownerId: mapObject.ownerId, object })
+      else hoverHandler(null)
+    }
+    const clearHoveredObject = () => {
+      if (reportedObjectKey === null) return
+      reportedObjectKey = null
+      reportedObjectHandler = undefined
+      propsRef.current.onObjectHover?.(null)
     }
     const requestContextMenu = (event: PointerEvent | MouseEvent) => {
       const request = requestForEvent(event)
@@ -725,14 +831,22 @@ export function GridCanvas(props: GridCanvasProps) {
       const point = pointFromEvent(event)
       if (event.pointerId === activePointerId && lastPointer) {
         if (!dragged && pointerStart && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) > gameConfig.camera.dragThreshold) {
-          dragged = true; overviewActive = false; propsRef.current.onNavigate('move')
+          dragged = true; overviewActive = false; clearHoveredObject(); propsRef.current.onNavigate('move')
         }
         if (dragged) {
-          camera = clampCamera({ x: camera.x - (point.x - lastPointer.x) / camera.zoom, y: camera.y - (point.y - lastPointer.y) / camera.zoom, zoom: camera.zoom }, viewport, world, sessionMinimumZoom)
+          camera = clampCamera({ x: camera.x - (point.x - lastPointer.x) / camera.zoom, y: camera.y - (point.y - lastPointer.y) / camera.zoom, zoom: camera.zoom }, viewport, world, sessionMinimumZoom, cameraEdgePadding)
         }
         lastPointer = point
       }
-      updateHoveredCell(point); requestDraw()
+      updateHoveredCell(point)
+      if (!dragged) reportHoveredObject(event)
+      requestDraw()
+    }
+    const onMouseMove = (event: MouseEvent) => {
+      if (activePointerId !== null) return
+      updateHoveredCell(pointFromEvent(event))
+      reportHoveredObject(event)
+      requestDraw()
     }
     const stopDragging = (event: PointerEvent) => {
       if (event.pointerId !== activePointerId) return
@@ -741,13 +855,13 @@ export function GridCanvas(props: GridCanvasProps) {
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
       if (request) propsRef.current.onMapClick(request)
     }
-    const onPointerLeave = () => { if (activePointerId === null) { hoveredCell = null; requestDraw() } }
+    const onPointerLeave = () => { if (activePointerId === null) { hoveredCell = null; clearHoveredObject(); requestDraw() } }
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       const point = pointFromEvent(event)
-      camera = zoomAtPoint(camera, point, camera.zoom * Math.exp(-event.deltaY * gameConfig.camera.wheelSensitivity), viewport, world, sessionMinimumZoom)
+      camera = zoomAtPoint(camera, point, camera.zoom * Math.exp(-event.deltaY * gameConfig.camera.wheelSensitivity), viewport, world, sessionMinimumZoom, cameraEdgePadding)
       overviewActive = false
-      propsRef.current.onNavigate('zoom'); updateHoveredCell(point); requestDraw()
+      clearHoveredObject(); propsRef.current.onNavigate('zoom'); updateHoveredCell(point); requestDraw()
     }
     const onContextMenu = (event: MouseEvent) => {
       event.preventDefault()
@@ -762,22 +876,24 @@ export function GridCanvas(props: GridCanvasProps) {
       if (overviewActive) {
         camera = cameraForOverview(viewport, world)
         sessionMinimumZoom = camera.zoom
-      } else camera = clampCamera(camera, viewport, world, sessionMinimumZoom)
+      } else camera = clampCamera(camera, viewport, world, sessionMinimumZoom, cameraEdgePadding)
       requestDraw()
     })
 
     canvas.addEventListener('pointerdown', onPointerDown); canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('mousemove', onMouseMove)
     canvas.addEventListener('pointerup', stopDragging); canvas.addEventListener('pointercancel', stopDragging); canvas.addEventListener('lostpointercapture', stopDragging)
     canvas.addEventListener('pointerleave', onPointerLeave); canvas.addEventListener('wheel', onWheel, { passive: false }); canvas.addEventListener('contextmenu', onContextMenu)
     resizeObserver.observe(canvas)
     return () => {
-      resizeObserver.disconnect(); requestDrawRef.current = () => undefined; focusRef.current = () => undefined; cellClientPointRef.current = () => null
+      resizeObserver.disconnect(); clearHoveredObject(); requestDrawRef.current = () => undefined; focusRef.current = () => undefined; cellClientPointRef.current = () => null
       canvas.removeEventListener('pointerdown', onPointerDown); canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('mousemove', onMouseMove)
       canvas.removeEventListener('pointerup', stopDragging); canvas.removeEventListener('pointercancel', stopDragging); canvas.removeEventListener('lostpointercapture', stopDragging)
       canvas.removeEventListener('pointerleave', onPointerLeave); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('contextmenu', onContextMenu)
       if (animationFrame !== null) cancelAnimationFrame(animationFrame)
     }
-  }, [mapColumns, mapRows])
+  }, [hasDecorativeBorder, mapColumns, mapRows])
 
   return <canvas ref={canvasRef} className={`grid-canvas${props.territoryInspecting ? ' territory-inspecting' : ''}`} aria-label={props.ariaLabel} />
 }
