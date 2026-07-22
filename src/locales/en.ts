@@ -7,7 +7,6 @@ const en: LocaleDictionary = {
     tagline: 'Raise a stronghold. Muster an army. Redraw the frontier.',
     continue: 'Click to continue',
     modeTitle: 'Choose a game mode',
-    modeDescription: 'Each campaign offers a different view of rule, survival, and war.',
     back: 'Back', select: 'Select mode', inDevelopment: 'In development',
     modes: {
       story: { title: 'Story', description: 'Follow a frontier domain through a branching chronicle shaped by decisions at court and on the battlefield.' },
@@ -19,7 +18,7 @@ const en: LocaleDictionary = {
   startMenu: {
     eyebrow: 'Turn-based strategy', title: 'Your Command',
     description: 'Choose the future battlefield, gather the round table, and decide whether to command a domain or watch the rulers fight.',
-    battleTitle: 'Battle setup', regionHint: 'Move a participant to this domain', arrangementKicker: 'Deployment', arrangementTitle: 'Round table', arrangementHint: 'Click for actions · drag for quick deployment', selectedCount: 'At the table', dragInvite: 'Add to the table', dragAlliance: 'Create alliance', dragSwap: 'Swap domains', dragSeparate: 'Leave alliance', allianceFor: 'Alliance for', allyWith: 'Join with', alreadyAllied: 'Already allied', clearSelection: 'Clear selection',
+    battleTitle: 'Battle setup', regionHint: 'Move a participant to this domain', arrangementTitle: 'Round table', selectedCount: 'At the table', dragInvite: 'Add to the table', dragAlliance: 'Create alliance', dragSwap: 'Swap domains', dragSeparate: 'Leave alliance', allianceFor: 'Alliance for', allyWith: 'Join with', alreadyAllied: 'Already allied', clearSelection: 'Clear selection',
     chooseMap: 'Battle maps', builtInMaps: 'Built-in scenarios', myMaps: 'My maps', participants: 'Roster', participantDescription: 'Seats in the coming battle',
     humanAndNpc: 'You have a seat in the battle', botsOnly: 'Automated battle between rulers', customMap: 'Custom world', customMapDescription: 'Configure terrain, forests and starting domains.',
     openGenerator: 'Open generator', seedShort: 'seed', deleteSavedMap: 'Delete map', start: 'Enter battle', watch: 'Watch', starting: 'Calculating domains…', mapError: 'The domains could not be balanced. Choose another map or participant count.', mapUnviable: 'The domains do not leave enough room for the first buildings. Change the map or participant count.', workerError: 'The domains could not be calculated.', retry: 'Retry', mapSaveFailed: 'The map could not be saved in this browser.', mapDeleteFailed: 'The saved map could not be deleted.', mapReadFailed: 'Saved maps could not be read from browser storage.', loadGame: 'Load game', backToModes: 'Game modes',
@@ -84,7 +83,7 @@ const en: LocaleDictionary = {
     mapHint: 'Drag the map · wheel — zoom · Shift — domains · RMB / Ctrl + click — menu', settingsHint: 'Settings',
   },
   sound: {
-    title: 'Sound', description: 'The master switch controls music and interface effects', effectsVolume: 'Effects', musicTitle: 'Music', musicDescription: 'The calm theme gives way to battle music when an enemy nears the domain', musicVolume: 'Music volume', enable: 'Enable sound', disable: 'Disable sound', enabled: 'On', disabled: 'Off',
+    title: 'Sound', description: 'Master switch for music and effects', effectsTitle: 'Effects', effectsVolume: 'Effects volume', musicTitle: 'Music', musicVolume: 'Music volume', enable: 'Enable sound', disable: 'Disable sound', enabled: 'On', disabled: 'Off',
   },
   contextMenu: {
     title: 'Cell actions', cell: 'Cell', goHere: 'Move here', splitSquad: 'Split squad', mergeSquads: 'Merge squads', dismissSquad: 'Disband squad', removeObject: 'Demolish building', refund: 'Refund', refundNone: 'No resources will be refunded',
@@ -94,7 +93,7 @@ const en: LocaleDictionary = {
     leaveTitle: 'Return to the main menu?', leaveDescription: 'Changes made after the latest save will be lost.', leaveAction: 'Leave',
   },
   settings: {
-    title: 'Settings', close: 'Close settings', language: 'Language', languageDescription: 'Each interface language is loaded separately', grid: 'Map grid', gridDescription: 'Show cell borders and a stronger line every ten rows', gridEnabled: 'Show', gridDisabled: 'Hide', autoCamera: 'Automatic camera', autoCameraDescription: 'Move the camera to visible AI actions and battles', autoCameraEnabled: 'Follow', autoCameraDisabled: 'Do not follow', mainMenu: 'Main menu', mainMenuDescription: 'Return to map selection', saveGame: 'Save and load', saveGameDescription: 'Create new slots and return to saved games', manageGames: 'Open games',
+    title: 'Settings', close: 'Close settings', gameplayTitle: 'Game and interface', sessionTitle: 'Current game', language: 'Language', languageDescription: 'Language for menus and game hints', grid: 'Map grid', gridDescription: 'Cell borders and a stronger line every ten rows', gridEnabled: 'Show', gridDisabled: 'Hide', autoCamera: 'Automatic camera', autoCameraDescription: 'Follow notable opponent actions', autoCameraEnabled: 'Follow', autoCameraDisabled: 'Do not follow', mainMenu: 'Main menu', mainMenuDescription: 'Return to map selection', saveGame: 'Save and load', saveGameDescription: 'Create new slots and return to saved games',
   },
   savedGames: {
     kicker: 'GAMES', title: 'Save and load', close: 'Close saved games', empty: 'There are no saved games yet.', saveCurrent: 'Current game', saveCurrentDescription: 'Create a separate slot on the current turn.', saveUnavailable: 'Saving will be available after the opponent turn.', save: 'Save', loadSection: 'Load game', loadSectionDescription: 'The most recent saves are shown first.', slots: 'Slots', latest: 'Latest', load: 'Load', remove: 'Delete', turn: 'Turn', updated: 'Saved', saved: 'Game saved', saveFailed: 'Could not save the game', loadFailed: 'This save is corrupted, unavailable, or belongs to an incompatible game version', readFailed: 'Could not read the saved game list', deleteFailed: 'Could not delete the saved game', loadTitle: 'Load this game?', loadDescription: 'Unsaved progress in the current game will be lost.', loadConfirm: 'Load', deleteTitle: 'Delete this save?', deleteDescription: 'This progress cannot be recovered.',

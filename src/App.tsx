@@ -150,6 +150,7 @@ export function App() {
   const [aiSlow, setAiSlow] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [hoveredMapObject, setHoveredMapObject] = useState<MapObjectHoverRequest | null>(null)
+  const lastMenuHoverSoundAt = useRef(0)
   const [bursts, setBursts] = useState<ClickBurst[]>([])
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [savedGamesReturnToSettings, setSavedGamesReturnToSettings] = useState(false)
@@ -251,9 +252,9 @@ export function App() {
     })
     return map
   }, [match, matchParticipants, phase])
-  const musicScene: MusicScene = phase !== 'playing' || overlay !== null
+  const musicScene: MusicScene = phase === 'menu'
     ? 'menu'
-    : visibleEnemyNearby || recentCombat
+    : phase === 'playing' && (visibleEnemyNearby || recentCombat)
       ? 'battle'
       : 'settlement'
   const { volume: musicVolume, setVolume: setMusicVolume } = useMusic(musicScene, soundEnabled)
@@ -890,6 +891,19 @@ export function App() {
     playSound(effect)
   }
 
+  const handleMenuPointerOver = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement
+    const interactive = target.closest<HTMLElement>('.welcome-entry, .mode-option, .menu-back-button, .map-choice-main, .create-map-choice, .load-game-button, .start-match-button:not(:disabled), .generator-footer .primary:not(:disabled)')
+    if (!interactive) return
+    const relatedTarget = event.relatedTarget
+    if (relatedTarget instanceof Node && interactive.contains(relatedTarget)) return
+    const now = performance.now()
+    if (now - lastMenuHoverSoundAt.current < gameConfig.audio.hoverSoundThrottleMs) return
+    lastMenuHoverSoundAt.current = now
+    const primary = interactive.matches('.welcome-entry, .mode-option.available, .start-match-button:not(:disabled), .generator-footer .primary:not(:disabled)')
+    playSound(primary ? 'primary-hover' : 'hover')
+  }, [playSound])
+
   useEffect(() => {
     if (!autoMoveTarget) return
     const timeout = window.setTimeout(() => {
@@ -1121,17 +1135,17 @@ export function App() {
   const utilityControls = <UtilityControls settingsLabel={text.settings.title} settingsHint={text.interface.settingsHint} soundEnabled={soundEnabled} soundEnableLabel={text.sound.enable} soundDisableLabel={text.sound.disable} onOpenSettings={() => { setTerritoriesHeld(false); cancelAutoMove(); setOverlay('settings') }} onToggleSound={toggleSound} />
   if (phase === 'menu') {
     return (
-      <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown}>
+      <div className="start-shell" onPointerDownCapture={handleInterfacePointerDown} onPointerOverCapture={handleMenuPointerOver}>
         {menuPage === 'welcome'
-          ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
+          ? <MainMenu screen="welcome" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => undefined} onSelectBattle={() => setMenuPage('battle-setup')} />
           : menuPage === 'modes'
-            ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} onModeHover={() => playSound('hover')} />
-            : <StartMenu text={text.startMenu} opponentsText={text.opponents} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} participantTeamIds={participantTeamIds} hasHumanPlayer={hasHumanPlayer} humanRegionIndex={normalizedHumanRegionIndex} participantMaximum={selectedMapParticipantLimit} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onRosterChange={changeBattleRoster} onArrangementChange={changeBattleArrangement} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} onPrimaryHover={() => playSound('primary-hover')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
+            ? <MainMenu screen="modes" text={text.mainMenu} utilityControls={utilityControls} onContinue={() => setMenuPage('modes')} onBack={() => setMenuPage('welcome')} onSelectBattle={() => setMenuPage('battle-setup')} />
+            : <StartMenu text={text.startMenu} opponentsText={text.opponents} confirmationText={text.confirmation} selectedMap={selectedMap} savedMaps={savedMaps} participantCount={participantCount} opponentProfileIds={opponentProfileIds} participantTeamIds={participantTeamIds} hasHumanPlayer={hasHumanPlayer} humanRegionIndex={normalizedHumanRegionIndex} participantMaximum={selectedMapParticipantLimit} utilityControls={utilityControls} onMapChange={selectMap} onDeleteSavedMap={deleteSavedMap} onRosterChange={changeBattleRoster} onArrangementChange={changeBattleArrangement} onOpenGenerator={openGenerator} onStart={beginMatchSetup} hasSavedGames={savedGames.length > 0 || savedGamesReadFailed} onOpenSavedGames={() => openSavedGames(false)} onBack={() => setMenuPage('modes')} storageFeedback={savedMapsFeedback ?? (!initialSavedMaps.ok ? text.startMenu.mapReadFailed : null)} />}
         <ClickEffects bursts={bursts} />
         {overlay === 'generator' && (
           <MapGeneratorModal text={text.generator} locale={locale} participantCount={participantCount} participantMaximum={setupParticipantMaximum} savedMapCount={savedMaps.length} onParticipantChange={changeParticipantCount} onClose={closeGenerator} onSave={saveGeneratedMap} onApply={applyGeneratedScenario} />
         )}
-        {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} />}
+        {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onEffectsPreview={() => playSound('tab')} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} />}
         {overlay === 'saved-games' && <SavedGamesModal locale={locale} text={text} saves={savedGames} showSaveAction={false} canSave={false} busy={savedGamesBusy} feedback={savedGamesFeedback} onClose={closeSavedGames} onSave={saveCurrentGame} onLoad={requestLoadGame} onDelete={removeSavedGame} />}
         {pendingLoadId && <ConfirmDialog title={text.savedGames.loadTitle} description={text.savedGames.loadDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.loadConfirm} onCancel={() => setPendingLoadId(null)} onConfirm={() => { const id = pendingLoadId; setPendingLoadId(null); void loadGame(id) }} />}
       </div>
@@ -1222,7 +1236,7 @@ export function App() {
       : text.game.castle
 
   return (
-    <main className={`game-shell phase-${phase}${spectatorMatch ? ' spectator-match' : ''}`} onPointerDownCapture={handleInterfacePointerDown}>
+    <main className={`game-shell phase-${phase}${spectatorMatch ? ' spectator-match' : ''}`} onPointerDownCapture={handleInterfacePointerDown} onPointerOverCapture={handleMenuPointerOver}>
       <GridCanvas map={activeScenario.cells} territories={activeScenario.territories} regions={activeScenario.regions} participants={activeScenario.participants} workforceByOwner={workforceByOwner} foundingOpponents={foundingOpponents} showTerritories={phase === 'founding' || territoriesHeld} showGrid={showGrid} territoryInspecting={territoriesHeld} mode={phase} selectedRegionId={selectedRegionId} castleDraft={castleDraft} selectedCell={phase === 'playing' ? interfaceSelectedCell : null} movementSource={movementSource} movementPath={autoMovePath} movementOrdersRemaining={match?.ordersRemaining} unitAnimation={unitAnimation} visibility={phase === 'playing' ? visibility : null} viewerId={phase === 'playing' && !spectatorMatch ? match?.playerId : undefined} actionPreview={actionPreview} isActionCellValid={actionCellValid} cameraCommand={cameraCommand} combatEffect={combatEffect} ariaLabel={text.interface.mapAria} onCombatEffect={renderCombatEffect} onObjectHover={phase === 'playing' ? showObjectOwner : undefined} onContextRequest={openContextMenu} onMapClick={handleMapClick} onNavigate={markLearned} />
       <ClickEffects bursts={bursts} />
 
@@ -1259,7 +1273,7 @@ export function App() {
 
       {match && match.status !== 'playing' && !outcomeDismissed && <GameOutcomeModal text={text.game} outcome={match.status} spectatorWinner={spectatorWinner} onContinue={() => setOutcomeDismissed(true)} />}
 
-      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} onReturnToMenu={returnToMainMenu} onOpenSavedGames={() => openSavedGames(true)} />}
+      {overlay === 'settings' && <SettingsModal locale={locale} text={text} soundEnabled={soundEnabled} volume={volume} musicVolume={musicVolume} showGrid={showGrid} autoCamera={autoCameraEnabled} onClose={() => setOverlay(null)} onLocaleChange={setLocale} onSoundToggle={toggleSound} onVolumeChange={setVolume} onEffectsPreview={() => playSound('tab')} onMusicVolumeChange={setMusicVolume} onShowGridChange={setShowGrid} onAutoCameraChange={setAutoCameraEnabled} onReturnToMenu={returnToMainMenu} onOpenSavedGames={() => openSavedGames(true)} />}
       {overlay === 'saved-games' && <SavedGamesModal locale={locale} text={text} saves={savedGames} showSaveAction={!spectatorMatch} canSave={!opponentTurn} busy={savedGamesBusy} feedback={savedGamesFeedback} onClose={closeSavedGames} onSave={saveCurrentGame} onLoad={requestLoadGame} onDelete={removeSavedGame} />}
       {pendingLoadId && <ConfirmDialog title={text.savedGames.loadTitle} description={text.savedGames.loadDescription} cancelLabel={text.confirmation.cancel} confirmLabel={text.savedGames.loadConfirm} onCancel={() => setPendingLoadId(null)} onConfirm={() => { const id = pendingLoadId; setPendingLoadId(null); void loadGame(id) }} />}
     </main>

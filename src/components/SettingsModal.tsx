@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { supportedLocales, type Locale, type LocaleDictionary } from '../config/localization'
 import { SoundIcon } from './InterfaceIcons'
 import { ConfirmDialog } from './ui/ConfirmDialog'
@@ -17,6 +17,7 @@ interface SettingsModalProps {
   onLocaleChange: (locale: Locale) => void
   onSoundToggle: () => void
   onVolumeChange: (volume: number) => void
+  onEffectsPreview: () => void
   onMusicVolumeChange: (volume: number) => void
   onShowGridChange: (visible: boolean) => void
   onAutoCameraChange: (enabled: boolean) => void
@@ -28,6 +29,8 @@ const localeNames: Record<Locale, string> = {
   ru: 'Русский',
   en: 'English',
 }
+
+const rangeStyle = (value: number) => ({ '--settings-fill': `${value}%` }) as CSSProperties
 
 export function SettingsModal({
   locale,
@@ -41,6 +44,7 @@ export function SettingsModal({
   onLocaleChange,
   onSoundToggle,
   onVolumeChange,
+  onEffectsPreview,
   onMusicVolumeChange,
   onShowGridChange,
   onAutoCameraChange,
@@ -54,7 +58,7 @@ export function SettingsModal({
       <section
         ref={modalRef}
         tabIndex={-1}
-        className="settings-modal"
+        className={`settings-modal${onReturnToMenu ? ' in-game' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
@@ -66,120 +70,116 @@ export function SettingsModal({
         </header>
 
         <div className="settings-content">
-          <section className="settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.settings.language}</h3>
-              <p>{text.settings.languageDescription}</p>
-            </div>
-            <div className="language-options" role="group" aria-label={text.settings.language}>
-              {supportedLocales.map((availableLocale) => (
+          <div className="settings-columns">
+            <section className="settings-section settings-audio-section" aria-labelledby="settings-audio-title">
+              <header className="settings-section-header">
+                <div>
+                  <h3 id="settings-audio-title">{text.sound.title}</h3>
+                  <p>{text.sound.description}</p>
+                </div>
                 <button
                   type="button"
-                  key={availableLocale}
-                  className={locale === availableLocale ? 'active' : ''}
-                  aria-pressed={locale === availableLocale}
-                  onClick={() => onLocaleChange(availableLocale)}
+                  className={`settings-sound-toggle${soundEnabled ? ' active' : ''}`}
+                  onClick={onSoundToggle}
+                  aria-label={soundEnabled ? text.sound.disable : text.sound.enable}
+                  aria-pressed={soundEnabled}
                 >
-                  {localeNames[availableLocale]}
+                  <SoundIcon muted={!soundEnabled} />
+                  {soundEnabled ? text.sound.enabled : text.sound.disabled}
                 </button>
-              ))}
-            </div>
-          </section>
+              </header>
 
-          <section className="settings-card sound-settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.sound.title}</h3>
-              <p>{text.sound.description}</p>
-            </div>
-            <div className="volume-control">
-              <button
-                type="button"
-                className="settings-sound-toggle"
-                onClick={onSoundToggle}
-                aria-label={soundEnabled ? text.sound.disable : text.sound.enable}
-                aria-pressed={soundEnabled}
-              >
-                <SoundIcon muted={!soundEnabled} />
-                {soundEnabled ? text.sound.enabled : text.sound.disabled}
-              </button>
-              <label>
-                <span>{text.sound.effectsVolume} · {volume}%</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={volume}
-                  aria-label={text.sound.effectsVolume}
-                  onChange={(event) => onVolumeChange(Number(event.target.value))}
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="settings-card music-settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.sound.musicTitle}</h3>
-              <p>{text.sound.musicDescription}</p>
-            </div>
-            <div className="volume-control music-volume-control">
-              <label>
-                <span>{musicVolume}%</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={musicVolume}
-                  aria-label={text.sound.musicVolume}
-                  onChange={(event) => onMusicVolumeChange(Number(event.target.value))}
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="settings-card grid-settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.settings.grid}</h3>
-              <p>{text.settings.gridDescription}</p>
-            </div>
-            <button
-              type="button"
-              className={`settings-grid-toggle${showGrid ? ' active' : ''}`}
-              aria-pressed={showGrid}
-              onClick={() => onShowGridChange(!showGrid)}
-            >
-              <span className="grid-toggle-icon" aria-hidden="true" />
-              {showGrid ? text.settings.gridEnabled : text.settings.gridDisabled}
-            </button>
-          </section>
-
-          <section className="settings-card camera-settings-card">
-            <div className="settings-card-copy">
-              <h3>{text.settings.autoCamera}</h3>
-              <p>{text.settings.autoCameraDescription}</p>
-            </div>
-            <button
-              type="button"
-              className={`settings-camera-toggle${autoCamera ? ' active' : ''}`}
-              aria-pressed={autoCamera}
-              onClick={() => onAutoCameraChange(!autoCamera)}
-            >
-              <span className="camera-toggle-icon" aria-hidden="true" />
-              {autoCamera ? text.settings.autoCameraEnabled : text.settings.autoCameraDisabled}
-            </button>
-          </section>
-
-          {onReturnToMenu && onOpenSavedGames && (
-            <section className="settings-card settings-save-card">
-              <div className="settings-card-copy"><h3>{text.settings.saveGame}</h3><p>{text.settings.saveGameDescription}</p></div>
-              <button type="button" className="settings-save-button" onClick={onOpenSavedGames}>{text.settings.manageGames}</button>
+              <div className="settings-mixer">
+                <label className="settings-volume-row">
+                  <span>{text.sound.effectsTitle}</span>
+                  <output>{volume}%</output>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={volume}
+                    style={rangeStyle(volume)}
+                    aria-label={text.sound.effectsVolume}
+                    onChange={(event) => onVolumeChange(Number(event.target.value))}
+                    onPointerUp={onEffectsPreview}
+                    onKeyUp={onEffectsPreview}
+                  />
+                </label>
+                <label className="settings-volume-row">
+                  <span>{text.sound.musicTitle}</span>
+                  <output>{musicVolume}%</output>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={musicVolume}
+                    style={rangeStyle(musicVolume)}
+                    aria-label={text.sound.musicVolume}
+                    onChange={(event) => onMusicVolumeChange(Number(event.target.value))}
+                  />
+                </label>
+              </div>
             </section>
-          )}
+
+            <section className="settings-section settings-gameplay-section" aria-labelledby="settings-gameplay-title">
+              <header className="settings-section-header">
+                <div><h3 id="settings-gameplay-title">{text.settings.gameplayTitle}</h3></div>
+              </header>
+              <div className="settings-control-list">
+                <div className="settings-control-row">
+                  <div className="settings-control-copy"><strong>{text.settings.language}</strong><small>{text.settings.languageDescription}</small></div>
+                  <div className="language-options" role="group" aria-label={text.settings.language}>
+                    {supportedLocales.map((availableLocale) => (
+                      <button
+                        type="button"
+                        key={availableLocale}
+                        className={locale === availableLocale ? 'active' : ''}
+                        aria-pressed={locale === availableLocale}
+                        onClick={() => onLocaleChange(availableLocale)}
+                      >
+                        {localeNames[availableLocale]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="settings-control-row">
+                  <div className="settings-control-copy"><strong>{text.settings.grid}</strong><small>{text.settings.gridDescription}</small></div>
+                  <button
+                    type="button"
+                    className={`settings-grid-toggle${showGrid ? ' active' : ''}`}
+                    aria-pressed={showGrid}
+                    onClick={() => onShowGridChange(!showGrid)}
+                  >
+                    <span className="grid-toggle-icon" aria-hidden="true" />
+                    {showGrid ? text.settings.gridEnabled : text.settings.gridDisabled}
+                  </button>
+                </div>
+
+                <div className="settings-control-row">
+                  <div className="settings-control-copy"><strong>{text.settings.autoCamera}</strong><small>{text.settings.autoCameraDescription}</small></div>
+                  <button
+                    type="button"
+                    className={`settings-camera-toggle${autoCamera ? ' active' : ''}`}
+                    aria-pressed={autoCamera}
+                    onClick={() => onAutoCameraChange(!autoCamera)}
+                  >
+                    <span className="camera-toggle-icon" aria-hidden="true" />
+                    {autoCamera ? text.settings.autoCameraEnabled : text.settings.autoCameraDisabled}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
 
           {onReturnToMenu && (
-            <section className="settings-card settings-main-menu-card">
-              <div className="settings-card-copy"><h3>{text.settings.mainMenu}</h3><p>{text.settings.mainMenuDescription}</p></div>
-              <button type="button" className="settings-main-menu-button danger" onClick={() => setConfirmingExit(true)}>{text.settings.mainMenu}</button>
-            </section>
+            <footer className="settings-session-bar">
+              <strong>{text.settings.sessionTitle}</strong>
+              <div>
+                {onOpenSavedGames && <button type="button" className="settings-save-button" title={text.settings.saveGameDescription} onClick={onOpenSavedGames}>{text.settings.saveGame}</button>}
+                <button type="button" className="settings-main-menu-button danger" title={text.settings.mainMenuDescription} onClick={() => setConfirmingExit(true)}>{text.settings.mainMenu}</button>
+              </div>
+            </footer>
           )}
         </div>
       </section>

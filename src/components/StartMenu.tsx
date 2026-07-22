@@ -175,7 +175,6 @@ interface StartMenuProps {
   hasSavedGames: boolean
   onOpenSavedGames: () => void
   onBack: () => void
-  onPrimaryHover: () => void
   storageFeedback?: string | null
   utilityControls: ReactNode
 }
@@ -211,7 +210,7 @@ function ParticipantToken({ seat, regionColor, allies, selected, dragging, allia
   </div>
 }
 
-export function StartMenu({ text, opponentsText, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, participantTeamIds, hasHumanPlayer, humanRegionIndex, participantMaximum, onMapChange, onDeleteSavedMap, onRosterChange, onArrangementChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, onBack, onPrimaryHover, storageFeedback, utilityControls }: StartMenuProps) {
+export function StartMenu({ text, opponentsText, confirmationText, selectedMap, savedMaps, participantCount, opponentProfileIds, participantTeamIds, hasHumanPlayer, humanRegionIndex, participantMaximum, onMapChange, onDeleteSavedMap, onRosterChange, onArrangementChange, onOpenGenerator, onStart, hasSavedGames, onOpenSavedGames, onBack, storageFeedback, utilityControls }: StartMenuProps) {
   const [prepared, setPrepared] = useState<{ key: string; result: ScenarioResult } | null>(null)
   const [workerErrorKey, setWorkerErrorKey] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
@@ -401,6 +400,10 @@ export function StartMenu({ text, opponentsText, confirmationText, selectedMap, 
     return [{ key: `${seat.regionIndex}-${other.regionIndex}`, first, second, color: REGION_COLORS[(seat.teamId - 1) % REGION_COLORS.length] }]
   }))
   const selectedSeat = selectedSeatRegion === null ? null : battleSeats.find((seat) => seat.regionIndex === selectedSeatRegion) ?? null
+  const headerSeat = selectedSeat ?? battleSeats.find((seat) => seat.kind === 'player') ?? orderedBattleSeats[0]
+  const headerRegionColor = headerSeat ? preparedScenario?.regions[headerSeat.regionIndex]?.color ?? REGION_COLORS[headerSeat.regionIndex] : REGION_COLORS[0]
+  const headerTeamColor = headerSeat ? REGION_COLORS[(headerSeat.teamId - 1) % REGION_COLORS.length] : REGION_COLORS[0]
+  const headerSeatStyle = { '--region-color': headerRegionColor, '--team-color': headerTeamColor } as CSSProperties
 
   return (
     <main className="start-screen battle-setup-screen">
@@ -411,15 +414,20 @@ export function StartMenu({ text, opponentsText, confirmationText, selectedMap, 
           <button type="button" className="menu-back-button" onClick={onBack}><span aria-hidden="true">←</span>{text.backToModes}</button>
           <div className="battle-setup-actions">
             {hasSavedGames && <button type="button" className="load-game-button" onClick={onOpenSavedGames}>{text.loadGame}</button>}
-            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onPointerEnter={onPrimaryHover} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : hasHumanPlayer ? text.start : text.watch}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
+            <button type="button" className="start-match-button" disabled={!preparedResult?.ok} onClick={() => { if (preparedResult?.ok) onStart(preparedResult.scenario) }}>{isPreparing ? text.starting : hasHumanPlayer ? text.start : text.watch}<span aria-hidden="true">{isPreparing ? '…' : '→'}</span></button>
           </div>
         </header>
 
         <div className="battle-setup-layout">
           <section className={`battle-war-table${draggingCandidate !== null ? ' is-candidate-dragging' : ''}`} aria-labelledby="battle-table-title">
             <header className="battle-war-table-header">
-              <div><span>{text.arrangementKicker}</span><h2 id="battle-table-title">{text.arrangementTitle}</h2></div>
-              <p><i aria-hidden="true" />{text.arrangementHint}</p>
+              <h2 id="battle-table-title">{text.arrangementTitle}</h2>
+              {headerSeat && <div className="battle-table-summary" style={headerSeatStyle} aria-label={`${headerSeat.name}: ${opponentsText.region} ${headerSeat.regionIndex + 1}, ${opponentsText.alliance} ${headerSeat.teamId}`}>
+                <span className="battle-table-summary-avatar" aria-hidden="true">{headerSeat.profileId ? <img src={`${import.meta.env.BASE_URL}${aiAvatarPaths[headerSeat.profileId]}`} alt="" /> : <b>{opponentsText.playerMark}</b>}</span>
+                <strong>{headerSeat.name}</strong>
+                <span className="battle-table-summary-region"><i aria-hidden="true" />{opponentsText.region} {headerSeat.regionIndex + 1}</span>
+                <span className="battle-table-summary-alliance"><i aria-hidden="true">{headerSeat.teamId}</i>{opponentsText.alliance}</span>
+              </div>}
             </header>
             <div className="battle-table-body">
             <section className="battle-roster-rail" aria-label={opponentsText.choose}>

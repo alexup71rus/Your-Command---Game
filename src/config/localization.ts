@@ -10,7 +10,6 @@ export interface LocaleDictionary {
     tagline: string
     continue: string
     modeTitle: string
-    modeDescription: string
     back: string
     select: string
     inDevelopment: string
@@ -22,9 +21,7 @@ export interface LocaleDictionary {
     description: string
     battleTitle: string
     regionHint: string
-    arrangementKicker: string
     arrangementTitle: string
-    arrangementHint: string
     selectedCount: string
     dragInvite: string
     dragAlliance: string
@@ -233,9 +230,9 @@ export interface LocaleDictionary {
   sound: {
     title: string
     description: string
+    effectsTitle: string
     effectsVolume: string
     musicTitle: string
-    musicDescription: string
     musicVolume: string
     enable: string
     disable: string
@@ -265,6 +262,8 @@ export interface LocaleDictionary {
   settings: {
     title: string
     close: string
+    gameplayTitle: string
+    sessionTitle: string
     language: string
     languageDescription: string
     grid: string
@@ -279,7 +278,6 @@ export interface LocaleDictionary {
     mainMenuDescription: string
     saveGame: string
     saveGameDescription: string
-    manageGames: string
   }
   savedGames: {
     kicker: string
